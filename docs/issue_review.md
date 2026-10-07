@@ -42,3 +42,13 @@ concurrent SD/GNSS interval/jitter and stationary/known-axis bench evidence.
 This adds a software work package (31 total), not a duplicate sensor ticket.
 Original #11/#12/#31 physical acceptance stays open; the #16 tracker remains
 sole roadmap tracker. See [mixed telemetry contract](mixed_telemetry.md).
+
+2026-10-08 follow-up: [#35](https://github.com/llazzaro/RideSync/issues/35) extracts
+the missing shared central BLE backend from #4. Pinned-source audit identified
+indefinite synchronous GATT wrapper waits and callback lifetime/bond-eviction
+risks; the new package uses actual asynchronous host APIs with fixed contexts,
+retirement/quarantine and #18/#33 admission guards. #4 now depends on #35 and
+retains complete HERO12 setup, explicit recording/state and twenty-cycle bench
+acceptance. #17 retains live roles/routing/capacity evidence; no original camera
+or hardware scope was narrowed. There are now 32 planned work packages, plus
+separately tracked maintenance fixes #32/#33.
