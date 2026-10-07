@@ -1,6 +1,7 @@
 # GoPro support plan
 
-Status: **planned, not implemented or tested**. Added 2026-10-07.
+Status: **adapter planned, no hardware tests; documentary pure codec implemented**.
+Added 2026-10-07.
 The first target is **GoPro HERO12 Black**; record its installed firmware before
 implementation. Additional GoPro models require separate qualification. Use the official
 [Open GoPro compatibility table](https://gopro.github.io/OpenGoPro/) to qualify
@@ -90,3 +91,76 @@ Use NimBLE-Arduino 2.3.6 with one client for HERO12 as specified in
 [ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
 Mixed CE80/GoPro role and four-link capacity are unmeasured. The official
 API/firmware minimum does not certify this stack or RideSync hardware.
+
+## Documentary pure codec (2026-10-07)
+
+`include/protocol/gopro_codec.h` and `src/protocol/gopro_codec.cpp` implement a
+portable C++11 codec without BLE dependencies or dynamic allocation. This
+completes the documentary software portion of #20; **#20 hardware acceptance
+remains unmet**. The overall adapter/lifecycle support above is still planned.
+
+The explicit documentary profile is classic one-byte status IDs and
+Get `0x13`/Register `0x53`/Notify `0x93`, Busy 8/Encoding 10/Ready 82. Enable a future adapter only
+after recording the actual model, installed firmware, returned API version,
+capabilities and successful request/notification captures. Current documentation
+also has capability-selected two-byte IDs. This codec neither invents nor enables
+those alternative profiles; discovery and qualification must precede extensions.
+
+`encode(Request, Packet&, extended=true)` produces only required short requests
+and exposes `Packet.channel` and `Packet.id`. Command routes cover video group 1000
+(uint16), explicit shutter on/off, hardware-info and API-version queries;
+settings routes carry keep alive; query routes carry Get/Register status. The
+channel is logical: adapters map Command writes/responses to GP-0072/0073,
+Settings to GP-0074/0075 and Query to GP-0076/0077. Both compact and extended-13
+requests are supported. No outbound extended-16 or transmit fragmenter is needed.
+
+`Reassembler::feed(peer, channel, packet, size, now_ms, message)` returns an
+explicit outcome and a complete payload only on Complete. IDs are caller-supplied
+stable peer identities and logical response channels; they must remain distinct
+through reconnects. Use `resetPeer` on disconnect and `reset` for channel failure.
+The four active stream slots each hold one incomplete payload, maximum 256 bytes,
+maximum 64 bytes/GATT packet, maximum 32 packets and an absolute 1000 ms deadline
+from first packet. Slots are reclaimed when a later feed observes expiry.
+Callers need their own receive timers to expire silent streams promptly; an
+expired stream's next packet returns Timeout and is discarded. Time is unsigned
+monotonic 32 milliseconds; subtraction tolerates rollover, provided calls do not
+span an entire clock period. Buffer/packet limits are application choices to
+qualify against real MTU/response sizes, not camera maxima. Oversized messages
+reject rather than truncate. All arrays and copies are bounded.
+
+Receive accepts general 5-bit, extended-13 and receive-only extended-16 headers.
+Undefined header selectors, nonzero reserved bits, zero-length messages,
+truncated headers, overrun, empty fragments and invalid continuations reject and
+clear the affected stream. Documented continuation counters `80`..`8F` are accepted
+without strict progression until firmware behavior is qualified. Interleaved
+peers and characteristics remain separate. A second start on an unfinished same
+stream returns Interrupted and discards both starts: the caller must restart.
+Continuations have no transaction identity, so undetectable same-stream fragment
+mixing cannot be reconstructed. The adapter must serialize same-stream messages
+or reset on suspected interleaving; this receiver cannot promise correlation.
+
+`decode(channel, Message)` retains bounded raw data plus response ID and numeric
+camera result. Nonzero result is a complete camera rejection, including unknown
+numeric errors. Outcome::Complete describes framing/schema, not command success;
+check result separately. Unknown response/element IDs return Unknown with raw
+bytes. Recognized boolean TLVs are fully validated before publishing Busy,
+Encoding or Ready; malformed messages never publish partial observed state.
+Command acknowledgment leaves encoding unknown. Hardware/API fields are
+bounds-checked length-prefixed data retained raw for future qualification;
+no model/firmware/API width or value is fabricated. Truncated partial hardware
+reserved tails reject; absent or complete 11-byte reserved tails are allowed.
+
+[Fixture provenance and license audit](../test/fixtures/gopro/README.md) separates
+pinned official documentary byte examples, schema-derived cases, and synthetic
+adversarial fragmentation tests. It records the conflicting Kotlin uint32 video
+encoder and fragment transmitter, the chosen documented wire contract, and
+component licenses. No SDK implementation is reused. Native tests exercise
+packets, result/state semantics and bounded independent reassembly. ESP32 compile
+checks portability, not on-camera behavior.
+
+Before claiming HERO12 support or #20 acceptance, capture the installed firmware
+and API version; qualify video group 1000, shutter, hardware info, all three status
+Get/Register/Notify operations, keep-alive settings responses, errors and actual
+fragment counter behavior on that version. No hardware captures exist here.
+Pair/connect/readiness lifecycle, keep-alive scheduling, wake/sleep and Wi-Fi/media
+remain excluded from this codec change.
