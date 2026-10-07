@@ -202,7 +202,10 @@ Once group intent exists, the next short press reverses that intent, including
 while commands remain pending. A short press during resynchronization is rejected
 with `ResyncPending`; an explicit request or cancellation can supersede it.
 Cancellation resets intent to unknown and retires operation tokens. New explicit
-requests cancel superseded peer work instead of appending it to a FIFO. Adapters
+requests cancel superseded peer work instead of appending it to a FIFO. The
+coordinator also retires each previous response token at the request boundary,
+even when an already-confirmed-state shortcut sends no new command; this
+preserves connection observations while rejecting prior command responses. Adapters
 must implement verified explicit-state Start/Stop and echo tokens captured when
 the transport accepted the operation. No vendor shutter toggle is blindly replayed.
 Connection-scoped subscriptions remain authoritative observations across command
@@ -221,6 +224,9 @@ either known state). Already-confirmed desired peers need no redundant command.
 
 Connection/command delivery deadlines and retries are delegated to CameraManager;
 after acknowledgement, a missing confirmation has a fixed 1000 ms deadline.
+Expiry takes precedence over confirmation success at or after the deadline,
+even without a preceding tick. Late physical observations remain visible but
+cannot clear the terminal request error or launch an expired resync decision.
 Confirmation waits use rollover-safe unsigned milliseconds and require service
 at least once per 2^31 ms. No retry or indefinite wait occurs in the group layer.
 Storage is a fixed `kMaxCameras` peer array and snapshots; command admission adds

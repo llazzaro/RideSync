@@ -42,6 +42,8 @@ private:
     bool acknowledged = false;
     bool fresh = false;
     uint32_t deadline = 0;
+    Token retired;
+    bool hasRetired = false;
   };
   std::array<Peer, kMaxCameras> peers_;
   RecordingState intent_ = RecordingState::Unknown;

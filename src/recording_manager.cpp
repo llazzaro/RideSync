@@ -61,10 +61,13 @@ void RecordingManager::begin(bool query) {
   // filling the per-camera FIFO with superseded group requests.
   for (size_t i = 0; i < cameras_.size(); ++i) {
     const auto l = cameras_.state(i)->lifecycle;
+    const auto retired = cameras_.state(i)->token;
     if (pending(static_cast<int>(peers_[i].stage)) || l == Lifecycle::Operating ||
         l == Lifecycle::Connecting || l == Lifecycle::Backoff)
       cameras_.cancel(i);
     peers_[i] = Peer{};
+    peers_[i].retired = retired;
+    peers_[i].hasRetired = true;
   }
   syncing_ = query;
   error_ = GroupError::None;
@@ -156,13 +159,12 @@ void RecordingManager::advance() {
     } else if (p.stage == Stage::Connect && c.lifecycle == Lifecycle::Ready)
       command(i);
     else if (p.stage == Stage::Confirm) {
-      if (p.fresh && c.has_observation && c.observed != RecordingState::Unknown &&
-          (syncing_ || c.observed == intent_))
-        p.stage = Stage::Done;
-      else if (reached(clock_.now(), p.deadline)) {
+      if (reached(clock_.now(), p.deadline)) {
         p.stage = Stage::Error;
         p.error = CameraError::Timeout;
-      }
+      } else if (p.fresh && c.has_observation && c.observed != RecordingState::Unknown &&
+                 (syncing_ || c.observed == intent_))
+        p.stage = Stage::Done;
     }
   }
   if (!syncing_ || status().pending)
@@ -189,7 +191,15 @@ void RecordingManager::advance() {
       command(i);
 }
 bool RecordingManager::event(const Event &e) {
-  if (!cameras_.event(e)) {
+  const bool connectionEvent =
+      e.kind == EventKind::RecordingObserved || e.kind == EventKind::Disconnected;
+  const bool retiredResponse = e.peer < cameras_.size() && !connectionEvent &&
+                               peers_[e.peer].hasRetired &&
+                               e.token.connection == peers_[e.peer].retired.connection &&
+                               e.token.operation == peers_[e.peer].retired.operation;
+  // A new request can use a confirmed-state shortcut without dispatching an
+  // operation. Retire that prior response token here without losing observation.
+  if (retiredResponse || !cameras_.event(e)) {
     advance();
     notify();
     return false;

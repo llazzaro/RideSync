@@ -295,8 +295,72 @@ void resync_confirmation_lost_before_group_decision_is_not_usable() {
   TEST_ASSERT_EQUAL((int)GroupError::UnknownState, (int)f.group.status().error);
   TEST_ASSERT_EQUAL((int)RecordingState::Unknown, (int)f.group.status().intent);
 }
+void new_matching_request_retires_completed_command_response() {
+  Fixture f(1);
+  f.ready(0);
+  auto subscription = f.transport.last(0);
+  f.group.request(RecordingState::Recording);
+  auto old = f.transport.last(0);
+  observe(f.group, old, RecordingState::Recording, true);
+  f.group.event(complete(old));
+  observe(f.group, subscription, RecordingState::Stopped);
+  const auto calls = f.transport.calls.size();
+  f.group.request(RecordingState::Stopped);
+  TEST_ASSERT_EQUAL(calls, f.transport.calls.size());
+  TEST_ASSERT_EQUAL(1, f.group.status().stopped);
+  Event stale{0, old.token, EventKind::CommandRecordingObserved};
+  stale.recording = RecordingState::Recording;
+  TEST_ASSERT_FALSE(f.group.event(stale));
+  TEST_ASSERT_FALSE(f.group.event(complete(old)));
+  TEST_ASSERT_EQUAL(1, f.group.status().stopped);
+  TEST_ASSERT_EQUAL(0, f.group.status().recording);
+  TEST_ASSERT_EQUAL(0, f.group.status().pending);
+  TEST_ASSERT_EQUAL(0, f.group.status().errors);
+  observe(f.group, subscription, RecordingState::Recording);
+  TEST_ASSERT_EQUAL(1, f.group.status().recording);
+}
+void confirmation_at_or_after_deadline_is_timeout_without_prior_tick() {
+  for (uint32_t time : {1000U, 1001U})
+    for (bool command : {false, true}) {
+      Fixture f(1);
+      f.ready(0);
+      auto subscription = f.transport.last(0);
+      f.group.request(RecordingState::Recording);
+      auto call = f.transport.last(0);
+      f.group.event(complete(call));
+      f.clock.time = time;
+      observe(f.group, command ? call : subscription, RecordingState::Recording, command);
+      auto s = f.group.status();
+      TEST_ASSERT_EQUAL(0, s.pending);
+      TEST_ASSERT_EQUAL(1, s.errors);
+      TEST_ASSERT_EQUAL((int)CameraError::Timeout, (int)s.peers[0].error);
+      TEST_ASSERT_EQUAL(1, s.recording);
+    }
+}
+void late_resync_observation_does_not_launch_policy_without_prior_tick() {
+  for (uint32_t time : {1000U, 1001U}) {
+    Fixture f(1);
+    f.group.shortPress();
+    f.group.event(complete(f.transport.last(0)));
+    auto query = f.transport.last(0);
+    f.group.event(complete(query));
+    const auto calls = f.transport.calls.size();
+    f.clock.time = time;
+    observe(f.group, query, RecordingState::Stopped, true);
+    auto s = f.group.status();
+    TEST_ASSERT_EQUAL((int)GroupError::UnknownState, (int)s.error);
+    TEST_ASSERT_EQUAL((int)CameraError::Timeout, (int)s.peers[0].error);
+    TEST_ASSERT_EQUAL((int)RecordingState::Unknown, (int)s.intent);
+    TEST_ASSERT_EQUAL(0, s.pending);
+    TEST_ASSERT_EQUAL(1, s.stopped);
+    TEST_ASSERT_EQUAL(calls, f.transport.calls.size());
+  }
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(new_matching_request_retires_completed_command_response);
+  RUN_TEST(confirmation_at_or_after_deadline_is_timeout_without_prior_tick);
+  RUN_TEST(late_resync_observation_does_not_launch_policy_without_prior_tick);
   RUN_TEST(resync_confirmation_lost_before_group_decision_is_not_usable);
   RUN_TEST(disconnect_after_confirmation_remains_visible_in_summary);
   RUN_TEST(unknown_startup_progresses_available_peer_and_reports_partial);
