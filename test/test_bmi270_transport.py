@@ -23,7 +23,14 @@ class Bmi270TransportTest(unittest.TestCase):
         files = {
             'Arduino.h': '#pragma once\n#include <cstdint>\ninline uint32_t millis(){return 11;}\ninline void delayMicroseconds(uint32_t){}\n',
             'freertos/FreeRTOS.h': '#pragma once\n#define pdPASS 1\n#define pdMS_TO_TICKS(n) (n)\n',
-            'freertos/task.h': '#pragma once\ninline int xTaskCreatePinnedToCore(void (*)(void *),const char *,unsigned,void *,unsigned,void *,int){return 0;}\ninline void vTaskDelete(void *){}\ninline void vTaskDelay(unsigned){}\n',
+            'freertos/task.h': r'''
+#pragma once
+extern void (*task_fn)(void *); extern void *task_arg;
+void testDelay(); void testDelete();
+inline int xTaskCreatePinnedToCore(void (*fn)(void *),const char *,unsigned,void *arg,unsigned,void *,int){task_fn=fn;task_arg=arg;return pdPASS;}
+inline void vTaskDelete(void *){testDelete();}
+inline void vTaskDelay(unsigned){testDelay();}
+''',
             'Wire.h': r'''
 #pragma once
 #include <cstddef>
@@ -45,7 +52,58 @@ struct TwoWire {
 #include "bmi270_imu.h"
 #include <cassert>
 #include <cstring>
+#include <type_traits>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <memory>
+#include <chrono>
 using namespace ridesync;
+static_assert(!std::is_copy_constructible<Bmi270Imu>::value && !std::is_copy_assignable<Bmi270Imu>::value && !std::is_move_constructible<Bmi270Imu>::value && !std::is_move_assignable<Bmi270Imu>::value,"adapter ownership must be fixed");
+static_assert(!std::is_copy_constructible<Bmi270Worker>::value && !std::is_copy_assignable<Bmi270Worker>::value && !std::is_move_constructible<Bmi270Worker>::value && !std::is_move_assignable<Bmi270Worker>::value,"worker ownership must be fixed");
+void (*task_fn)(void *)=nullptr;void *task_arg=nullptr;
+static std::mutex lifecycle_mutex;static std::condition_variable lifecycle_cv;
+static bool service_entered=false,release_service=false,exit_entered=false,release_exit=false;
+static unsigned delays=0;static Bmi270Worker *active_worker=nullptr;
+void testDelay(){
+  std::unique_lock<std::mutex> lock(lifecycle_mutex);
+  assert(!active_worker->workerFinished()); // even manager finish cannot retire task objects
+  ++delays;service_entered=true;lifecycle_cv.notify_all();
+  assert(lifecycle_cv.wait_for(lock,std::chrono::seconds(5),[]{return release_service;}));
+}
+void testDelete(){
+  // This RTOS boundary must never access the caller-owned worker/progress.
+  std::unique_lock<std::mutex> lock(lifecycle_mutex);
+  exit_entered=true;lifecycle_cv.notify_all();
+  assert(lifecycle_cv.wait_for(lock,std::chrono::seconds(5),[]{return release_exit;}));
+}
+struct LifecyclePort : ImuPort {
+  bool begin(ImuConfig &c) override {c.generation=1;return true;}
+  bool read(uint8_t *,uint16_t,uint16_t &,uint8_t &) override {assert(false);return false;}
+  bool flush() override {assert(false);return false;}
+};
+void worker_lifetime_boundary(){
+  std::unique_ptr<LifecyclePort> port(new LifecyclePort);
+  std::unique_ptr<ImuInbox> inbox(new ImuInbox);
+  std::unique_ptr<HealthProgress> progress(new HealthProgress);
+  std::unique_ptr<ImuManager> manager(new ImuManager(*port,*inbox,*progress,42,{}));
+  std::unique_ptr<Bmi270Worker> worker(new Bmi270Worker(*manager,*progress));active_worker=worker.get();
+  assert(!worker->start(false,false) && !worker->start(true,true) && !task_fn);
+  assert(worker->start(true,false) && !worker->start(true,false));
+  auto fn=task_fn;auto arg=task_arg;std::thread task([fn,arg]{fn(arg);});
+  {
+    std::unique_lock<std::mutex> lock(lifecycle_mutex);
+    assert(lifecycle_cv.wait_for(lock,std::chrono::seconds(5),[]{return service_entered;}));
+    assert(!worker->workerFinished() && progress->generation()==1);
+    manager->stop();release_service=true;lifecycle_cv.notify_all();
+    assert(lifecycle_cv.wait_for(lock,std::chrono::seconds(5),[]{return exit_entered;}));
+    assert(worker->workerFinished() && progress->isFinished());
+    // Destroy ALL caller-owned state while the real run function is at final RTOS exit.
+    worker.reset();manager.reset();progress.reset();inbox.reset();port.reset();
+    release_exit=true;lifecycle_cv.notify_all();
+  }
+  task.join();assert(delays==1);
+}
 static bmi2_sens_config profile[2]; static uint16_t fifo_config;
 static uint8_t filters[3]{},downsampling[3]={2,2,2}; static bool mismatch=false;
 static uint16_t fifo_length=13;
@@ -89,6 +147,7 @@ int main(){
   unsigned calls=wire.calls;fifo_length=109;assert(!sensor.read(bytes,112,n,flags) && n==0 && calls==wire.calls);
   assert(sensor.capacityOverflows()==1);ImuEvidence overflow;sensor.describeReadFailure(overflow);assert(overflow.event_code==1 && overflow.event_length==2 && overflow.event_bytes[0]==109);
   fifo_length=13;assert(!sensor.read(bytes,3,n,flags));
+  worker_lifetime_boundary();
 }
 ''',
         }
@@ -99,7 +158,8 @@ int main(){
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_text(body)
             binary = path / 'test'
-            subprocess.run([shutil.which('c++'), '-std=c++11', '-DARDUINO',
+            subprocess.run([shutil.which('c++'), '-std=c++11', '-DARDUINO', '-pthread',
+                            '-fsanitize=address', '-fno-omit-frame-pointer',
                             '-I', str(path), '-I', str(ROOT / 'include'), '-I', str(vendor),
                             str(path / 'main.cpp'), str(ROOT / 'src/bmi270_imu.cpp'),
                             str(ROOT / 'src/imu_manager.cpp'), str(ROOT / 'src/telemetry_admission.cpp'),

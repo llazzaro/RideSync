@@ -253,8 +253,32 @@ void invalid_buffers_fail_closed() {
   TEST_ASSERT_FALSE(codec.decode(nullptr, 1, base, out));
   TEST_ASSERT_EQUAL(2, out.n);
 }
+void end_marker_retains_boundary_and_ignores_plausible_tail() {
+  // Synthetic complete pair, end marker, then plausible pair/time bytes.
+  uint8_t bytes[] = {0x8c, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0,    0, 0x80, 0x8c, 3,
+                     0,    0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0x44, 0, 0,    0};
+  Capture out;
+  ImuFifoCodec codec;
+  ImuEvidence base;
+  TEST_ASSERT_TRUE(codec.decode(bytes, sizeof(bytes), base, out));
+  TEST_ASSERT_EQUAL(2, out.n);
+  TEST_ASSERT_EQUAL(1, codec.health().samples);
+  TEST_ASSERT_EQUAL(1, out.records[0].gyro[0]);
+  TEST_ASSERT_EQUAL(2, out.records[0].accel[0]);
+  TEST_ASSERT_EQUAL(RecordKind::ImuControl, out.records[1].kind);
+  TEST_ASSERT_EQUAL(0, out.records[1].event_code);
+  TEST_ASSERT_EQUAL(1, out.records[1].event_length);
+  TEST_ASSERT_EQUAL(0x80, out.records[1].event_bytes[0]);
+  TEST_ASSERT_EQUAL(13, out.records[1].byte_position);
+  uint8_t at_start[] = {0x80, 0x44, 1, 0, 0};
+  Capture start;
+  TEST_ASSERT_TRUE(codec.decode(at_start, sizeof(at_start), base, start));
+  TEST_ASSERT_EQUAL(1, start.n);
+  TEST_ASSERT_EQUAL(0, start.records[0].byte_position);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(end_marker_retains_boundary_and_ignores_plausible_tail);
   RUN_TEST(configuration_change_retires_unknown_profile);
   RUN_TEST(invalid_buffers_fail_closed);
   RUN_TEST(exhausted_recovery_is_observational);

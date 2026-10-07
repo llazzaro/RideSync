@@ -17,6 +17,10 @@ struct Bmi270Qualification {
 class Bmi270Imu : public ImuPort, private ImuBus {
 public:
   Bmi270Imu(TwoWire &wire, const Bmi270Qualification &qualification);
+  Bmi270Imu(const Bmi270Imu &) = delete;
+  Bmi270Imu &operator=(const Bmi270Imu &) = delete;
+  Bmi270Imu(Bmi270Imu &&) = delete;
+  Bmi270Imu &operator=(Bmi270Imu &&) = delete;
   bool begin(ImuConfig &) override;
   bool read(uint8_t *, uint16_t, uint16_t &, uint8_t &) override;
   bool flush() override;
@@ -50,14 +54,19 @@ class Bmi270Worker {
 public:
   explicit Bmi270Worker(ImuManager &manager, HealthProgress &progress)
       : manager_(manager), progress_(progress) {}
+  Bmi270Worker(const Bmi270Worker &) = delete;
+  Bmi270Worker &operator=(const Bmi270Worker &) = delete;
+  Bmi270Worker(Bmi270Worker &&) = delete;
+  Bmi270Worker &operator=(Bmi270Worker &&) = delete;
   bool start(bool qualified, bool safe_mode);
-  bool workerFinished() const { return progress_.isFinished(); }
+  bool workerFinished() const { return finished_.load(std::memory_order_acquire); }
 
 private:
   static void run(void *);
   ImuManager &manager_;
   HealthProgress &progress_;
   bool started_ = false;
+  std::atomic<bool> finished_{false};
 };
 } // namespace ridesync
 #endif

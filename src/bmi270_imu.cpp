@@ -176,8 +176,13 @@ void Bmi270Worker::run(void *p) {
   auto &self = *static_cast<Bmi270Worker *>(p);
   while (!self.progress_.isFinished()) {
     self.manager_.step(millis());
+    if (self.progress_.isFinished())
+      break;
     vTaskDelay(pdMS_TO_TICKS(5) > 0 ? pdMS_TO_TICKS(5) : 1);
   }
+  // Final caller-owned access: release permits object/bus retirement.
+  // Only RTOS task exit follows; never dereference self/manager/progress again.
+  self.finished_.store(true, std::memory_order_release);
   vTaskDelete(nullptr);
 }
 } // namespace ridesync

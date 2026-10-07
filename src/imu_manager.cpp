@@ -26,8 +26,14 @@ bool ImuFifoCodec::decode(const uint8_t *bytes, uint16_t length, ImuEvidence bas
     e.byte_position = pos;
     e.kind = RecordKind::ImuControl;
     uint8_t header = bytes[pos++], n = 0;
-    if (header == 0x80)
+    if (header == 0x80) {
+      // Schema code0 is source-profile-defined: retain end control, not acquisition time.
+      e.event_code = 0;
+      e.event_length = 1;
+      e.event_bytes[0] = header;
+      out.emit(e);
       return true;
+    }
     switch (header) {
     case 0x8c:
       n = 12;

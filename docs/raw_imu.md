@@ -37,7 +37,12 @@ step. Transport never calls SessionClock, Storage or camera.
 Shutdown: owner admission.requestStop, worker finishes its current synchronous
 operation, manager flushes publication batch then inbox.finish/progress.finished;
 owner continues admission.tick through admission.stopped; SD worker closes.
-Keep bus/objects alive through workerFinished and SD close. No forced task deletion
+Manager inbox.finish/progress.finished signals final publication, not task
+quiescence. Bmi270Worker.workerFinished separately acquire-observes its own
+completion flag, release-published at the final caller-owned access before RTOS
+task exit. No worker/manager/progress access follows that flag. Keep bus/objects
+alive through workerFinished and SD close. Adapter and worker cannot be copied
+or moved, preserving self-referential callbacks and sole ownership. No forced task deletion
 or concurrent bus deinit. Manager.stop is an atomic alternative stop request.
 Health generation follows returned service work only; it cannot advance while
 an I/O call is blocked. Terminal idle passes are completed no-I/O state checks
@@ -73,7 +78,10 @@ resynchronization scanning or backdating. Only
 are accepted. Unpaired, tagged, AUX, partial and unknown frames publish evidence
 and force next-pass flush. Input-config bytes/position are retained then retire
 acquisition because effective settings cannot be assumed; restart needs a fresh qualified lifetime
-and configuration readback. Overread ends parsing.
+and configuration readback. Overread/end retains an ImuControl code0 record
+with one-byte payload0x80 and original byte position, then ends parsing; all
+remaining burst bytes are ignored. This code0 source-profile representation
+distinguishes observed end presence from simply exhausting the supplied buffer.
 Short/no transport reads return error without exposing partial initialized data;
 no samples from that transaction are admitted. Earlier complete pairs before a
 parser error remain valid observations, with following discontinuity event.
