@@ -1,3 +1,4 @@
+#include "config_storage.h"
 #include "health_supervisor.h"
 #include "nvs_boot_guard.h"
 #include <Arduino.h>
@@ -18,6 +19,31 @@ std::atomic<bool> clear_safe_mode{false}, safe_mode{false};
 std::atomic<WatchdogState> watchdog_state{WatchdogState::NotStarted};
 std::atomic<int> watchdog_error{0};
 std::atomic<uint8_t> stalled_workers{0};
+
+// One explicit owning service isolates blocking NVS calls from control loops.
+// No SDK init/deinit/erase may run while this owner is active. Future lifecycle
+// work must stop/quiesce it first. Configuration requests belong in a bounded
+// owner mailbox; no UI or control producer is admitted in this milestone.
+NvsConfigStore config_store;
+ConfigPersistence config_persistence(config_store);
+SourceConfig ram_settings; // owner-private; complete settings only, no runtime intent
+std::atomic<PersistStatus> config_status{PersistStatus::Defaults};
+std::atomic<int32_t> config_error{0};
+void configTask(void *) {
+  auto result = safe_mode.load() ? PersistResult{PersistStatus::Refused}
+                                 : config_persistence.load(ram_settings);
+  config_error.store(result.code);
+  config_status.store(result.status);
+  TickType_t next = xTaskGetTickCount();
+  for (;;) {
+    // service() checks the SDK gate on every operation and drops pending work
+    // after refusal. No automatic default/migration requests or driver begin.
+    result = config_persistence.service(millis());
+    config_error.store(result.code);
+    config_status.store(result.status);
+    vTaskDelayUntil(&next, pdMS_TO_TICKS(100));
+  }
+}
 
 class SdkWatchdog : public WatchdogPort {
 public:
@@ -115,8 +141,11 @@ void setup() {
                 static_cast<unsigned>(config_ble_admission));
   if (!config_ble_admission)
     Serial.println("RideSync: config/BLE blocked; diagnostic/RAM mode; no save/format/retry.");
-  // Admission evidence only: no config store or BLE driver exists yet. Their future
-  // owners must recheck nvsBootStatus() per operation and serialize handle lifetimes.
+  if (config_ble_admission &&
+      xTaskCreatePinnedToCore(configTask, "config", 12288, nullptr, 1, nullptr, 1) != pdPASS)
+    Serial.println("RideSync: config task creation failed; RAM defaults only.");
+  // No BLE driver exists yet; future BLE owner needs independent restoration
+  // evidence and overflow refusal as well as SDK admission.
   // NVS failure is device/config health, never a fabricated worker stall. Qualified
   // standalone GNSS/SD/IMU lifetimes must remain independent of camera/NVS readiness.
   Serial.println("Optional AT/BLE/SD/IMU disabled; no pins qualified. Serial C clears safe mode.");
@@ -133,6 +162,13 @@ void setup() {
 }
 
 void loop() {
+  static PersistStatus reported_config = PersistStatus::Defaults;
+  const auto settings_status = config_status.load();
+  if (settings_status != reported_config) {
+    Serial.printf("RideSync: config status=%u error=%d\n", static_cast<unsigned>(settings_status),
+                  config_error.load());
+    reported_config = settings_status;
+  }
   static WatchdogState reported = WatchdogState::NotStarted;
   const auto state = watchdog_state.load();
   if (state != reported) {

@@ -25,6 +25,7 @@ constexpr int pdPASS=1;
 enum esp_reset_reason_t { ESP_RST_UNKNOWN, ESP_RST_POWERON, ESP_RST_EXT, ESP_RST_SW,
  ESP_RST_PANIC, ESP_RST_INT_WDT, ESP_RST_TASK_WDT, ESP_RST_WDT, ESP_RST_DEEPSLEEP, ESP_RST_BROWNOUT, ESP_RST_SDIO };
 static void (*task_fn)(void *) = nullptr;
+static int config_tasks=0; static void (*config_fn)(void *) = nullptr;
 static int create_result=pdPASS, status_result=ESP_ERR_NOT_FOUND, add_result=0, feed_result=0;
 static int adds=0, feeds=0, removes=0, deletes=0, loops=0;
 static uint32_t time_now=0;
@@ -39,6 +40,9 @@ struct SerialPort {
  int read() { char c=input; input=0; return c; }
 };
 static SerialPort Serial;
+constexpr int INPUT=0, INPUT_PULLUP=1, INPUT_PULLDOWN=2, LOW=0;
+static void pinMode(int,int) { throw std::logic_error("unexpected GPIO enable"); }
+static int digitalRead(int) { throw std::logic_error("unexpected GPIO read"); }
 static uint32_t millis() { return time_now; }
 static void delay(int) { ++loops; }
 static TickType_t xTaskGetTickCount() { return time_now; }
@@ -49,6 +53,7 @@ static void vTaskDelayUntil(TickType_t *last, TickType_t interval) {
 static void vTaskDelete(TaskHandle_t h) { ++deletes; if(h) throw std::logic_error("foreign delete"); throw std::runtime_error("delete"); }
 static BaseType_t xTaskCreatePinnedToCore(void (*fn)(void *), const char *, uint32_t stack,
  void *, unsigned priority, TaskHandle_t *, int core) {
+ if (stack==12288 && priority==1 && core==1) { ++config_tasks; config_fn=fn; return create_result; }
  if (stack != 4096 || priority != 2 || core != 1) throw std::logic_error("task budget");
  task_fn=fn; return create_result;
 }
@@ -64,6 +69,12 @@ HARNESS = r'''
 #include "nvs_boot_guard.h"
 static ridesync::NvsBootStatus nvs_status;
 namespace ridesync { NvsBootStatus nvsBootStatus() { return nvs_status; } }
+#include "config_storage.h"
+namespace ridesync {
+bool NvsConfigStore::allowed() const { return nvsBootStatus().persistenceAllowed(); }
+StoreResult NvsConfigStore::read(unsigned, ConfigRecord &) { return {StoreStatus::Missing}; }
+StoreResult NvsConfigStore::write(unsigned, const ConfigRecord &) { throw std::logic_error("unexpected startup write"); }
+}
 #include "src/main.cpp"
 #include <cassert>
 int main(int argc, char **argv) {
@@ -85,10 +96,16 @@ int main(int argc, char **argv) {
  if(scenario==12) { nvs_status.init_observed=true; nvs_status.format_refused=true; nvs_status.refusal_error=0x106; }
  if(scenario==13) nvs_status.init_observed=true;
  setup();
+ assert(config_tasks==(scenario==13 ? 1 : 0));
  if(scenario>=9) {
   const char *admission=scenario==13 ? "config_ble_admission=1" : "config_ble_admission=0";
   assert(Serial.output.find(admission)!=std::string::npos);
   assert(!safe_mode.load()); // Config fault does not manufacture a scheduler/reboot failure.
+ }
+ if(scenario==13) {
+  try { config_fn(nullptr); } catch(const std::runtime_error &) {}
+  assert(config_status.load()==ridesync::PersistStatus::Defaults);
+  assert(ram_settings.count==0);
  }
  assert(task_fn != nullptr); // actual startup must create independent supervision
  if(scenario==6) assert(safe_mode.load());
@@ -128,9 +145,10 @@ class HealthStartup(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text('#include "standin.h"\n')
             (temp / "run.cpp").write_text(HARNESS)
-            subprocess.run(["c++", "-std=c++11", "-I", str(temp), "-I", str(ROOT),
+            subprocess.run(["c++", "-std=c++11", "-DARDUINO_ARCH_ESP32", "-I", str(temp), "-I", str(ROOT),
                             "-I", str(ROOT / "include"), str(temp / "run.cpp"),
-                            str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/storage.cpp"),
+                            str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/config_storage.cpp"),
+                            str(ROOT / "src/config.cpp"), str(ROOT / "src/button_manager.cpp"), str(ROOT / "src/storage.cpp"),
                             str(ROOT / "src/session_clock.cpp"), "-o", str(temp / "run")], check=True)
             for scenario in range(14):
                 with self.subTest(scenario=scenario):
