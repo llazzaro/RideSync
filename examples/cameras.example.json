@@ -1,7 +1,45 @@
 {
   "cameras": [
-    {"name": "Front X5", "model": "X5", "identifier": null, "wake_identifier": null, "enabled": true, "gps_telemetry": false},
-    {"name": "Helmet GO3S", "model": "GO3S", "identifier": null, "wake_identifier": null, "enabled": true, "gps_telemetry": false},
-    {"name": "Rear ONE RS", "model": "ONE_RS", "identifier": null, "wake_identifier": null, "enabled": true, "gps_telemetry": false}
-  ]
+    {
+      "name": "Front X5",
+      "model": "X5",
+      "identifier": null,
+      "wake_identifier": null,
+      "enabled": false,
+      "gps_telemetry": false,
+      "family": "Insta360",
+      "address_type": "unknown"
+    },
+    {
+      "name": "Helmet GO3S",
+      "model": "GO3S",
+      "identifier": null,
+      "wake_identifier": null,
+      "enabled": false,
+      "gps_telemetry": false,
+      "family": "Insta360",
+      "address_type": "unknown"
+    },
+    {
+      "name": "Rear ONE RS",
+      "model": "ONE_RS",
+      "identifier": null,
+      "wake_identifier": null,
+      "enabled": false,
+      "gps_telemetry": false,
+      "family": "Insta360",
+      "address_type": "unknown"
+    },
+    {
+      "name": "GoPro HERO12 Black",
+      "family": "GoPro",
+      "model": "HERO12_BLACK",
+      "identifier": null,
+      "address_type": "unknown",
+      "wake_identifier": null,
+      "enabled": false,
+      "gps_telemetry": false
+    }
+  ],
+  "capacity": 8
 }

@@ -11,13 +11,15 @@ class ExampleConfigTests(unittest.TestCase):
         cls.cameras = json.loads(path.read_text())["cameras"]
 
     def test_all_initial_models_are_represented(self):
-        self.assertEqual({c["model"] for c in self.cameras}, {"X5", "GO3S", "ONE_RS"})
-        self.assertGreaterEqual(len(self.cameras), 3)
+        self.assertEqual({c["model"] for c in self.cameras}, {"X5", "GO3S", "ONE_RS", "HERO12_BLACK"})
+        self.assertEqual(len(self.cameras), 4)
 
     def test_names_are_unique_and_telemetry_is_opt_in(self):
         self.assertEqual(len({c["name"] for c in self.cameras}), len(self.cameras))
         for camera in self.cameras:
-            self.assertIs(camera["enabled"], True)
+            self.assertIs(camera["enabled"], False)
+            self.assertEqual(camera["family"], "GoPro" if camera["model"] == "HERO12_BLACK" else "Insta360")
+            self.assertEqual(camera["address_type"], "unknown")
             self.assertIs(camera["gps_telemetry"], False)
 
     def test_no_invented_identifiers(self):

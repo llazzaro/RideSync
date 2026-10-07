@@ -40,7 +40,9 @@ See [protocol research](docs/insta360_protocol.md) and
 
 Use Python 3.11 for the same host environment as CI. PlatformIO Core and the
 ESP32 platform, Arduino framework, toolchain and build tools are pinned.
-No third-party firmware libraries are used yet.
+No third-party firmware libraries are used yet. Host tests use the pinned
+PlatformIO native platform 1.2.1 and Unity 2.6.1 (the system C++ compiler is
+provided by macOS developer tools or Ubuntu 24.04 in CI).
 
 ```sh
 git clone https://github.com/llazzaro/RideSync.git
@@ -60,10 +62,15 @@ The scaffold does not enable the modem or drive any external pins.
 ## Configuration and controls
 
 [examples/cameras.example.json](examples/cameras.example.json) records the planned
-configuration shape for three cameras. It is **not loaded by firmware**. Replace
-null identifiers only after determining the correct address/serial mapping.
-NVS persistence comes later. The design must support more than two cameras;
-actual BLE connection capacity must be measured with the chosen stack.
+configuration shape for four cameras, including HERO12 Black. It is **not loaded
+by firmware**. All example targets are disabled until their addresses and address
+types are known. Source settings use the typed `SourceConfig` API in
+[include/config.h](include/config.h); no JSON parser is implemented. Replace null
+identifiers with measured BLE addresses, set public/random address type, then
+enable the targets. NVS persistence comes later. The configurable registry
+capacity is 1–8 cameras, with clear validation errors above its bound; this is a
+software memory bound, not a measured BLE connection limit. See
+[camera contracts](docs/camera_contracts.md) for lifecycle and adapter rules.
 
 Planned configurable controls: short press toggles the group recording intent;
 long press wakes/reconnects all configured cameras; optional double press
@@ -92,12 +99,14 @@ issue in reviewable commits and promote support only with hardware evidence.
 
 ```sh
 python -m unittest discover -s test -v
+pio test -e native
 python scripts/check_format.py
 ```
 
-GitHub Actions builds firmware and runs repository/configuration checks and C++
-formatting. Protocol and state-machine unit suites will be added with their
-implementations; current checks do not validate camera behavior.
+GitHub Actions builds firmware and runs repository checks, native source
+configuration/lifecycle tests with fake clocks and transports, and C++ formatting.
+The native suites exercise the shared contracts; they do not validate any camera
+protocol or hardware behavior.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [research sources](docs/sources.md),
 [GPS protocol](docs/gps_protocol.md), and the [original brief](docs/project_brief.md).
