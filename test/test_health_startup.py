@@ -112,6 +112,7 @@ int main(int argc, char **argv) {
  if(scenario==7) assert(!safe_mode.load());
  if(scenario==8) { assert(safe_mode.load()); Serial.input='C'; }
  loop(); assert(loops==1);
+ assert(status_led.state()==((scenario==1 || scenario==6 || scenario==8)?ridesync::LedState::Error:ridesync::LedState::Off));
  if(scenario==1) {
   assert(adds==0 && feeds==0);
   assert(Serial.output.find("task creation failed") != std::string::npos);
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
  }
  try { task_fn(nullptr); } catch(const std::runtime_error &) {}
  loop();
+ assert(status_led.state()==((scenario>=2 && scenario<=6)?ridesync::LedState::Error:ridesync::LedState::Off));
  if(scenario==0) { assert(adds==1 && feeds==1 && removes==0); }
  if(scenario==2 || scenario==4) { assert(adds==0 && feeds==0 && removes==0); }
  if(scenario==4) assert(deletes==0); // never delete a still-subscribed task
@@ -144,12 +146,22 @@ class HealthStartup(unittest.TestCase):
                 p = temp / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text('#include "standin.h"\n')
+            (temp / "driver").mkdir()
+            (temp / "driver/gpio.h").write_text(r'''
+#pragma once
+#include "standin.h"
+using gpio_num_t=int;
+constexpr int GPIO_MODE_OUTPUT=1, GPIO_PULLUP_DISABLE=0, GPIO_PULLDOWN_DISABLE=0, GPIO_INTR_DISABLE=0;
+struct gpio_config_t { uint64_t pin_bit_mask; int mode,pull_up_en,pull_down_en,intr_type; };
+inline int gpio_config(const gpio_config_t *) { throw std::logic_error("unexpected LED configure"); }
+inline int gpio_set_level(gpio_num_t, uint32_t) { throw std::logic_error("unexpected LED write"); }
+''')
             (temp / "run.cpp").write_text(HARNESS)
             subprocess.run(["c++", "-std=c++11", "-DARDUINO_ARCH_ESP32", "-I", str(temp), "-I", str(ROOT),
                             "-I", str(ROOT / "include"), str(temp / "run.cpp"),
                             str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/config_storage.cpp"),
                             str(ROOT / "src/config.cpp"), str(ROOT / "src/button_manager.cpp"), str(ROOT / "src/storage.cpp"),
-                            str(ROOT / "src/session_clock.cpp"), "-o", str(temp / "run")], check=True)
+                            str(ROOT / "src/session_clock.cpp"), str(ROOT / "src/status_led.cpp"), "-o", str(temp / "run")], check=True)
             for scenario in range(14):
                 with self.subTest(scenario=scenario):
                     subprocess.run([str(temp / "run"), str(scenario)], check=True)

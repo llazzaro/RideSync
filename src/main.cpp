@@ -1,6 +1,7 @@
 #include "config_storage.h"
 #include "health_supervisor.h"
 #include "nvs_boot_guard.h"
+#include "status_led.h"
 #include <Arduino.h>
 #include <cstring>
 #include <esp_attr.h>
@@ -14,6 +15,11 @@ using namespace ridesync;
 // Raw bytes avoid C++ constructors initializing RTC_NOINIT on every warm boot.
 RTC_NOINIT_ATTR uint8_t retained_boot[sizeof(BootRecord)];
 HealthSupervisor supervisor;
+// Source-only wiring profile remains disabled until board/electrical qualification.
+Esp32LedGpio led_gpio;
+GpioLedSink led_sink(led_gpio);
+StatusLed status_led(led_sink);
+std::atomic<bool> supervision_fault{false};
 BootRecovery recovery;
 std::atomic<bool> clear_safe_mode{false}, safe_mode{false};
 std::atomic<WatchdogState> watchdog_state{WatchdogState::NotStarted};
@@ -123,6 +129,7 @@ void healthTask(void *) {
 
 void setup() {
   Serial.begin(115200);
+  led_sink.begin(LedWiring{}, false);
   const auto sdk_reason = esp_reset_reason(); // Capture once; never overwrite SDK hints.
   BootRecord retained;
   std::memcpy(&retained, retained_boot, sizeof(retained));
@@ -152,13 +159,16 @@ void setup() {
   // There are no feature-qualified workers/admissions yet, including in safe mode.
   // Future composition must suppress optional startup/admission when safe_mode is true.
   if (!supervisor.begin({}, millis())) {
+    supervision_fault.store(true);
     Serial.println("RideSync: health configuration failed");
     return;
   }
   // Preserve framework 5-second panic TWDT and CPU0 idle ownership. No init/deinit,
   // enableLoopWDT, implicit peripheral activation or automatic application restart.
-  if (xTaskCreatePinnedToCore(healthTask, "health", 4096, nullptr, 2, nullptr, 1) != pdPASS)
+  if (xTaskCreatePinnedToCore(healthTask, "health", 4096, nullptr, 2, nullptr, 1) != pdPASS) {
+    supervision_fault.store(true);
     Serial.println("RideSync: supervisor task creation failed");
+  }
 }
 
 void loop() {
@@ -181,6 +191,22 @@ void loop() {
   if (stalls != reported_stalls) {
     Serial.printf("RideSync: stalled worker mask=%u\n", static_cast<unsigned>(stalls));
     reported_stalls = stalls;
+  }
+  // Only this application scheduler owns LED service. Read published observations;
+  // no camera group is composed, and no watchdog/health policy is invoked here.
+  LedHealth led_health;
+  led_health.safe_mode = safe_mode.load();
+  led_health.required_worker_stall = stalls != 0;
+  led_health.application_fault =
+      supervision_fault.load() || state == WatchdogState::ExistingSubscription ||
+      state == WatchdogState::Uninitialized || state == WatchdogState::StatusFailed ||
+      state == WatchdogState::AddFailed || state == WatchdogState::FeedFailed ||
+      state == WatchdogState::RemoveFailed;
+  const int led_error = status_led.service(selectLedState(nullptr, {}, led_health), millis());
+  static int reported_led_error = 0;
+  if (led_error != reported_led_error) {
+    Serial.printf("RideSync: LED backend error=%d\n", led_error);
+    reported_led_error = led_error;
   }
   // Only the supervisor owns recovery metadata. One-character bounded mailbox.
   if (Serial.available() && Serial.read() == 'C')
