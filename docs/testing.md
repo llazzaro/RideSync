@@ -267,3 +267,30 @@ caps without continuous reset. Use camera screen/media as physical state proof.
 No hardware fault injection, reboot, scheduling fairness or RTC retention has
 been observed here; debugger-attached watchdog tests cannot establish autonomous
 acceptance. Integrated ride/soak evidence remains #31.
+
+## NVS boot preservation software boundary
+
+`python -m unittest discover -s test -v` includes a self-contained host ABI
+stand-in for IDF 4.4.7 and an audited Arduino recovery-flow harness. Both original
+init errors, sticky original failure across later success, all-label whole-NVS
+refusal, init-in-progress admission, partial GC, non-NVS, null, zero and invalid
+ranges are exercised. `test_health_startup.py` runs actual application startup
+against bounded stand-ins: missing/failed init and refused format close config/
+BLE admission while health supervision continues. These tests run before the
+ESP32 package is installed in CI and do not claim SDK recovery or hardware proof.
+
+Build the pinned ESP32 target and inspect its verbose link command, firmware map,
+`nm` and `objdump -d -C` output. Require both `--wrap` flags and retained wrapper
+symbols. Confirm Arduino `initArduino` calls wrapped init/erase, IDF NVS whole
+and page erase paths call wrapped partition erase, and wrapper forwarding reaches
+the real SDK symbol without recursion. Review the init wrapper's atomic code for
+fixed publication steps and absence of heap/log/NVS reentry. Host tests do not
+substitute for this final-link inspection.
+
+No destructive fixture is run automatically. On explicitly authorized expendable
+hardware, compare partition bytes before/after forcing each startup format error;
+separately test ordinary init/GC/reboot, settings and bond persistence, and
+failed-init admission. Record recovery writes separately from logical last-valid
+record outcomes. Do not perform this on production data. See
+[configuration.md](configuration.md) for deinitialized-handle, partial recovery,
+raw-flash and physical preservation limits.

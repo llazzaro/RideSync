@@ -61,23 +61,35 @@ static esp_reset_reason_t esp_reset_reason() { return reset_reason; }
 '''
 HARNESS = r'''
 #include "standin.h"
+#include "nvs_boot_guard.h"
+static ridesync::NvsBootStatus nvs_status;
+namespace ridesync { NvsBootStatus nvsBootStatus() { return nvs_status; } }
 #include "src/main.cpp"
 #include <cassert>
 int main(int argc, char **argv) {
- int scenario = argc > 1 ? argv[1][0]-'0' : 0;
+ int scenario = argc > 1 ? std::stoi(argv[1]) : 0;
  if(scenario==1) create_result=0;
  if(scenario==2) status_result=ESP_ERR_INVALID_STATE;
  if(scenario==3) add_result=77;
  if(scenario==4) status_result=ESP_OK;
  if(scenario==5) feed_result=78;
- if(scenario>=6) {
+ if(scenario>=6 && scenario<=8) {
   ridesync::BootRecovery boot;
   boot.begin({}, ridesync::ResetClass::Cold,0);
   for(int i=0;i<3;++i) boot.begin(boot.record(),ridesync::ResetClass::Watchdog,0);
   std::memcpy(retained_boot,&boot.record(),sizeof(ridesync::BootRecord));
   reset_reason=scenario==7 ? ESP_RST_POWERON : ESP_RST_TASK_WDT;
  }
+ if(scenario==10) { nvs_status.init_observed=true; nvs_status.last_init_result=0x110d; nvs_status.first_init_failure=0x110d; }
+ if(scenario==11) { nvs_status.init_observed=true; nvs_status.last_init_result=0x1110; nvs_status.first_init_failure=0x1110; }
+ if(scenario==12) { nvs_status.init_observed=true; nvs_status.format_refused=true; nvs_status.refusal_error=0x106; }
+ if(scenario==13) nvs_status.init_observed=true;
  setup();
+ if(scenario>=9) {
+  const char *admission=scenario==13 ? "config_ble_admission=1" : "config_ble_admission=0";
+  assert(Serial.output.find(admission)!=std::string::npos);
+  assert(!safe_mode.load()); // Config fault does not manufacture a scheduler/reboot failure.
+ }
  assert(task_fn != nullptr); // actual startup must create independent supervision
  if(scenario==6) assert(safe_mode.load());
  if(scenario==7) assert(!safe_mode.load());
@@ -120,7 +132,7 @@ class HealthStartup(unittest.TestCase):
                             "-I", str(ROOT / "include"), str(temp / "run.cpp"),
                             str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/storage.cpp"),
                             str(ROOT / "src/session_clock.cpp"), "-o", str(temp / "run")], check=True)
-            for scenario in range(9):
+            for scenario in range(14):
                 with self.subTest(scenario=scenario):
                     subprocess.run([str(temp / "run"), str(scenario)], check=True)
 

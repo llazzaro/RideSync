@@ -1,4 +1,5 @@
 #include "health_supervisor.h"
+#include "nvs_boot_guard.h"
 #include <Arduino.h>
 #include <cstring>
 #include <esp_attr.h>
@@ -105,6 +106,19 @@ void setup() {
   Serial.printf("RideSync: sdk_reset=%u app_cause=%u retention_valid=%u safe_mode=%u\n",
                 static_cast<unsigned>(sdk_reason), static_cast<unsigned>(boot.previous_app_cause),
                 static_cast<unsigned>(boot.retention_valid), static_cast<unsigned>(boot.safe_mode));
+  const auto nvs = nvsBootStatus();
+  const bool config_ble_admission = !boot.safe_mode && nvs.persistenceAllowed();
+  Serial.printf("RideSync: nvs_observed=%u nvs_first_failure=%d nvs_last_result=%d "
+                "nvs_format_refused=%u nvs_refusal_error=%d config_ble_admission=%u\n",
+                static_cast<unsigned>(nvs.init_observed), nvs.first_init_failure,
+                nvs.last_init_result, static_cast<unsigned>(nvs.format_refused), nvs.refusal_error,
+                static_cast<unsigned>(config_ble_admission));
+  if (!config_ble_admission)
+    Serial.println("RideSync: config/BLE blocked; diagnostic/RAM mode; no save/format/retry.");
+  // Admission evidence only: no config store or BLE driver exists yet. Their future
+  // owners must recheck nvsBootStatus() per operation and serialize handle lifetimes.
+  // NVS failure is device/config health, never a fabricated worker stall. Qualified
+  // standalone GNSS/SD/IMU lifetimes must remain independent of camera/NVS readiness.
   Serial.println("Optional AT/BLE/SD/IMU disabled; no pins qualified. Serial C clears safe mode.");
   // There are no feature-qualified workers/admissions yet, including in safe mode.
   // Future composition must suppress optional startup/admission when safe_mode is true.
