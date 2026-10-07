@@ -142,3 +142,128 @@ and corruption affecting previously flushed data/directories. Preserve existing
 logs and collision fixtures; never format/delete to make a test pass. Physical
 power-loss durability and filesystem corruption remain unbounded until measured.
 Document every card/board failure rather than inferring success from compilation.
+
+## Watchdog supervision and reset startup software (#15)
+
+`pio test -e native -f test_health_supervisor` exercises completed-pass liveness,
+missing/no-fix/desynchronized devices, disconnect storms and terminal retry
+exhaustion, startup grace/deadline rollover, counter wrap/saturation, invalid
+configuration, RTC record corruption/reset classes, boot failure saturation,
+safe-mode latching/operator clearing, stable-window rollover, and watchdog
+subscription ownership/failures. Actual camera manager cancel/reset retires
+in-flight and queued intent and rejects old callbacks without replay; observed
+and desired recording remain Unknown. A real Storage worker held at mount by a
+condition-variable barrier permits atomic supervision and independent control
+passes until the test explicitly releases it. This deterministic host test uses
+no sleep as evidence. The actual camera retry state machine caps attempts while
+continued terminal-state service passes remain healthy execution.
+
+`python -m unittest discover -s test -v` also compiles/runs actual Arduino setup
+and health-task entry with SDK stand-ins: default independent task startup,
+creation/registration/feed failure, uninitialized TWDT, existing subscription,
+retained safe mode, cold-record invalidation and the explicit serial clear
+mailbox. Stand-ins verify application calls and ownership, not hardware resets,
+SDK implementation behavior, stack use, scheduling or RTC retention.
+
+Default firmware starts one independent priority-2 task on core 1 with a fixed
+4096-byte stack and a 100 ms `vTaskDelayUntil` cadence. AT/BLE/SD/IMU slots default
+to disabled, and no GPIO or physical driver starts. Safe mode inhibits optional
+startup/command admission; current serial-only composition has none to admit.
+Future composition must check safe mode before enabling any optional driver or
+producer. The Arduino loop only prints changed status and posts operator input;
+it cannot feed the supervisor. Supervisor passes do no peripheral IO, allocation,
+manager mutations or worker waits. Worker priority/yield behavior and stack
+high-water marks still need measurement with the intended composition.
+
+The pinned Arduino SDK uses IDF 4.4.7: global five-second panic TWDT and CPU0 idle
+subscription remain owned by the framework. The dedicated task queries its own
+subscription, registers once only if missing, then feeds only after a completed
+bounded policy pass with fresh progress from every required worker. It never
+calls global init/deinit, idle helpers or enableLoopWDT. Uninitialized global
+TWDT is an observable startup failure, not permission to reconfigure the SDK.
+Errors are published as state/error atomics and printed by the loop; no serial
+IO occurs in the supervisor. A preexisting subscription is refused, never
+adopted/deleted; its task remains alive with observable failure, because deleting
+an already-subscribed task would leave a dangling SDK task handle. Unregistered
+startup failures can end their task without affecting framework ownership.
+HealthWatchdog::stop is owner-context bounded normal teardown;
+it removes only the registration it created, and reports removal failure. The
+application's permanent supervisor has no automatic teardown/restart path.
+Interrupt/idle WDT protections remain even if application registration fails.
+
+Qualified enabled slots accept deadlines from 200 through 2000 ms and startup
+grace from 100 through 1000 ms. Required-but-disabled and unqualified slots are
+rejected. These limits reserve cadence margin beneath the existing five-second
+SDK watchdog; they are software policy limits, not measured IO guarantees.
+Grace can feed before initial progress only within its fixed boot window.
+Thereafter a repeated generation never feeds; terminal/missing device outcomes
+never independently cause a reset. Optional stalls are reported without gating
+required execution. With no required workers, a completed supervisor pass feeds
+its own schedulability subscription. Required loss of progress withholds feed;
+the SDK watchdog performs escalation, with no cleanup/join of a hung worker and
+no automatic application esp_restart. Stable recovery excludes startup grace.
+
+One worker owns each HealthProgress publication; the supervisor owns policy and
+last-seen/feed state. Word/byte atomics must be lock-free at compile time. Outcome
+is independently observational, not an atomic transaction with progress. Report
+only after the owner's bounded AT tick/deadline/queue service, BLE fixed ingress
+drain plus manager tick, or IMU acquisition/service completes. Callbacks copy into
+fixed ingress owned by the manager context; a timer must not publish on behalf
+of blocked IO. No AT/BLE/IMU worker is invoked by the default composition.
+`observeStorageHealth` consumes Storage's atomic completed-workerStep counter,
+never enqueue acceptance or FS locks. Terminal storage failure is surfaced as a
+device outcome. ArduinoSdStorage::ioError remains available separately for exact
+adapter errno; terminal alone does not identify the failing SDK operation.
+Mount/write/flush/close may block indefinitely. A stopped Storage worker has a
+completed lifetime: only its stopped flag after close returns retires its slot's
+execution obligation. Terminal alone cannot retire it, because cleanup may hang.
+The generic irreversible HealthProgress::finished hook has the same contract:
+owner cleanup finished, producers paused permanently, no new work admitted for
+that lifetime. This is deliberate quiescence, not invented progress or recovery.
+Tests block terminal cleanup separately, verify withheld feed until close returns,
+then verify finished missing-storage operation does not cause reset.
+Storage's saturating counter therefore eventually fails closed; the helper cannot refresh a saturated/stuck
+value. Generic externally observed forward generation wrap is accepted within
+half-range; backward/repeated generations are rejected. Direct completed-pass
+counters saturate. At 10 Hz UINT32 saturation takes about 13.6 years; a new worker
+lifetime/composition must deliberately reinitialize its policy outside a live
+subscription. Polling gaps and generation advances must remain below half-range.
+
+At startup capture the SDK reset reason once, independently from application
+cause; print neither private identifiers nor keys. Raw RTC_NOINIT bytes prevent
+C++ constructors from overwriting the retained record. Magic/version/field
+bounds/checksum must validate, and cold/brownout/unknown resets discard retained
+accounting. A valid previously armed boot increments the saturating failed-boot
+streak on actual WDT/PANIC or annotated software health restart. SDK WDT/PANIC
+and app health restart counters are separate; external/operator reset is not a
+health restart. The third failed warm boot latches safe mode before optional
+startup. Sixty seconds of continuously live completed required-worker execution
+clears a nonlatched streak/armed flag, but never clears the safe latch. Serial
+uppercase `C` posts explicit operator clearing to the supervisor owner. Metadata
+is written only at boot, stable transition, operator clear or explicit restart
+annotation; there are no heartbeat flash writes. Future deliberate restart code
+must retain the annotation before restart and keep it separate from SDK hints.
+RTC is volatile accounting: corruption/power loss/brownout and failures before
+setup cannot establish retention or protect a power-cycle boot loop.
+
+Fresh boot constructs fresh managers/queues; do not persist commands, recording
+truth or pending callback ingress. In-process reset requires paused admission,
+RecordingManager::cancel, CameraManager::reset and ingress discard in their sole
+owner context. Never call these concurrently from supervision or block waiting
+for a hung worker. CPU reset is not a verified modem receive/physical barrier;
+AT re-entry still needs its existing caller-qualified barrier, and session IDs
+need an independent uniqueness guarantee across power loss. RTC boot counts do
+not provide that guarantee.
+
+**Physical gates remain OPEN; whole #15 is not complete.** Fault injection is
+absent/disabled in default firmware. Before acceptance, run an explicit test
+build with only a qualified owned worker stalled after entry into blocking work,
+while measuring supervisor/control/BLE/SD/IMU fairness, stack margin, latency and
+actual reset timing. Record board/build/SDK versions, SDK reason and separate app
+cause, record validity before/after each reset, Unknown recording startup and
+queue discard. Exercise three failed warm boots, stable recovery, operator clear,
+cold/brownout/corrupt retention, missing peripherals, disconnect storms and retry
+caps without continuous reset. Use camera screen/media as physical state proof.
+No hardware fault injection, reboot, scheduling fairness or RTC retention has
+been observed here; debugger-attached watchdog tests cannot establish autonomous
+acceptance. Integrated ride/soak evidence remains #31.
