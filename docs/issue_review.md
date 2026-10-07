@@ -16,7 +16,7 @@ created 15 split tickets and updated all 30 work packages plus the #16 tracker.
 | [9](https://github.com/llazzaro/RideSync/issues/9) | Implement bounded Insta360 wake scheduling and group reconnect | [24](https://github.com/llazzaro/RideSync/issues/24) |
 | [10](https://github.com/llazzaro/RideSync/issues/10) | Implement bounded A7670E AT transport and GNSS acquisition | [25](https://github.com/llazzaro/RideSync/issues/25) |
 | [11](https://github.com/llazzaro/RideSync/issues/11) | Implement bounded GPS logging to microSD | [26](https://github.com/llazzaro/RideSync/issues/26) |
-| [12](https://github.com/llazzaro/RideSync/issues/12) | Acquire and log raw external IMU motion samples | [27](https://github.com/llazzaro/RideSync/issues/27) |
+| [12](https://github.com/llazzaro/RideSync/issues/12) | Acquire raw external IMU samples; depends on #34 admission/schema | [27](https://github.com/llazzaro/RideSync/issues/27), [34](https://github.com/llazzaro/RideSync/issues/34) |
 | [13](https://github.com/llazzaro/RideSync/issues/13) | Implement validated linear acceleration and lean/pitch estimates | [28](https://github.com/llazzaro/RideSync/issues/28) |
 | [14](https://github.com/llazzaro/RideSync/issues/14) | Integrate optional Insta360 GPS forwarding per verified profile | [29](https://github.com/llazzaro/RideSync/issues/29) |
 | [15](https://github.com/llazzaro/RideSync/issues/15) | Implement watchdog health supervision and reset recovery | [30](https://github.com/llazzaro/RideSync/issues/30), [31](https://github.com/llazzaro/RideSync/issues/31) |
@@ -32,3 +32,13 @@ from watchdog code. Optional GPS injection no longer blocks the core release.
 
 The review does not claim production readiness; completion remains a measured
 software/hardware result. See the [current plan](superpowers/plans/2026-10-07-ridesync.md).
+
+2026-10-08 follow-up: [#34](https://github.com/llazzaro/RideSync/issues/34) extracts
+the bounded mixed telemetry schema/admission prerequisite after #12's pinned
+driver/ownership audit. #34 depends on #11/#26, coordinates metadata with #27,
+and supplies the separate transport inbox consumed by one clock/Storage owner.
+#12 now also depends on #34 and retains initialization/acquisition/FIFO decoding,
+concurrent SD/GNSS interval/jitter and stationary/known-axis bench evidence.
+This adds a software work package (31 total), not a duplicate sensor ticket.
+Original #11/#12/#31 physical acceptance stays open; the #16 tracker remains
+sole roadmap tracker. See [mixed telemetry contract](mixed_telemetry.md).

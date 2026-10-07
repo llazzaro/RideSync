@@ -242,5 +242,6 @@ sectors, or corrupt filesystem structures. No physical durability/corruption
 bound has been established. Parsers must reject incomplete trailing rows and
 unknown versions; do not silently promote partial or stale data to valid fixes.
 
-Future record families need a separately versioned payload/schema contract and
-bounded serialization; this version includes GPS only, with no IMU or camera rows.
+GPS v1 includes GPS only. Opt-in [mixed telemetry v2](mixed_telemetry.md) adds
+bounded raw IMU/configuration/health/control rows through the same storage worker
+and one admission owner; no camera rows or physical sensor qualification.

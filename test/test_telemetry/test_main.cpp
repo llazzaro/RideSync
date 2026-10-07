@@ -1,0 +1,302 @@
+#include "telemetry_admission.h"
+#include <condition_variable>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unity.h>
+using namespace ridesync;
+struct Sink : StorageSink {
+  std::string bytes;
+  bool flush_ok = true;
+  size_t limit = 9999;
+  bool mount() override { return true; }
+  bool openExclusive(const char *p) override {
+    return std::string(p) == "/telemetry-000000000000002a.csv";
+  }
+  size_t write(const char *p, size_t n) override {
+    size_t k = n < limit ? n : limit;
+    bytes.append(p, k);
+    return k;
+  }
+  bool flush() override { return flush_ok; }
+  void close() override {}
+};
+struct TestClock : Clock {
+  uint32_t time = 0;
+  uint32_t now() const override { return time; }
+};
+ImuEvidence evidence(RecordKind kind = RecordKind::ImuSample) {
+  ImuEvidence e;
+  e.session_id = 42;
+  e.kind = kind;
+  e.config.generation = 7;
+  e.config.sensor_id = 10;
+  e.config.accel_range_mg = 16000;
+  e.config.gyro_range_mdps = 2000000;
+  e.config.accel_scale_numerator = 1;
+  e.config.accel_scale_denominator = 2048;
+  e.config.gyro_scale_numerator = 125;
+  e.config.gyro_scale_denominator = 2048;
+  e.accel[0] = -32768;
+  e.gyro[2] = 32767;
+  return e;
+}
+void drain(Storage &s) {
+  for (unsigned i = 0; i < 500; ++i)
+    s.workerStep();
+}
+void copied_config_old_anchor_and_kind_health() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  TEST_ASSERT_TRUE(clock.anchor({2026, 1, 1, 0, 0, 0, 0}));
+  ImuBatch b;
+  b.count = 2;
+  b.records[0] = evidence(RecordKind::ImuConfig);
+  b.records[1] = evidence();
+  TEST_ASSERT_TRUE(inbox.publish(b));
+  b.records[1].config.generation = 999;
+  TEST_ASSERT_EQUAL_UINT32(2, a.tick());
+  TEST_ASSERT_TRUE(clock.anchor({2026, 1, 2, 0, 0, 0, 0}));
+  drain(s);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).flushed);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuConfig).flushed);
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find("#ridesync_telemetry,2"));
+  TEST_ASSERT_EQUAL(std::string::npos, sink.bytes.find("999"));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find("-32768"));
+}
+void inbox_overflow_and_gps_reservation() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  ImuBatch b;
+  b.count = 4;
+  for (auto &e : b.records)
+    e = evidence();
+  for (unsigned i = 0; i < ImuInbox::kCapacity; ++i)
+    TEST_ASSERT_TRUE(inbox.publish(b));
+  TEST_ASSERT_FALSE(inbox.publish(b));
+  TEST_ASSERT_EQUAL_UINT32(4, inbox.dropped(RecordKind::ImuSample));
+  for (unsigned i = 0; i < 4; ++i)
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(2, a.tick());
+  TEST_ASSERT_EQUAL_UINT32(6, s.kindHealth(RecordKind::ImuSample).accepted);
+  TEST_ASSERT_EQUAL_UINT32(2, s.kindHealth(RecordKind::ImuSample).dropped);
+  ModemSnapshot gps;
+  gps.session_id = 42;
+  TEST_ASSERT_TRUE(a.gps(gps));
+  TEST_ASSERT_TRUE(a.event(evidence(RecordKind::ImuHealth)));
+  TEST_ASSERT_FALSE(a.gps(gps));
+  drain(s);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::Gps).flushed);
+}
+void cross_session_and_stop_final_publication() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  auto e = evidence();
+  e.session_id = 43;
+  TEST_ASSERT_FALSE(a.event(e));
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).rejected);
+  a.requestStop();
+  TEST_ASSERT_TRUE(inbox.stopRequested());
+  ModemSnapshot gps;
+  gps.session_id = 42;
+  TEST_ASSERT_FALSE(a.gps(gps));
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::Gps).dropped);
+  TEST_ASSERT_FALSE(a.stopped());
+  ImuBatch b;
+  b.count = 1;
+  b.records[0] = evidence();
+  TEST_ASSERT_TRUE(inbox.publish(b));
+  inbox.finish();
+  TEST_ASSERT_FALSE(inbox.publish(b));
+  TEST_ASSERT_EQUAL_UINT32(1, a.tick());
+  TEST_ASSERT_TRUE(a.stopped());
+  drain(s);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).flushed);
+  TEST_ASSERT_TRUE(s.health().stopped);
+}
+void mixed_flush_and_partial_loss() {
+  for (bool short_write : {false, true}) {
+    Sink sink;
+    Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+    TestClock raw;
+    SessionClock clock(raw, 42, 1000);
+    ImuInbox inbox;
+    TelemetryAdmission a(clock, s, inbox);
+    TEST_ASSERT_TRUE(a.event(evidence()));
+    TEST_ASSERT_TRUE(a.event(evidence(RecordKind::ImuHealth)));
+    if (short_write)
+      sink.limit = 3;
+    else
+      sink.flush_ok = false;
+    drain(s);
+    TEST_ASSERT_TRUE(s.health().terminal);
+    TEST_ASSERT_TRUE(s.health().stopped);
+    TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).lost);
+    TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuHealth).lost);
+    TEST_ASSERT_EQUAL_UINT32(0, s.kindHealth(RecordKind::ImuSample).flushed);
+  }
+}
+
+struct CloseSink : Sink {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool entered = false, release = false;
+  void close() override {
+    std::unique_lock<std::mutex> lock(mutex);
+    entered = true;
+    cv.notify_one();
+    cv.wait(lock, [&] { return release; });
+  }
+};
+void terminal_close_remains_supervised() {
+  CloseSink sink;
+  sink.flush_ok = false;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  TEST_ASSERT_TRUE(a.event(evidence()));
+  std::thread worker([&] { drain(s); });
+  {
+    std::unique_lock<std::mutex> lock(sink.mutex);
+    sink.cv.wait(lock, [&] { return sink.entered; });
+  }
+  const auto h = s.health();
+  TEST_ASSERT_TRUE(h.terminal);
+  TEST_ASSERT_FALSE(h.stopped);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).lost);
+  TEST_ASSERT_FALSE(a.event(evidence()));
+  {
+    std::lock_guard<std::mutex> lock(sink.mutex);
+    sink.release = true;
+  }
+  sink.cv.notify_one();
+  worker.join();
+  TEST_ASSERT_TRUE(s.health().stopped);
+}
+void metadata_survives_dropped_config_event_and_invalid_evidence() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  for (unsigned i = 0; i < 8; ++i)
+    TEST_ASSERT_TRUE(a.event(evidence(RecordKind::ImuHealth)));
+  TEST_ASSERT_FALSE(a.event(evidence(RecordKind::ImuConfig)));
+  drain(s);
+  TEST_ASSERT_TRUE(a.event(evidence()));
+  drain(s);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuConfig).dropped);
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find(",7,10,0,0,"));
+  auto e = evidence();
+  e.config.accel_scale_denominator = 0;
+  TEST_ASSERT_FALSE(a.event(e));
+  e = evidence();
+  e.config.mount_state = Qualification::Qualified;
+  TEST_ASSERT_FALSE(a.event(e));
+  e = evidence();
+  e.kind = RecordKind::ImuControl;
+  e.sensor_time_present = true;
+  e.event_code = 5;
+  e.event_length = 3;
+  e.sensor_time_ticks24 = 1;
+  TEST_ASSERT_FALSE(a.event(e));
+  TEST_ASSERT_EQUAL_UINT32(2, s.kindHealth(RecordKind::ImuSample).rejected);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuControl).rejected);
+  Storage legacy(sink, {42, "fw", "synthetic"});
+  TEST_ASSERT_FALSE(legacy.enqueueImu(clock.snapshot(), evidence()));
+}
+void concurrent_copied_inbox_storage_and_final_finish() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  std::thread transport([&] {
+    ImuBatch b;
+    b.count = 4;
+    for (unsigned sequence = 0; sequence < 1000; ++sequence) {
+      for (auto &e : b.records) {
+        e = evidence();
+        e.batch_sequence = sequence;
+      }
+      while (!inbox.publish(b))
+        std::this_thread::yield();
+    }
+    inbox.finish();
+  });
+  std::thread worker([&] {
+    while (!s.health().stopped) {
+      s.workerStep();
+      std::this_thread::yield();
+    }
+  });
+  a.requestStop();
+  while (!a.stopped()) {
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(2, a.tick());
+    std::this_thread::yield();
+  }
+  transport.join();
+  worker.join();
+  auto h = s.kindHealth(RecordKind::ImuSample);
+  TEST_ASSERT_EQUAL_UINT32(4000, h.accepted + h.dropped);
+  TEST_ASSERT_EQUAL_UINT32(h.accepted, h.flushed);
+  TEST_ASSERT_EQUAL_UINT32(0, h.lost);
+}
+
+void gps_progress_under_sustained_backlog_and_clock_reset_rejection() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox);
+  ImuBatch batch;
+  batch.count = 4;
+  for (auto &e : batch.records)
+    e = evidence();
+  ModemSnapshot gps;
+  gps.session_id = 42;
+  for (unsigned round = 0; round < 100; ++round) {
+    for (unsigned i = 0; i < 4; ++i)
+      inbox.publish(batch);
+    for (unsigned i = 0; i < 3; ++i)
+      TEST_ASSERT_EQUAL_UINT32(2, a.tick());
+    TEST_ASSERT_TRUE(a.gps(clock.snapshot(), gps));
+    TEST_ASSERT_TRUE(a.event(evidence(RecordKind::ImuHealth)));
+    drain(s);
+  }
+  TEST_ASSERT_EQUAL_UINT32(100, s.kindHealth(RecordKind::Gps).flushed);
+  TEST_ASSERT_TRUE(clock.reset(43));
+  const auto before = s.kindHealth(RecordKind::ImuSample).rejected;
+  TEST_ASSERT_EQUAL_UINT32(2, a.tick());
+  TEST_ASSERT_EQUAL_UINT32(before + 2, s.kindHealth(RecordKind::ImuSample).rejected);
+}
+void setUp() {}
+void tearDown() {}
+int main() {
+  UNITY_BEGIN();
+  RUN_TEST(copied_config_old_anchor_and_kind_health);
+  RUN_TEST(inbox_overflow_and_gps_reservation);
+  RUN_TEST(cross_session_and_stop_final_publication);
+  RUN_TEST(mixed_flush_and_partial_loss);
+  RUN_TEST(terminal_close_remains_supervised);
+  RUN_TEST(metadata_survives_dropped_config_event_and_invalid_evidence);
+  RUN_TEST(concurrent_copied_inbox_storage_and_final_finish);
+  RUN_TEST(gps_progress_under_sustained_backlog_and_clock_reset_rejection);
+  return UNITY_END();
+}

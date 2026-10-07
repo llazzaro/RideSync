@@ -1,5 +1,5 @@
 #pragma once
-#include "modem_gnss.h"
+#include "telemetry_record.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -22,10 +22,11 @@ struct StorageConfig {
   const char *provenance;
   uint8_t mount_attempts;
   uint8_t flush_records;
+  StorageFormat format;
   StorageConfig(uint64_t id, const char *fw, const char *source, uint8_t attempts = 2,
-                uint8_t flush_count = 4)
+                uint8_t flush_count = 4, StorageFormat selected = StorageFormat::GpsV1)
       : session_id(id), firmware(fw), provenance(source), mount_attempts(attempts),
-        flush_records(flush_count) {}
+        flush_records(flush_count), format(selected) {}
 };
 struct StorageHealth {
   uint32_t accepted, dropped, rejected, written, flushed, lost, progress;
@@ -40,16 +41,28 @@ public:
   static constexpr size_t kMaxRowBytes = 2048, kChunkBytes = 256;
   Storage(StorageSink &sink, const StorageConfig &config);
   bool enqueue(const RecordTimestamp &timestamp, const ModemSnapshot &sample);
+  bool enqueueImu(const RecordTimestamp &timestamp, const ImuEvidence &evidence,
+                  bool reserve = false);
+  KindHealth kindHealth(RecordKind kind) const;
   void requestStop();
   // ONE operation/chunk per step; sink latency is unbounded. Never call on control task.
   void workerStep();
   StorageHealth health() const;
 
 private:
-  struct Record {
-    RecordTimestamp timestamp;
-    ModemSnapshot sample;
+  friend class TelemetryAdmission;
+  void drop(RecordKind kind);
+  using Record = TelemetryRecord;
+  const StorageFormat format_;
+  struct Counters {
+    std::atomic<uint32_t> accepted{0}, dropped{0}, rejected{0}, written{0}, flushed{0};
   };
+  Counters kinds_[5];
+  uint8_t cached_kinds_[5]{};
+  RecordKind in_flight_kind_ = RecordKind::Gps;
+  bool publish(const Record &record, bool reserve);
+  bool validTimestamp(const RecordTimestamp &timestamp) const;
+  bool formatImu(const Record &record);
   StorageSink &sink_;
   const uint64_t session_;
   const uint8_t max_mounts_, flush_records_;

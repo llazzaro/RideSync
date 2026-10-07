@@ -75,30 +75,38 @@ void Storage::add(std::atomic<uint32_t> &c, uint32_t n) {
   c.store(n > UINT32_MAX - v ? UINT32_MAX : v + n, std::memory_order_relaxed);
 }
 Storage::Storage(StorageSink &sink, const StorageConfig &c)
-    : sink_(sink), session_(c.session_id), max_mounts_(c.mount_attempts),
+    : format_(c.format), sink_(sink), session_(c.session_id), max_mounts_(c.mount_attempts),
       flush_records_(c.flush_records), valid_(false) {
-  valid_ = session_ && max_mounts_ > 0 && max_mounts_ <= 3 && flush_records_ > 0 &&
+  valid_ = (format_ == StorageFormat::GpsV1 || format_ == StorageFormat::MixedV2) && session_ &&
+           max_mounts_ > 0 && max_mounts_ <= 3 && flush_records_ > 0 &&
            flush_records_ <= kCapacity && token(c.firmware, firmware_) &&
            token(c.provenance, provenance_);
-  snprintf(path_, sizeof(path_), "/gps-%016llx.csv", static_cast<unsigned long long>(session_));
+  snprintf(path_, sizeof(path_),
+           format_ == StorageFormat::GpsV1 ? "/gps-%016llx.csv" : "/telemetry-%016llx.csv",
+           static_cast<unsigned long long>(session_));
+}
+bool Storage::validTimestamp(const RecordTimestamp &t) const {
+  return t.session_id == session_ &&
+         !(t.monotonic_quality != MonotonicQuality::Valid ||
+           t.monotonic_ms > SessionClock::kMaxDurationMs ||
+           static_cast<unsigned>(t.anchor_quality) > 2 ||
+           (t.anchor_quality != AnchorQuality::Missing &&
+            (!t.anchor.sequence || t.anchor.receipt_ms > t.monotonic_ms ||
+             t.anchor_age_ms != t.monotonic_ms - t.anchor.receipt_ms)) ||
+           (t.anchor_quality == AnchorQuality::Missing &&
+            (t.anchor.sequence || t.has_utc_estimate)) ||
+           (t.anchor.sequence &&
+            (t.anchor.utc_ms < 946684800000LL || t.anchor.utc_ms > 4102444799999LL)) ||
+           (t.has_utc_estimate &&
+            (t.anchor_quality != AnchorQuality::Fresh ||
+             t.utc_estimate_ms != t.anchor.utc_ms + static_cast<int64_t>(t.anchor_age_ms))));
 }
 bool Storage::enqueue(const RecordTimestamp &t, const ModemSnapshot &s) {
   const auto &f = s.fix;
   const auto &time = f.utc_time.value;
-  if (!valid_ || t.session_id != session_ || s.session_id != session_ ||
-      t.monotonic_quality != MonotonicQuality::Valid ||
-      t.monotonic_ms > SessionClock::kMaxDurationMs ||
-      static_cast<unsigned>(t.anchor_quality) > 2 || static_cast<unsigned>(s.validity) > 4 ||
-      static_cast<unsigned>(s.state) > 6 || static_cast<unsigned>(s.health) > 6 ||
-      (t.anchor_quality != AnchorQuality::Missing &&
-       (!t.anchor.sequence || t.anchor.receipt_ms > t.monotonic_ms ||
-        t.anchor_age_ms != t.monotonic_ms - t.anchor.receipt_ms)) ||
-      (t.anchor_quality == AnchorQuality::Missing && (t.anchor.sequence || t.has_utc_estimate)) ||
-      (t.anchor.sequence &&
-       (t.anchor.utc_ms < 946684800000LL || t.anchor.utc_ms > 4102444799999LL)) ||
-      (t.has_utc_estimate &&
-       (t.anchor_quality != AnchorQuality::Fresh ||
-        t.utc_estimate_ms != t.anchor.utc_ms + static_cast<int64_t>(t.anchor_age_ms))) ||
+  if (!valid_ || t.session_id != session_ || s.session_id != session_ || !validTimestamp(t) ||
+      static_cast<unsigned>(s.validity) > 4 || static_cast<unsigned>(s.state) > 6 ||
+      static_cast<unsigned>(s.health) > 6 ||
       (s.age_available && (f.receipt_monotonic_ms > t.monotonic_ms ||
                            s.age_ms != t.monotonic_ms - f.receipt_monotonic_ms)) ||
       (s.validity == FixValidity::Valid && !f.valid) ||
@@ -111,22 +119,88 @@ bool Storage::enqueue(const RecordTimestamp &t, const ModemSnapshot &s) {
       (f.utc_time.available &&
        (time.hour > 23 || time.minute > 59 || time.second > 59 || time.centisecond > 99))) {
     add(rejected_);
+    add(kinds_[0].rejected);
     return false;
   }
-  if (terminal_.load(std::memory_order_acquire) || stop_.load(std::memory_order_acquire)) {
-    add(dropped_);
-    return false;
-  }
+  Record record;
+  record.timestamp = t;
+  record.gps = s;
+  return publish(record, false);
+}
+void Storage::drop(RecordKind kind) {
+  add(dropped_);
+  if (kind < RecordKind::Count)
+    add(kinds_[static_cast<unsigned>(kind)].dropped);
+}
+bool Storage::publish(const Record &record, bool reserve) {
+  auto &h = kinds_[static_cast<unsigned>(record.kind)];
   uint32_t w = write_.load(std::memory_order_relaxed), r = read_.load(std::memory_order_acquire);
-  if (w - r == kCapacity) {
-    add(dropped_);
+  if (terminal_.load(std::memory_order_acquire) || stop_.load(std::memory_order_acquire) ||
+      w - r >= kCapacity - (reserve ? 2 : 0)) {
+    drop(record.kind);
     return false;
   }
-  queue_[w % kCapacity] = {t, s};
+  queue_[w % kCapacity] = record;
   write_.store(w + 1, std::memory_order_release);
   add(accepted_);
+  add(h.accepted);
   return true;
 }
+bool Storage::enqueueImu(const RecordTimestamp &t, const ImuEvidence &e, bool reserve) {
+  const auto k = static_cast<unsigned>(e.kind);
+  const auto &c = e.config;
+  const bool kind_valid = k > 0 && k < 5;
+  if (!valid_ || format_ != StorageFormat::MixedV2 || !kind_valid || !validTimestamp(t) ||
+      e.session_id != session_ || static_cast<unsigned>(c.sensor_state) > 2 ||
+      static_cast<unsigned>(c.mount_state) > 2 || static_cast<unsigned>(c.calibration_state) > 2 ||
+      c.accel_offset_compensation > 2 || c.gyro_offset_compensation > 2 || e.timing_flags > 15 ||
+      e.event_code > 9 || e.event_length > 4 || e.sensor_time_ticks24 > 0xffffff ||
+      ((c.accel_scale_numerator == 0) != (c.accel_scale_denominator == 0)) ||
+      ((c.gyro_scale_numerator == 0) != (c.gyro_scale_denominator == 0)) ||
+      (c.sensor_state == Qualification::Qualified && !c.sensor_id) ||
+      (c.mount_state == Qualification::Qualified && !c.mount_id) ||
+      (c.calibration_state == Qualification::Qualified && !c.calibration_id) ||
+      (e.kind == RecordKind::ImuSample &&
+       (e.event_code || e.event_length || e.sensor_time_present || e.event_count)) ||
+      (e.sensor_time_present &&
+       (e.kind != RecordKind::ImuControl || e.event_code != 5 || e.event_length != 3 ||
+        e.sensor_time_ticks24 != (static_cast<uint32_t>(e.event_bytes[0]) |
+                                  (static_cast<uint32_t>(e.event_bytes[1]) << 8) |
+                                  (static_cast<uint32_t>(e.event_bytes[2]) << 16))))) {
+    add(rejected_);
+    if (kind_valid)
+      add(kinds_[k].rejected);
+    return false;
+  }
+  if (c.calibration_gains_known) {
+    for (unsigned i = 0; i < 3; ++i) {
+      if (!c.accel_gain_numerator[i] || !c.accel_gain_denominator[i] || !c.gyro_gain_numerator[i] ||
+          !c.gyro_gain_denominator[i]) {
+        add(rejected_);
+        add(kinds_[k].rejected);
+        return false;
+      }
+    }
+  }
+  Record record;
+  record.kind = e.kind;
+  record.timestamp = t;
+  record.imu = e;
+  return publish(record, reserve);
+}
+KindHealth Storage::kindHealth(RecordKind kind) const {
+  if (kind >= RecordKind::Count)
+    return {};
+  const auto &h = kinds_[static_cast<unsigned>(kind)];
+  const auto a = h.accepted.load(), f = h.flushed.load();
+  return {a,
+          h.dropped.load(),
+          h.rejected.load(),
+          h.written.load(),
+          f,
+          terminal_.load() && a >= f ? a - f : 0};
+}
+
 void Storage::requestStop() { stop_.store(true, std::memory_order_release); }
 StorageHealth Storage::health() const {
   const auto accepted = accepted_.load(), flushed = flushed_.load();
@@ -141,9 +215,13 @@ StorageHealth Storage::health() const {
           stopped_.load()};
 }
 bool Storage::format(const Record &r) {
+  if (r.kind != RecordKind::Gps)
+    return formatImu(r);
   Csv c(buffer_, sizeof(buffer_));
+  if (format_ == StorageFormat::MixedV2)
+    c.append("gps,");
   const auto &t = r.timestamp;
-  const auto &s = r.sample;
+  const auto &s = r.gps;
   const auto &f = s.fix;
   c.append("%llu,%llu,%u,%u,", (unsigned long long)t.session_id, (unsigned long long)t.monotonic_ms,
            (unsigned)t.monotonic_quality, (unsigned)t.anchor_quality);
@@ -215,6 +293,9 @@ void Storage::writeChunk() {
     if (row_in_flight_) {
       row_in_flight_ = false;
       add(written_);
+      const unsigned k = static_cast<unsigned>(in_flight_kind_);
+      add(kinds_[k].written);
+      ++cached_kinds_[k];
       ++cached_;
     }
     stage_ = cached_ >= flush_records_ ? Stage::Flush : Stage::Rows;
@@ -240,11 +321,13 @@ void Storage::workerStep() {
       fail();
     else {
       Csv c(buffer_, sizeof(buffer_));
-      c.append(
-          "#ridesync_gps,1\n#session,%llu,firmware,%s,provenance,%s\n#policy,queue_records,8,flush_"
-          "records,%u,idle_flush,1,chunk_bytes,256,mount_attempts,%u,write_retries,0\n%s",
-          (unsigned long long)session_, firmware_, provenance_, flush_records_, max_mounts_,
-          header);
+      c.append("%s\n#session,%llu,firmware,%s,provenance,%s\n#policy,queue_records,8,flush_"
+               "records,%u,idle_flush,1,chunk_bytes,256,mount_attempts,%u,write_retries,0\n%s",
+               format_ == StorageFormat::GpsV1 ? "#ridesync_gps,1" : "#ridesync_telemetry,2",
+               (unsigned long long)session_, firmware_, provenance_, flush_records_, max_mounts_,
+               header);
+      if (format_ == StorageFormat::MixedV2)
+        c.append("#imu_layout,2,see_docs/mixed_telemetry.md\n");
       length_ = c.size;
       offset_ = 0;
       if (!c.ok)
@@ -267,6 +350,7 @@ void Storage::workerStep() {
       Record record = queue_[r % kCapacity];
       read_.store(r + 1, std::memory_order_release);
       row_in_flight_ = true;
+      in_flight_kind_ = record.kind;
       if (!format(record))
         fail();
       else
@@ -287,6 +371,10 @@ void Storage::workerStep() {
       fail();
     else {
       add(flushed_, cached_);
+      for (unsigned k = 0; k < 5; ++k) {
+        add(kinds_[k].flushed, cached_kinds_[k]);
+        cached_kinds_[k] = 0;
+      }
       cached_ = 0;
       stage_ = Stage::Rows;
     }
@@ -307,5 +395,101 @@ void Storage::workerStep() {
     read_.store(w, std::memory_order_release);
   }
   add(progress_);
+}
+} // namespace ridesync
+
+namespace ridesync {
+bool Storage::formatImu(const Record &r) {
+  Csv c(buffer_, sizeof(buffer_));
+  const auto &t = r.timestamp;
+  const auto &e = r.imu;
+  const auto &v = e.config;
+  const char *names[] = {"gps", "imu", "config", "health", "control"};
+  c.append("%s,%llu,%llu,%u,%u,", names[static_cast<unsigned>(r.kind)],
+           (unsigned long long)t.session_id, (unsigned long long)t.monotonic_ms,
+           (unsigned)t.monotonic_quality, (unsigned)t.anchor_quality);
+  if (t.anchor.sequence) {
+    c.append("%u,%llu,%lld,%u,", t.anchor.sequence, (unsigned long long)t.anchor.receipt_ms,
+             (long long)t.anchor.utc_ms, t.anchor.uncertainty_known);
+    if (t.anchor.uncertainty_known)
+      c.append("%u", t.anchor.uncertainty_ms);
+    c.append(",%llu,", (unsigned long long)t.anchor_age_ms);
+  } else
+    c.append(",,,0,,,");
+  c.append("%u,", t.has_utc_estimate);
+  if (t.has_utc_estimate)
+    c.append("%lld", (long long)t.utc_estimate_ms);
+  c.append(",%u,%u,%u,%u,%u,", e.batch_sequence, e.frame_sequence, e.byte_position, e.sensor_epoch,
+           e.receipt_known);
+  if (e.receipt_known)
+    c.append("%u", e.receipt_millis32);
+  c.append(",%u,", e.drain_known);
+  if (e.drain_known)
+    c.append("%u", e.drain_start_millis32);
+  c.append(",");
+  if (e.drain_known)
+    c.append("%u", e.drain_end_millis32);
+  c.append(",%u,0,,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,", e.timing_flags,
+           v.generation, v.sensor_id, v.mount_id, v.calibration_id, (unsigned)v.sensor_state,
+           (unsigned)v.mount_state, (unsigned)v.calibration_state, v.accel_range_mg,
+           v.gyro_range_mdps, v.accel_scale_numerator, v.accel_scale_denominator,
+           v.gyro_scale_numerator, v.gyro_scale_denominator, v.accel_odr_millihz,
+           v.gyro_odr_millihz, v.accel_filter, v.gyro_filter, v.accel_offset_compensation,
+           v.gyro_offset_compensation, v.calibration_method, v.calibration_time_known);
+  if (v.calibration_time_known)
+    c.append("%lld", (long long)v.calibration_utc_ms);
+  c.append(",%u,", v.calibration_temperature_known);
+  if (v.calibration_temperature_known)
+    c.append("%d", v.calibration_temperature_millic);
+  c.append(",%u", v.calibration_offsets_known);
+  for (auto x : v.accel_offset) {
+    c.append(",");
+    if (v.calibration_offsets_known)
+      c.append("%d", x);
+  }
+  for (auto x : v.gyro_offset) {
+    c.append(",");
+    if (v.calibration_offsets_known)
+      c.append("%d", x);
+  }
+  c.append(",%u", v.calibration_gains_known);
+  for (unsigned i = 0; i < 3; ++i) {
+    c.append(",");
+    if (v.calibration_gains_known)
+      c.append("%u", v.accel_gain_numerator[i]);
+    c.append(",");
+    if (v.calibration_gains_known)
+      c.append("%u", v.accel_gain_denominator[i]);
+  }
+  for (unsigned i = 0; i < 3; ++i) {
+    c.append(",");
+    if (v.calibration_gains_known)
+      c.append("%u", v.gyro_gain_numerator[i]);
+    c.append(",");
+    if (v.calibration_gains_known)
+      c.append("%u", v.gyro_gain_denominator[i]);
+  }
+  for (auto x : e.accel) {
+    c.append(",");
+    if (r.kind == RecordKind::ImuSample)
+      c.append("%d", x);
+  }
+  for (auto x : e.gyro) {
+    c.append(",");
+    if (r.kind == RecordKind::ImuSample)
+      c.append("%d", x);
+  }
+  c.append(",%u,%u,", e.event_code, e.event_length);
+  for (uint8_t i = 0; i < e.event_length; ++i)
+    c.append("%02x", e.event_bytes[i]);
+  c.append(",%u,", e.sensor_time_present);
+  if (e.sensor_time_present)
+    c.append("%u", e.sensor_time_ticks24);
+  c.append(",%u,%u", e.event_count, e.event_count_lower_bound);
+  auto h = kindHealth(r.kind);
+  c.append(",%u,%u,%u,%u,%u,%u\n", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  length_ = c.size;
+  offset_ = 0;
+  return c.ok;
 }
 } // namespace ridesync
