@@ -1,0 +1,7 @@
+{
+  "cameras": [
+    {"name": "Front X5", "model": "X5", "identifier": null, "wake_identifier": null, "enabled": true, "gps_telemetry": false},
+    {"name": "Helmet GO3S", "model": "GO3S", "identifier": null, "wake_identifier": null, "enabled": true, "gps_telemetry": false},
+    {"name": "Rear ONE RS", "model": "ONE_RS", "identifier": null, "wake_identifier": null, "enabled": true, "gps_telemetry": false}
+  ]
+}
