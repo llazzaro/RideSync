@@ -34,7 +34,7 @@ Measure command skew, concurrent connection capacity and retries independently.
 Test rotation of all three wake identifiers; never infer wake compatibility from
 one model. Test unavailable SD, full SD, GNSS no-fix/stale fixes, and reset.
 
-Acceptance for milestone 1: repeatable single-X5 start/stop with observed state,
+Acceptance for the first X5 camera milestone: repeatable single-X5 start/stop with observed state,
 bounded connect/command timeouts and honest serial status. It is not met yet.
 
 ## Planned GoPro and mixed-camera validation

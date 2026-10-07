@@ -18,7 +18,7 @@ firmware. Test on a bench before mounting on a motorcycle.
 
 The external momentary button will need a verified GPIO, pull resistor,
 debounce and appropriate environmental protection. External RGB LED wiring and
-power conditioning belong to milestone 7. Validate startup straps, peripheral
+power conditioning are tracked by #30; button and LED firmware are #8 and #23. Validate startup straps, peripheral
 conflicts and modem supply current before wiring accessories.
 
 ## Planned motion logger hardware
@@ -28,3 +28,10 @@ accelerometer and gyroscope. The board/GNSS module alone does not provide these
 motion measurements. Select the module during the IMU issue after checking
 wiring, usable ranges, timestamping, driver license and rigid mounting. Preserve
 raw samples; derived angles need a calibration and dynamic validation procedure.
+
+## Observed bench evidence
+
+See [factory bring-up](hardware-results/2026-10-07-bringup.md) for the A7670E-FASE
+identity, GNSS power-on/READY and empty no-fix responses. This verifies only the
+factory-firmware probe, not the planned RideSync drivers. #1 retains remaining
+board/pin/antenna qualification work.

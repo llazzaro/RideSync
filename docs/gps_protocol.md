@@ -33,3 +33,10 @@ and separately validated derived acceleration/lean/pitch records. These use a
 shared session/timebase with camera events. Camera telemetry injection remains
 optional and profile-specific. HERO12 Black footage can be aligned with external
 logs; embedding the logs into camera metadata is not promised.
+
+## First hardware observation
+
+The [factory-firmware probe](hardware-results/2026-10-07-bringup.md) confirmed
+A7670E-FASE and accepted `AT+CGNSSPWR=1`, then emitted READY. `CGNSSINFO` and
+`CGPSINFO` returned empty fields: no position fix was observed. Production parser
+and transport work remain separate reviewed issues #25 and #10.

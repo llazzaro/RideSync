@@ -13,7 +13,10 @@ telemetry forwarding depend on each model's verified capabilities.
 **Repository foundation only.** Firmware currently prints a serial bring-up
 message and yields to the scheduler. BLE control, wake, buttons, LEDs, GNSS,
 logging, watchdog configuration, and persistent settings are not implemented.
-No board or camera has been tested. This is not yet ride-ready firmware.
+A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
+but acquired no position fix. No RideSync firmware or camera behavior has been
+verified on hardware. See [bring-up results](docs/hardware-results/2026-10-07-bringup.md).
+This is not yet ride-ready firmware.
 
 | Feature | X5 | GO 3S | ONE RS | HERO12 Black |
 |---|---|---|---|---|
@@ -70,7 +73,9 @@ partial availability, blue reconnecting, fast red error. None is wired yet.
 ## Implementation plan
 
 The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
-contains the delivery phases, GitHub issues, dependencies and acceptance criteria:
+contains 30 focused work packages, dependencies and acceptance criteria, tracked
+in [roadmap #16](https://github.com/llazzaro/RideSync/issues/16). See the
+[issue review](docs/issue_review.md) for scope splits:
 
 1. Verify board/protocol evidence and build the shared camera abstraction.
 2. Prove single-camera X5 and HERO12 Black recording control independently.

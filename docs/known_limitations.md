@@ -1,7 +1,8 @@
 # Known limitations
 
 - Only repository bring-up firmware exists. No camera operations are implemented.
-- No hardware testing or per-model compatibility confirmation has occurred.
+- A factory-firmware probe confirmed modem identity and GNSS enable/READY, but
+  no position fix. RideSync firmware and camera compatibility are unverified.
 - The sample camera configuration is documentation, not a runtime input.
 - A shutter toggle cannot safely implement explicit REC/STOP without state.
 - BLE role, pairing, simultaneous connection capacity and per-peer delivery are
