@@ -3,11 +3,12 @@
 Independent parser checks actual Storage serialization. No vendor bytes/code or
 private locations/identifiers are reused; repository MIT license applies.
 """
+import csv
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from telemetry_parser import parse
+from telemetry_parser import COMMON, IMU, parse
 ROOT = Path(__file__).resolve().parents[1]
 
 SOURCE = r'''
@@ -65,6 +66,46 @@ int main(int argc,char **) {
 '''
 
 
+TIMESTAMP_SOURCE = r'''
+#include "telemetry_admission.h"
+#include <cassert>
+#include <cstdio>
+#include <string>
+using namespace ridesync;
+struct C : Clock { uint32_t value=0; uint32_t now() const override {return value;} };
+struct S : StorageSink {
+ std::string bytes;
+ bool mount() override {return true;} bool openExclusive(const char *) override {return true;}
+ size_t write(const char *p,size_t n) override {bytes.append(p,n);return n;}
+ bool flush() override {return true;} void close() override {}
+};
+int main(int argc,char **) {
+ S legacy_sink,mixed_sink;
+ Storage legacy(legacy_sink,{42,"timestamp-fw","synthetic"});
+ Storage mixed(mixed_sink,{42,"timestamp-fw","synthetic",2,4,StorageFormat::MixedV2});
+ C raw; SessionClock clock(raw,42,100);
+ ModemSnapshot gps;gps.session_id=42;
+ ImuEvidence imu;imu.session_id=42;
+ auto emit=[&](bool correct=false) {
+   const auto t=clock.snapshot();
+   assert(legacy.enqueue(t,gps));assert(mixed.enqueue(t,gps));assert(mixed.enqueueImu(t,imu));
+   if(correct) assert(clock.anchor({2026,1,4,0,0,0,0}));
+   for(unsigned i=0;i<100;++i) {legacy.workerStep();mixed.workerStep();}
+ };
+ emit();
+ raw.value=10;assert(clock.anchor({2026,1,1,0,0,0,0}));raw.value=20;emit();
+ raw.value=30;assert(clock.anchor({2026,1,2,0,0,0,0},true,0));emit();
+ raw.value=50;assert(clock.anchor({2026,1,3,0,0,0,0},true,123));raw.value=60;emit();
+ raw.value=150;emit();raw.value=151;emit(true);
+ legacy.requestStop();mixed.requestStop();
+ for(unsigned i=0;i<100;++i) {legacy.workerStep();mixed.workerStep();}
+ assert(legacy.health().flushed==6 && mixed.health().flushed==12);
+ const auto &bytes=argc>1?legacy_sink.bytes:mixed_sink.bytes;
+ std::fwrite(bytes.data(),1,bytes.size(),stdout);
+}
+'''
+
+
 class TelemetryDiskTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -75,6 +116,13 @@ class TelemetryDiskTest(unittest.TestCase):
                         str(path/'fixture.cpp'), str(ROOT/'src/storage.cpp'),
                         str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'),
                         '-o',str(path/'fixture')],check=True)
+        (path / 'timestamps.cpp').write_text(TIMESTAMP_SOURCE)
+        subprocess.run(['c++', '-std=c++11', '-pthread', '-I'+str(ROOT/'include'),
+                        str(path/'timestamps.cpp'), str(ROOT/'src/storage.cpp'),
+                        str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'),
+                        '-o',str(path/'timestamps')],check=True)
+        cls.timestamps = subprocess.check_output([str(path/'timestamps')],text=True)
+        cls.gps_timestamps = subprocess.check_output([str(path/'timestamps'),'gps'],text=True)
         cls.data = subprocess.check_output([str(path/'fixture')],text=True)
         cls.max_data = subprocess.check_output([str(path/'fixture'),'maximum'],text=True)
 
@@ -98,6 +146,35 @@ class TelemetryDiskTest(unittest.TestCase):
         self.assertEqual('0',rows[2]['sensor_time_ticks24'])
         self.assertEqual('000000',rows[2]['event_bytes'])
         self.assertEqual('',sample['acquisition_ms'])
+
+    def test_timestamp_variants_preserve_gps_v1_bytes_and_mixed_associations(self):
+        self.assertEqual((ROOT/'test/fixtures/telemetry/gps_v1_timestamp_variants.csv').read_text(),
+                         self.gps_timestamps)
+        rows = parse(self.timestamps)
+        self.assertEqual(['gps','imu']*6,[r['kind'] for r in rows])
+        expected = [
+            ['42','0','0','0','','','','0','','','0',''],
+            ['42','20','0','1','1','10','1767225600000','0','','10','1','1767225600010'],
+            ['42','30','0','1','2','30','1767312000000','1','0','0','1','1767312000000'],
+            ['42','60','0','1','3','50','1767398400000','1','123','10','1','1767398400010'],
+            ['42','150','0','1','3','50','1767398400000','1','123','100','1','1767398400100'],
+            ['42','151','0','2','3','50','1767398400000','1','123','101','0',''],
+        ]
+        for index, timestamp in enumerate(expected):
+            for row in rows[index*2:index*2+2]:
+                self.assertEqual(timestamp,[row[field] for field in COMMON])
+
+    def test_nonboolean_calibration_presence_is_rejected(self):
+        for flag in ('calibration_offsets_known', 'calibration_gains_known'):
+            for invalid in ('2', '-1', ''):
+                with self.subTest(flag=flag, invalid=invalid):
+                    lines = self.data.splitlines()
+                    index = next(i for i, line in enumerate(lines) if line.startswith('imu,'))
+                    fields = next(csv.reader([lines[index]]))
+                    fields[(['kind'] + COMMON + IMU).index(flag)] = invalid
+                    lines[index] = ','.join(fields)
+                    with self.assertRaisesRegex(ValueError, 'coefficient presence'):
+                        parse('\n'.join(lines) + '\n')
 
     def test_known_calibration_extremes_fit_bounded_rows(self):
         sample = parse(self.max_data)[1]

@@ -46,6 +46,8 @@ def parse(data):
                     raise ValueError('optional field presence')
             for flag, prefix, suffixes in [('calibration_offsets_known', ('accel', 'gyro'), ('offset_x','offset_y','offset_z')),
                                            ('calibration_gains_known', ('accel','gyro'), ('gain_x_numerator','gain_x_denominator','gain_y_numerator','gain_y_denominator','gain_z_numerator','gain_z_denominator'))]:
+                if row[flag] not in ('0', '1'):
+                    raise ValueError('coefficient presence')
                 for p in prefix:
                     for suffix in suffixes:
                         if bool(row[p+'_'+suffix]) != (row[flag] == '1'):

@@ -62,6 +62,21 @@ struct Csv {
     append(",");
   }
 };
+void formatTimestamp(Csv &c, const RecordTimestamp &t) {
+  c.append("%llu,%llu,%u,%u,", (unsigned long long)t.session_id, (unsigned long long)t.monotonic_ms,
+           (unsigned)t.monotonic_quality, (unsigned)t.anchor_quality);
+  if (t.anchor.sequence) {
+    c.append("%u,%llu,%lld,%u,", t.anchor.sequence, (unsigned long long)t.anchor.receipt_ms,
+             (long long)t.anchor.utc_ms, t.anchor.uncertainty_known);
+    if (t.anchor.uncertainty_known)
+      c.append("%u", t.anchor.uncertainty_ms);
+    c.append(",%llu,", (unsigned long long)t.anchor_age_ms);
+  } else
+    c.append(",,,0,,,");
+  c.append("%u,", t.has_utc_estimate);
+  if (t.has_utc_estimate)
+    c.append("%lld", (long long)t.utc_estimate_ms);
+}
 const char *header =
     "session_id,monotonic_ms,monotonic_quality,anchor_quality,anchor_sequence,anchor_receipt_ms,"
     "anchor_utc_ms,uncertainty_known,uncertainty_ms,anchor_age_ms,has_utc_estimate,utc_estimate_ms,"
@@ -220,22 +235,9 @@ bool Storage::format(const Record &r) {
   Csv c(buffer_, sizeof(buffer_));
   if (format_ == StorageFormat::MixedV2)
     c.append("gps,");
-  const auto &t = r.timestamp;
   const auto &s = r.gps;
   const auto &f = s.fix;
-  c.append("%llu,%llu,%u,%u,", (unsigned long long)t.session_id, (unsigned long long)t.monotonic_ms,
-           (unsigned)t.monotonic_quality, (unsigned)t.anchor_quality);
-  if (t.anchor.sequence) {
-    c.append("%u,%llu,%lld,%u,", t.anchor.sequence, (unsigned long long)t.anchor.receipt_ms,
-             (long long)t.anchor.utc_ms, t.anchor.uncertainty_known);
-    if (t.anchor.uncertainty_known)
-      c.append("%u", t.anchor.uncertainty_ms);
-    c.append(",%llu,", (unsigned long long)t.anchor_age_ms);
-  } else
-    c.append(",,,0,,,");
-  c.append("%u,", t.has_utc_estimate);
-  if (t.has_utc_estimate)
-    c.append("%lld", (long long)t.utc_estimate_ms);
+  formatTimestamp(c, r.timestamp);
   c.append(",%u,%u,%u,%u,%u,", (unsigned)s.state, (unsigned)s.health, s.gnss_power_enabled,
            s.receiver_ready, (unsigned)s.validity);
   if (s.age_available)
@@ -401,24 +403,11 @@ void Storage::workerStep() {
 namespace ridesync {
 bool Storage::formatImu(const Record &r) {
   Csv c(buffer_, sizeof(buffer_));
-  const auto &t = r.timestamp;
   const auto &e = r.imu;
   const auto &v = e.config;
   const char *names[] = {"gps", "imu", "config", "health", "control"};
-  c.append("%s,%llu,%llu,%u,%u,", names[static_cast<unsigned>(r.kind)],
-           (unsigned long long)t.session_id, (unsigned long long)t.monotonic_ms,
-           (unsigned)t.monotonic_quality, (unsigned)t.anchor_quality);
-  if (t.anchor.sequence) {
-    c.append("%u,%llu,%lld,%u,", t.anchor.sequence, (unsigned long long)t.anchor.receipt_ms,
-             (long long)t.anchor.utc_ms, t.anchor.uncertainty_known);
-    if (t.anchor.uncertainty_known)
-      c.append("%u", t.anchor.uncertainty_ms);
-    c.append(",%llu,", (unsigned long long)t.anchor_age_ms);
-  } else
-    c.append(",,,0,,,");
-  c.append("%u,", t.has_utc_estimate);
-  if (t.has_utc_estimate)
-    c.append("%lld", (long long)t.utc_estimate_ms);
+  c.append("%s,", names[static_cast<unsigned>(r.kind)]);
+  formatTimestamp(c, r.timestamp);
   c.append(",%u,%u,%u,%u,%u,", e.batch_sequence, e.frame_sequence, e.byte_position, e.sensor_epoch,
            e.receipt_known);
   if (e.receipt_known)

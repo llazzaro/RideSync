@@ -1,0 +1,10 @@
+#ridesync_gps,1
+#session,42,firmware,timestamp-fw,provenance,synthetic
+#policy,queue_records,8,flush_records,4,idle_flush,1,chunk_bytes,256,mount_attempts,2,write_retries,0
+session_id,monotonic_ms,monotonic_quality,anchor_quality,anchor_sequence,anchor_receipt_ms,anchor_utc_ms,uncertainty_known,uncertainty_ms,anchor_age_ms,has_utc_estimate,utc_estimate_ms,modem_state,uart_health,gnss_power,receiver_ready,fix_validity,fix_age_ms,fix_valid,latitude_deg,longitude_deg,altitude_msl_m,speed_m_s,course_deg,source_utc_date,source_utc_time,fix_receipt_ms,satellites,fix_quality,accepted,dropped,rejected,lost,written,flushed
+42,0,0,0,,,,0,,,0,,0,0,0,0,0,,0,,,,,,,,,,,1,0,0,0,0,0
+42,20,0,1,1,10,1767225600000,0,,10,1,1767225600010,0,0,0,0,0,,0,,,,,,,,,,,2,0,0,0,1,1
+42,30,0,1,2,30,1767312000000,1,0,0,1,1767312000000,0,0,0,0,0,,0,,,,,,,,,,,3,0,0,0,2,2
+42,60,0,1,3,50,1767398400000,1,123,10,1,1767398400010,0,0,0,0,0,,0,,,,,,,,,,,4,0,0,0,3,3
+42,150,0,1,3,50,1767398400000,1,123,100,1,1767398400100,0,0,0,0,0,,0,,,,,,,,,,,5,0,0,0,4,4
+42,151,0,2,3,50,1767398400000,1,123,101,0,,0,0,0,0,0,,0,,,,,,,,,,,6,0,0,0,5,5
