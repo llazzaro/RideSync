@@ -1,4 +1,5 @@
 #pragma once
+#include "button_manager.h"
 #include "camera_profile.h"
 #include <array>
 #include <cstddef>
@@ -20,6 +21,9 @@ struct SourceConfig {
   std::array<CameraConfig, kMaxCameras> cameras;
   size_t count = 0;
   size_t capacity = kMaxCameras;
+  // Validated separately by ButtonManager; camera validation retains its contract.
+  ButtonConfig button;
+  ButtonGpioConfig button_gpio;
 };
 enum class ConfigError {
   None,

@@ -79,3 +79,49 @@ See [factory bring-up](hardware-results/2026-10-07-bringup.md) for the A7670E-FA
 identity, GNSS power-on/READY and empty no-fix responses. This verifies only the
 factory-firmware probe, not the planned RideSync drivers. #1 retains remaining
 board/pin/antenna qualification work.
+
+## Button software and qualification (#8)
+
+`SourceConfig::button` supplies separately validated timing/action settings;
+`button_gpio` is disabled by default with pin -1. Camera validation remains
+independent. `ButtonManager::begin` rejects a missing callback, zero or >= 2^31 ms
+intervals, long/double intervals <= debounce, and all invalid action enums.
+Defaults are 20 ms debounce, 800 ms long, 300 ms double window; double detection
+is disabled. Actions are intents only: short RecordingIntent, long WakeReconnect,
+optional double Resync. Nothing connects these intents to cameras, wake, LEDs or
+the application yet.
+
+Poll from one scheduler context with a monotonic uint32_t millisecond clock,
+with gaps less than 2^31 ms. State is bounded, with no allocations or waits.
+Input and callback must return promptly. Calls are not thread/ISR safe; neither
+input nor callback may reenter poll/begin or mutate the manager. The caller must
+serialize access; this is a precondition, not a cross-context locking mechanism.
+A continuously released sample must persist for debounce before startup arms;
+a button held at startup never emits. Press/release durations use observed
+**debounced** transitions, so polling cadence affects detection time. Long emits
+at >= threshold, including a release at that boundary, once per hold. Without
+double detection short emits immediately on debounced release (only debounce and
+poll scheduling latency). With it enabled, short waits the double window after
+release; a second debounced press strictly before expiry reserves the gesture,
+then its short release emits double. At exact expiry the first short wins.
+A long second press supersedes the reserved first short and emits only long.
+Rollover uses unsigned elapsed subtraction.
+
+`ArduinoButtonInput` is compiled only for Arduino ESP32. Its begin requires both
+explicit enabled/board_qualified settings and a caller acknowledgement. Only
+then does it configure/read the requested input; it never writes an output.
+Silicon filtering rejects straps, flash GPIO6–11, WROVER PSRAM GPIO16/17,
+unavailable pins, serial GPIO1/3 and the vendor candidate modem/SD allocations.
+GPIO34/35/36/39 require an external pull because they have no internal pulls.
+The remaining allowed inputs are **not approved accessory assignments**:
+continuity, fitted-device conflicts (including I2C), voltage, pull resistance,
+and the actual PCB/schematic still require physical qualification.
+
+No external button wiring, pull resistor, GPIO reading or event trace has been
+bench verified for RideSync. #8 remains open. Before enabling a pin, identify the
+PCB revision, establish an electrically safe free input against its matching
+schematic/continuity, document active polarity and measured pull, then capture
+startup-held/release, bounce, short, long, double (if enabled) and repeat traces.
+Include firmware revision, timing settings and polling cadence; confirm boot
+behavior and that modem/SD/PSRAM continue working. Native fake-input tests and a
+successful target build are software evidence only.
