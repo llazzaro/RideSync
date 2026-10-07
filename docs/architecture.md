@@ -174,3 +174,57 @@ qualification; gate group mode. Prefer central-only operation only after BE80
 explicit control/state is independently validated for every participating model.
 Do not silently toggle unknown cameras or promise four-camera support. Full
 adapter/group acceptance belongs to #22, not this decision.
+
+## Pure group recording policy (#7)
+
+`RecordingManager` coordinates an already configured `CameraManager`. Its
+`request(Recording/Stopped)`, `shortPress()`, `resync()`, `cancel()`, `tick()` and
+`event()` API owns camera command admission; configure the camera registry before
+using it, cancel before replacing configuration, and route all camera events and
+ticks through this coordinator. Keep calls and optional status callbacks on the
+same execution context as CameraManager. Callbacks receive an ephemeral semantic
+snapshot and must not reenter the managers; copy any needed data into bounded UI
+storage. No GPIO, BLE, wake advertisement, LED or logging driver is included.
+
+The first short press derives Stop only when all enabled cameras are confirmed
+recording. All-stopped and mixed confirmed groups converge to Start. Unknown
+startup triggers bounded connect/query resynchronization in that same press;
+when each peer has either a confirmed query result or an explicit error, the
+usable confirmed subset selects the same rule and proceeds. Unavailable peers
+retain their errors rather than block the usable peers or silently imply success.
+If no peer yields usable state, the request ends with `UnknownState` and unknown
+group intent. A query acknowledgement without an observation is not usable state.
+This subset policy deliberately stops an all-recording reachable subset even if
+another enabled camera is unavailable; the summary preserves that partial result.
+Wake scheduling before connection is a future adapter/wake-manager concern.
+
+Once group intent exists, the next short press reverses that intent, including
+while commands remain pending. A short press during resynchronization is rejected
+with `ResyncPending`; an explicit request or cancellation can supersede it.
+Cancellation resets intent to unknown and retires operation tokens. New explicit
+requests cancel superseded peer work instead of appending it to a FIFO. Adapters
+must implement verified explicit-state Start/Stop and echo tokens captured when
+the transport accepted the operation. No vendor shutter toggle is blindly replayed.
+Connection-scoped subscriptions remain authoritative observations across command
+changes; operation-scoped responses from retired requests are rejected by the
+CameraManager connection/operation generations.
+
+Group intent, acknowledgement and observation are separate fields. Summaries
+include enabled, ready, confirmed recording/stopped, unknown, pending and error
+counts plus each peer's admission/asynchronous error and acknowledgement. Ready
+counts include verified connected peers operating a command, but exclude failed,
+connecting and retry-backoff peers. Recording counts reflect only explicit known
+observations, never write acceptance or command completion. A confirmed opposite
+state remains visible while a command is pending. A peer succeeds only after its
+command completes and a fresh known observation matches intent (query accepts
+either known state). Already-confirmed desired peers need no redundant command.
+
+Connection/command delivery deadlines and retries are delegated to CameraManager;
+after acknowledgement, a missing confirmation has a fixed 1000 ms deadline.
+Confirmation waits use rollover-safe unsigned milliseconds and require service
+at least once per 2^31 ms. No retry or indefinite wait occurs in the group layer.
+Storage is a fixed `kMaxCameras` peer array and snapshots; command admission adds
+no group queue or heap allocation. A missing peer cannot abort another peer's
+transport or confirmation. Local GPS logging remains independent. Native fake
+transports validate policy, not camera support, physical wake or mixed radio
+capacity; these remain hardware acceptance gaps.
