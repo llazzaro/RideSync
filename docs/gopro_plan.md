@@ -59,3 +59,34 @@ The camera has no internal GPS receiver according to GoPro's
 [GPMF field documentation](https://github.com/gopro/gpmf-parser/blob/main/docs/README.md).
 RideSync will record GPS externally for later alignment with footage; this does
 not imply GPS can be injected into HERO12 video metadata.
+
+## Official baseline and adapter prerequisites (2026-10-07)
+
+The official [compatibility table](https://gopro.github.io/OpenGoPro/docs/)
+lists **HERO12 Black minimum firmware v01.10.00** and notes model-specific
+features. Installed firmware is unknown; this is a documentation qualification,
+not camera verification. GoPro documents one BLE client per camera, so remove
+competing phone/remote connections during qualification.
+
+[BLE setup](https://gopro.github.io/OpenGoPro/docs/ble/protocol/ble_setup/)
+requires RideSync as central: pair once, discover services and re-subscribe on
+every reconnect (subscription caching is unsupported). Discover FEA6; command/
+response are GP-0072/0073, settings/response GP-0074/0075, query/response
+GP-0076/0077, where GP expands to `b5f9XXXX-aa8d-11e3-9046-0002a5d5c51b`.
+Poll Get Hardware Info with a deadline until BLE readiness succeeds. Retain
+bond identity, characteristic ownership and fragmented response buffers per
+camera, never globally.
+
+[Control](https://gopro.github.io/OpenGoPro/docs/ble/control/) defines Set
+Shutter 0/1 and recommends Keep Alive every three seconds. Establish video
+mode before requesting shutter on. The adapter must distinguish transport
+acceptance, command response and observed encoding. Use status 10 Encoding,
+8 Busy and 82 Ready from [Statuses](https://gopro.github.io/OpenGoPro/docs/ble/statuses/),
+with query/notification support checked on the actual firmware. Preserve unknown
+state across disconnects; do not infer stop from absent notifications. Capture
+packet fragmentation and supported commands before choosing reassembly limits.
+
+Use NimBLE-Arduino 2.3.6 with one client for HERO12 as specified in
+[ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
+Mixed CE80/GoPro role and four-link capacity are unmeasured. The official
+API/firmware minimum does not certify this stack or RideSync hardware.

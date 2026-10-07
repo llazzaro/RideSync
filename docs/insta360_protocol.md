@@ -47,3 +47,39 @@ compatibility are unresolved; absence of evidence does not mean unsupported.
 Use: Observed (captured locally), Community (reported externally), Hypothesis
 (proposed), Confirmed by testing (repeatable result with model/firmware recorded).
 At present this document contains Community and Hypothesis evidence only.
+
+## Implementation prerequisites from pinned sources
+
+The MIT ESP32 `Insta_BLE.ino` declares X3/RS 1-inch targets and creates CE80
+(write CE81, notify CE82, read CE83), plus a secondary service. This does not
+establish ONE RS generally, X5 or GO 3S support. Its `notify()` calls broadcast;
+its edited Arduino BLE files are not a required dependency for the selected
+NimBLE probe. Build the discovered service shape from captures rather than
+assuming the secondary service can be omitted.
+
+The MIT M5Stick original sends the same shutter event. The pinned fork adds
+connection-ID routing via `esp_ble_gatts_send_indicate(..., false)` and an X5
+name branch, but its recording detector accepts a sufficiently long packet
+containing a colon, then assumes stopped after five seconds without a timer.
+That is a heuristic, not an explicit start/stop codec or authoritative state.
+Missing timer traffic must become unknown in RideSync. See pinned file links in
+[sources](sources.md#ble-decision-evidence).
+
+| Path | ESP32 role / direction | Current evidence | Gate before production |
+|---|---|---|---|
+| CE80 remote | Peripheral; camera writes CE81, ESP32 notifies CE82 | MIT community examples, shutter event | Per-model pairing/subscription capture, state semantics, addressed delivery |
+| BE80 direct | Central; ESP32 writes BE81, camera notifies BE82 | Unlicensed research reference only | Independently captured GATT, authorization, framing, explicit REC/STOP and state |
+
+For X5 first, record model/firmware, address type, GATT UUID/properties, MTU,
+security/bonding, CCCD writes, CE83 reads and handshake order with timestamps.
+Capture manual start, stop, mode change, disconnect during recording, repeated
+connection and rejected requests; correlate packets with camera display and
+saved media. Preserve raw evidence and annotations separately. Do not promote a
+name match, accepted BLE write or timer heuristic into confirmed recording.
+Repeat qualification for ONE RS and GO 3S; neither inherits X5 results. Wake
+advertisements need their own serial/timing tests. No such captures exist yet.
+
+Use the pinned NimBLE transport/routing and queue ownership in
+[ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
+No code or packet implementation from the unlicensed direct-control/GPS sources
+may be copied; their reports only identify questions for independent captures.
