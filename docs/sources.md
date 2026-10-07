@@ -50,8 +50,12 @@ declares Bosch BMI270 API v2.86.1 under BSD-3-Clause. MIT labeling for the
 wrapper does not override those notices. Audit and pin the exact dependency
 tree and licenses before adding it to RideSync.
 
-Current firmware has no external library dependencies beyond the PlatformIO
-Arduino framework/toolchain. The platform and resolved framework/toolchain/build
+The raw IMU software path now pins SparkFun v1.0.3 at
+`21ea234de321da07c552f7a43cb36f7df4f73a27` in platformio.ini, preserving
+SparkFun MIT (copyright 2020 SparkFun Electronics) and bundled Bosch 2.86.1
+BSD-3-Clause notices in the unmodified dependency. No vendor implementation
+is copied into repository sources. [raw_imu.md](raw_imu.md) documents the owned
+Bosch API adapter and source-byte parser; physical activation stays disabled. The platform and resolved framework/toolchain/build
 packages are pinned explicitly in platformio.ini. Consult each installed package's own license.
 
 ## GoPro planning references

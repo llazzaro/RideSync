@@ -245,3 +245,6 @@ unknown versions; do not silently promote partial or stale data to valid fixes.
 GPS v1 includes GPS only. Opt-in [mixed telemetry v2](mixed_telemetry.md) adds
 bounded raw IMU/configuration/health/control rows through the same storage worker
 and one admission owner; no camera rows or physical sensor qualification.
+
+Raw selected BMI270 acquisition and evidence semantics: [raw_imu.md](raw_imu.md).
+The mixed v2 schema remains unchanged; acquisition timestamps stay unknown.
