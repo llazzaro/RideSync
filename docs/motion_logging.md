@@ -76,7 +76,7 @@ No exact pin assignment is approved by this research.
 ## Mounting, calibration and angle claims
 
 Mount the board rigidly to the motorcycle frame near the vehicle centerline,
-with its axes marked relative to the motorcycle: +X forward, +Y right, +Z up
+with its axes marked relative to the motorcycle: +X forward, +Y left, +Z up
 (right-handed). Document the actual PCB silkscreen-to-vehicle rotation and
 keep the sensor PCB supported without flex. Separate the sensor from engine
 heat and avoid a soft mount that changes vibration response. Verify axis sign
