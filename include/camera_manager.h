@@ -16,13 +16,26 @@ enum class CameraError {
   Cancelled,
   InvalidPolicy
 };
-enum class EventKind { Completed, RecordingObserved, Disconnected, Failed };
+// RecordingObserved/Disconnected are connection-scoped. CommandRecordingObserved,
+// Completed and Failed are operation-scoped responses.
+enum class EventKind {
+  Completed,
+  RecordingObserved,
+  CommandRecordingObserved,
+  Disconnected,
+  Failed
+};
 struct Token {
   uint32_t connection = 0;
   uint32_t operation = 0;
 };
 struct Event {
   Event(size_t p, Token t, EventKind k) : peer(p), token(t), kind(k) {}
+  // Persistent connection callbacks capture this generation at connection setup;
+  // they do not need a current operation token.
+  Event(size_t p, uint32_t connection, EventKind k) : peer(p), kind(k) {
+    token.connection = connection;
+  }
   size_t peer;
   Token token;
   EventKind kind;

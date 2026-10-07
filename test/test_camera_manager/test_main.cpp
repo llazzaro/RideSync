@@ -1,6 +1,21 @@
 #include "camera_manager.h"
+#include <cstdlib>
+#include <new>
 #include <unity.h>
 #include <vector>
+
+namespace {
+bool trackAllocations = false;
+size_t largestAllocation = 0;
+} // namespace
+void *operator new(size_t size) {
+  if (trackAllocations && size > largestAllocation)
+    largestAllocation = size;
+  if (void *memory = std::malloc(size))
+    return memory;
+  throw std::bad_alloc();
+}
+void operator delete(void *memory) noexcept { std::free(memory); }
 using namespace ridesync;
 struct FakeClock : Clock {
   uint32_t time = 0;
@@ -338,9 +353,10 @@ void disconnect_during_command_backoff_prevents_retry() {
   m.configure(config());
   connect(m, 0);
   m.request(0, Operation::Start);
+  const Token captured = t.calls.back().token;
   c.time = 10;
   m.tick();
-  Event disconnected{0, m.state(0)->token, EventKind::Disconnected};
+  Event disconnected{0, captured.connection, EventKind::Disconnected};
   TEST_ASSERT_TRUE(m.event(disconnected));
   TEST_ASSERT_EQUAL((int)Lifecycle::Idle, (int)m.state(0)->lifecycle);
   c.time = 15;
@@ -348,8 +364,132 @@ void disconnect_during_command_backoff_prevents_retry() {
   TEST_ASSERT_EQUAL(2, t.calls.size());
   TEST_ASSERT_EQUAL((int)CameraError::NotConnected, (int)m.request(0, Operation::Stop));
 }
+void captured_connection_events_survive_ready_cancel() {
+  FakeClock c;
+  FakeTransport t;
+  CameraManager m(c, t);
+  m.configure(config());
+  m.request(0, Operation::Connect);
+  const Token subscription = t.calls.back().token;
+  TEST_ASSERT_TRUE(m.event(completion(0, subscription)));
+  m.cancel(0);
+  Event observed{0, subscription.connection, EventKind::RecordingObserved};
+  observed.recording = RecordingState::Recording;
+  TEST_ASSERT_TRUE(m.event(observed));
+  TEST_ASSERT_EQUAL((int)RecordingState::Recording, (int)m.state(0)->observed);
+  Event disconnect{0, subscription.connection, EventKind::Disconnected};
+  TEST_ASSERT_TRUE(m.event(disconnect));
+  TEST_ASSERT_EQUAL((int)Lifecycle::Idle, (int)m.state(0)->lifecycle);
+}
+void captured_disconnect_during_timeout_prevents_lost_link_retry() {
+  FakeClock c;
+  FakeTransport t;
+  RetryPolicy p;
+  p.timeout_ms = 10;
+  p.backoff_ms = 5;
+  CameraManager m(c, t, p);
+  m.configure(config());
+  m.request(0, Operation::Connect);
+  const Token subscription = t.calls.back().token;
+  TEST_ASSERT_TRUE(m.event(completion(0, subscription)));
+  m.request(0, Operation::Start);
+  const Token command = t.calls.back().token;
+  c.time = 10;
+  m.tick();
+  Event observed{0, subscription.connection, EventKind::RecordingObserved};
+  observed.recording = RecordingState::Recording;
+  TEST_ASSERT_TRUE(m.event(observed));
+  TEST_ASSERT_FALSE(m.event(completion(0, command)));
+  Event disconnect{0, command.connection, EventKind::Disconnected};
+  TEST_ASSERT_TRUE(m.event(disconnect));
+  c.time = 15;
+  m.tick();
+  TEST_ASSERT_EQUAL(2, t.calls.size());
+  TEST_ASSERT_EQUAL((int)Lifecycle::Idle, (int)m.state(0)->lifecycle);
+}
+void queued_connection_events_survive_command_transition_but_not_reconnect() {
+  FakeClock c;
+  FakeTransport t;
+  CameraManager m(c, t);
+  m.configure(config());
+  m.request(0, Operation::Connect);
+  const Token subscription = t.calls.back().token;
+  TEST_ASSERT_TRUE(m.event(completion(0, subscription)));
+  m.request(0, Operation::Start);
+  const Token start = t.calls.back().token;
+  m.request(0, Operation::Stop);
+  TEST_ASSERT_TRUE(m.event(completion(0, start)));
+  Event observed{0, subscription.connection, EventKind::RecordingObserved};
+  observed.recording = RecordingState::Recording;
+  TEST_ASSERT_TRUE(m.event(observed));
+  Event disconnect{0, start.connection, EventKind::Disconnected};
+  TEST_ASSERT_TRUE(m.event(disconnect));
+  TEST_ASSERT_FALSE(m.event(completion(0, start)));
+  m.request(0, Operation::Connect);
+  const Token fresh = t.calls.back().token;
+  TEST_ASSERT_TRUE(m.event(completion(0, fresh)));
+  TEST_ASSERT_FALSE(m.event(observed));
+  TEST_ASSERT_FALSE(m.event(disconnect));
+  TEST_ASSERT_EQUAL((int)RecordingState::Unknown, (int)m.state(0)->observed);
+  TEST_ASSERT_EQUAL((int)Lifecycle::Ready, (int)m.state(0)->lifecycle);
+}
+void unused_source_slots_are_not_allocated_into_manager() {
+  FakeClock c;
+  FakeTransport t;
+  CameraManager m(c, t);
+  SourceConfig unused;
+  unused.cameras[7].name = std::string(1024 * 1024, 'x');
+  TEST_ASSERT_TRUE(validate(unused).ok());
+  largestAllocation = 0;
+  trackAllocations = true;
+  const auto result = m.configure(unused);
+  trackAllocations = false;
+  TEST_ASSERT_TRUE(result.ok());
+  TEST_ASSERT_EQUAL(0, m.size());
+  TEST_ASSERT_TRUE_MESSAGE(largestAllocation < 1024, "configure copied unvalidated unused storage");
+  unused = config();
+  unused.count = 1;
+  unused.cameras[7].identifier = std::string(1024 * 1024, 'y');
+  largestAllocation = 0;
+  trackAllocations = true;
+  const auto usedResult = m.configure(unused);
+  trackAllocations = false;
+  TEST_ASSERT_TRUE(usedResult.ok());
+  TEST_ASSERT_TRUE_MESSAGE(largestAllocation < 1024,
+                           "configure retained unused slots with a valid peer");
+  m.request(0, Operation::Connect);
+  TEST_ASSERT_EQUAL(1, t.calls.size());
+}
+void command_observations_reject_retired_operation_generations() {
+  FakeClock c;
+  FakeTransport t;
+  CameraManager m(c, t);
+  m.configure(config());
+  m.request(0, Operation::Connect);
+  const Token subscription = t.calls.back().token;
+  TEST_ASSERT_TRUE(m.event(completion(0, subscription)));
+  m.request(0, Operation::Query);
+  const Token query = t.calls.back().token;
+  Event commandObservation{0, query, EventKind::CommandRecordingObserved};
+  commandObservation.recording = RecordingState::Stopped;
+  TEST_ASSERT_TRUE(m.event(commandObservation));
+  TEST_ASSERT_EQUAL((int)RecordingState::Stopped, (int)m.state(0)->observed);
+  m.cancel(0);
+  TEST_ASSERT_FALSE(m.event(commandObservation));
+  TEST_ASSERT_FALSE(m.event(completion(0, query)));
+  Event persistent{0, subscription.connection, EventKind::RecordingObserved};
+  persistent.recording = RecordingState::Recording;
+  TEST_ASSERT_TRUE(m.event(persistent));
+  m.reset();
+  TEST_ASSERT_FALSE(m.event(persistent));
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(command_observations_reject_retired_operation_generations);
+  RUN_TEST(captured_connection_events_survive_ready_cancel);
+  RUN_TEST(captured_disconnect_during_timeout_prevents_lost_link_retry);
+  RUN_TEST(queued_connection_events_survive_command_transition_but_not_reconnect);
+  RUN_TEST(unused_source_slots_are_not_allocated_into_manager);
   RUN_TEST(cancelling_ready_link_preserves_connection);
   RUN_TEST(disconnect_during_command_backoff_prevents_retry);
   RUN_TEST(expired_callbacks_cannot_complete_operations);

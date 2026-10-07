@@ -15,6 +15,7 @@ struct CameraConfig {
   bool enabled = true;
   bool gps_telemetry = false;
 };
+// Only slots [0,count) are validated and copied by CameraManager.
 struct SourceConfig {
   std::array<CameraConfig, kMaxCameras> cameras;
   size_t count = 0;

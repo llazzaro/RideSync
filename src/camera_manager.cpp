@@ -1,5 +1,6 @@
 #include "camera_manager.h"
 #include <climits>
+#include <utility>
 namespace ridesync {
 namespace {
 // Valid when tick() runs at least once per 2^31 milliseconds.
@@ -32,8 +33,15 @@ ConfigResult CameraManager::configure(const SourceConfig &c) {
   const auto result = validate(c);
   if (!result.ok())
     return result;
+  // Unused source slots are outside validation and may contain arbitrary storage.
+  // Prepare only validated entries before retiring the current registry.
+  SourceConfig sanitized;
+  sanitized.count = c.count;
+  sanitized.capacity = c.capacity;
+  for (size_t i = 0; i < c.count; ++i)
+    sanitized.cameras[i] = c.cameras[i];
   reset();
-  config_ = c;
+  config_ = std::move(sanitized);
   for (size_t i = 0; i < config_.count; ++i)
     peers_[i].state.lifecycle = config_.cameras[i].enabled ? Lifecycle::Idle : Lifecycle::Disabled;
   return result;
@@ -172,16 +180,18 @@ bool CameraManager::event(const Event &e) {
   if (e.peer >= size())
     return false;
   auto &p = peers_[e.peer];
+  const bool connectionEvent =
+      e.kind == EventKind::Disconnected || e.kind == EventKind::RecordingObserved;
   if (e.token.connection != p.state.token.connection ||
-      e.token.operation != p.state.token.operation)
+      (!connectionEvent && e.token.operation != p.state.token.operation))
     return false;
   const auto l = p.state.lifecycle;
-  const bool backoffDisconnect = l == Lifecycle::Backoff && e.kind == EventKind::Disconnected &&
-                                 p.current != Operation::Connect;
+  const bool backoffConnectionEvent =
+      l == Lifecycle::Backoff && connectionEvent && p.current != Operation::Connect;
   if (l != Lifecycle::Connecting && l != Lifecycle::Ready && l != Lifecycle::Operating &&
-      !backoffDisconnect)
+      !backoffConnectionEvent)
     return false;
-  if (e.kind != EventKind::Disconnected && p.active && reached(clock_.now(), p.state.deadline_ms)) {
+  if (!connectionEvent && p.active && reached(clock_.now(), p.state.deadline_ms)) {
     fail(e.peer, CameraError::Timeout);
     return false;
   }
@@ -194,7 +204,8 @@ bool CameraManager::event(const Event &e) {
     p.state.lifecycle = Lifecycle::Ready;
     p.state.error = CameraError::None;
     next(e.peer);
-  } else if (e.kind == EventKind::RecordingObserved) {
+  } else if (e.kind == EventKind::RecordingObserved ||
+             e.kind == EventKind::CommandRecordingObserved) {
     if (l == Lifecycle::Connecting)
       return false;
     p.state.observed = e.recording;

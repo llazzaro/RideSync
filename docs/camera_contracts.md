@@ -26,7 +26,9 @@ Capacity is configurable from 1 to `kMaxCameras` (8), and includes disabled
 entries. Counts above capacity are rejected before any array access. This is a
 bounded software registry, not a claim of eight simultaneous hardware links.
 Configuration replacement is atomic with respect to validation: rejected input
-leaves peers and active requests intact. Accepted replacement closes old links
+leaves peers and active requests intact. Accepted replacement first prepares a
+sanitized configuration containing only validated entries `[0,count)`; unused
+slots are ignored and never copied into the manager. It then closes old links
 and resets state. There is no NVS, JSON parser, pairing store or group policy.
 
 ## Lifecycle and result rules
@@ -36,8 +38,10 @@ operation per peer. Operations are connect, request start, request stop, query
 state and optional wake. Requests return admission errors; `CameraState.error`
 records asynchronous timeout, transport or cancellation results. A successful
 `begin()` means delivery was accepted, and `Completed` means the adapter
-completed that operation; neither changes observed recording. Only a separate
-`RecordingObserved` event does. Desired recording tracks the latest admitted
+completed that operation; neither changes observed recording. Only an explicit
+recording observation does: `RecordingObserved` for a persistent subscription or
+`CommandRecordingObserved` for an operation result. Desired recording tracks the
+latest admitted
 start/stop request, independently of observed recording. A rejected request does
 not change intent. Retrying start/stop requires an adapter that implements an
 explicit state request, not a shutter toggle.
@@ -73,13 +77,23 @@ reentrancy. No event queue or BLE resource ownership is implemented here.
 
 Every attempt gets a new operation generation; connecting also advances the
 connection generation. Reset/reconfiguration advance both without recycling
-slots' counters. Adapters must echo both generations on **all** events,
-including observations, and capture the token when work/notifications originate
-rather than relabel delayed events with the latest token. The manager rejects
-previous operation/connection events before mutating state. Observation delivery
-for an older operation may be discarded even on the current connection; adapters
-should query fresh state when necessary. Generation counters are 32-bit; they
-must not wrap while callbacks from an earlier matching generation remain live.
+slots' counters. Event scope follows its kind. `Disconnected` and persistent
+`RecordingObserved` events match only the connection generation: adapters capture
+that generation during connection/subscription setup and use the connection-only
+Event constructor. Those subscriptions survive new commands, cancellation and
+command retry backoff without replacement token handshakes. A disconnect from
+the current connection cancels pending work, including a retry scheduled during
+backoff, and cannot be rejected merely because its originating operation ended.
+
+`Completed`, `Failed` and `CommandRecordingObserved` responses match both
+connection and operation generations, using the full token captured when the
+operation began. Delayed responses from a retired command are rejected even if
+the connection remains live. Connection-scoped callbacks from an old connection
+are rejected after disconnect/reconnect, reset or successful reconfiguration.
+Adapters must not relabel delayed events with current generations or report a
+command result as a subscription observation to bypass command isolation.
+Generation counters are 32-bit; they must not wrap while callbacks from an
+earlier matching generation remain live.
 
 ## Native verification
 
