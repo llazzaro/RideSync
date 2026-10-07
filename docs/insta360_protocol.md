@@ -88,9 +88,12 @@ must be measured on the selected ESP32 stack. No wake implementation exists.
 
 X5, GO 3S and ONE RS require independent profiles. GO 3S remote-service and wake
 compatibility are unresolved; absence of evidence does not mean unsupported.
-Use: Observed (captured locally), Community (reported externally), Hypothesis
-(proposed), Confirmed by testing (repeatable result with model/firmware recorded).
-At present this document contains Community and Hypothesis evidence only.
+Use: Official (vendor documentation of product behavior), Community (reported
+externally), Hypothesis (proposed), Observed (captured locally), and Confirmed
+by testing (repeatable result with model/firmware recorded). This document
+contains Official, Community and Hypothesis evidence, but no RideSync Observed
+or Confirmed-by-testing result; the GO 3S BLE control target and protocol remain
+unresolved.
 
 ## Implementation prerequisites from pinned sources
 
