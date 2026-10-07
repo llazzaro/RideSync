@@ -2,9 +2,17 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 namespace ridesync {
 namespace {
 constexpr size_t header = 24;
+// Reconstruct the same non-const value in place: no SourceConfig-sized stack
+// temporary or allocation, and defaults stay defined by SourceConfig itself.
+// The exclusive owner holds no references into this value during replacement.
+void defaultConfig(SourceConfig &config) {
+  config.~SourceConfig();
+  new (&config) SourceConfig;
+}
 static_assert(header + 2 + kMaxCameras * (3 + 64 + 17 + 17 + 5) + 24 <= kConfigRecordMax,
               "bounded record");
 uint64_t get(const uint8_t *p, unsigned n) {
@@ -101,25 +109,23 @@ bool samePayload(const ConfigRecord &a, const ConfigRecord &b) {
   return a.size == b.size && a.size >= header &&
          std::equal(a.bytes.begin() + header, a.bytes.begin() + a.size, b.bytes.begin() + header);
 }
-struct Scan {
-  PersistResult result;
-  SourceConfig config;
-  ConfigRecord canonical;
-  int winner = -1;
-  uint64_t generation = 0;
-  bool blocked = false, migration = false;
-};
-Scan scan(ConfigStore &store) {
-  Scan s;
+} // namespace
+void ConfigPersistence::scan() {
+  auto &s = scan_;
+  s.result = {};
+  defaultConfig(s.config);
+  s.winner = -1;
+  s.generation = 0;
+  s.blocked = s.migration = false;
   bool bad = false, future = false;
-  ConfigRecord r;
+  auto &r = scratch_;
   for (unsigned i = 0; i < 2; ++i) {
-    if (!store.allowed()) {
+    if (!store_.allowed()) {
       s.result = PersistStatus::Refused;
       s.blocked = true;
-      return s;
+      return;
     }
-    const auto io = store.read(i, r);
+    const auto io = store_.read(i, r);
     if (io.status == StoreStatus::Missing)
       continue;
     if (io.status == StoreStatus::Refused || io.status == StoreStatus::Error) {
@@ -127,7 +133,7 @@ Scan scan(ConfigStore &store) {
                                                     : PersistStatus::ReadError,
                   io.code};
       s.blocked = true;
-      return s;
+      return;
     }
     if (io.status == StoreStatus::Oversized) {
       bad = true;
@@ -144,19 +150,19 @@ Scan scan(ConfigStore &store) {
       bad = true;
       continue;
     }
-    ConfigRecord canonical;
-    encodeConfig(c, gen, canonical);
+    // Decoding has completed; raw bytes can now be replaced by canonical bytes.
+    encodeConfig(c, gen, r);
     if (s.winner >= 0 && gen == s.generation) {
-      if (!samePayload(canonical, s.canonical) || decoded.status != s.result.status) {
+      if (!samePayload(r, s.canonical) || decoded.status != s.result.status) {
         s.result = PersistStatus::Ambiguous;
         s.blocked = true;
-        return s;
+        return;
       }
     } else if (s.winner < 0 || gen > s.generation) {
       s.winner = int(i);
       s.generation = gen;
       s.config = std::move(c);
-      s.canonical = canonical;
+      s.canonical = r;
       s.result = decoded;
       s.migration = decoded.status == PersistStatus::Migrated;
     }
@@ -169,13 +175,12 @@ Scan scan(ConfigStore &store) {
     s.blocked = true;
   } else if (bad && s.winner >= 0)
     s.result = PersistStatus::Recovered;
-  return s;
+  return;
 }
-} // namespace
 PersistResult encodeConfig(const SourceConfig &c, uint64_t generation, ConfigRecord &r) {
   if (!generation || !settingsValid(c))
     return PersistStatus::Invalid;
-  r = {};
+  r.bytes.fill(0);
   r.size = header;
   auto number = [&](uint64_t v, unsigned n) {
     put(r.bytes.data() + r.size, v, n);
@@ -295,10 +300,14 @@ PersistResult decodeConfig(const ConfigRecord &r, SourceConfig &out, uint64_t &g
   return schema == 1 ? PersistStatus::Migrated : PersistStatus::Loaded;
 }
 PersistResult ConfigPersistence::load(SourceConfig &out) {
-  auto s = scan(store_);
+  scan();
+  auto &s = scan_;
   if (s.result.status == PersistStatus::Refused)
     pending_ = false;
-  out = s.blocked ? SourceConfig{} : std::move(s.config);
+  if (s.blocked)
+    defaultConfig(out);
+  else
+    out = std::move(s.config);
   return result_ = s.result;
 }
 PersistResult ConfigPersistence::request(const SourceConfig &c, uint32_t now) {
@@ -306,7 +315,7 @@ PersistResult ConfigPersistence::request(const SourceConfig &c, uint32_t now) {
     pending_ = false;
     return result_ = PersistStatus::Refused;
   }
-  ConfigRecord r;
+  auto &r = scratch_;
   auto v = encodeConfig(c, 1, r);
   if (v.status != PersistStatus::Encoded)
     return result_ = v;
@@ -341,7 +350,8 @@ PersistResult ConfigPersistence::service(uint32_t now) {
   const uint32_t wait = failures_ > 1 ? 10000 : 5000;
   if (uint32_t(now - requested_) < 1000 || (attempted_ && uint32_t(now - attempted_at_) < wait))
     return result_;
-  auto s = scan(store_);
+  scan();
+  auto &s = scan_;
   if (s.blocked) {
     latched_ = true;
     if (s.result.status == PersistStatus::Refused)
@@ -357,7 +367,7 @@ PersistResult ConfigPersistence::service(uint32_t now) {
     latched_ = true;
     return result_ = PersistStatus::GenerationLimit;
   }
-  ConfigRecord r = desired_;
+  auto &r = desired_;
   put(r.bytes.data() + 8, s.generation + 1, 8);
   put(r.bytes.data() + 20, crc(r), 4);
   const unsigned target = s.winner == 0 ? 1 : 0;
@@ -365,7 +375,7 @@ PersistResult ConfigPersistence::service(uint32_t now) {
   attempted_at_ = now;
   const auto io = store_.write(target, r);
   if (io.status == StoreStatus::Ok) {
-    ConfigRecord verified;
+    auto &verified = scratch_;
     const auto read =
         store_.allowed() ? store_.read(target, verified) : StoreResult{StoreStatus::Refused};
     if (store_.allowed() && read.status == StoreStatus::Ok && verified.size == r.size &&

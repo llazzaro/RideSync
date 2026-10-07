@@ -177,8 +177,29 @@ before init/deinit/erase and reestablish admission afterward. The boot snapshot
 alone is not a mutual exclusion primitive. The adapter rechecks it at each SDK
 boundary and opens/closes fresh handles per operation. A handle abandoned after
 refusal is never reused or passed to further SDK calls; reboot is not requested.
-There are no cached handles or automatic initialization attempts. The fixed stack,
-bounded string heap use and real flash latency still require device measurement.
+There are no cached handles or automatic initialization attempts. The owner is noncopyable and nonreentrant, including store callbacks. Its
+workspace is provisioned once with the owner: three 2052-byte target record
+objects (pending, winner canonical, and shared read/encode/read-back scratch),
+one 756-byte winning SourceConfig and bookkeeping; the target owner is 6992
+bytes total. Scratch lifetimes are sequential. Decoder candidates remain
+bounded stack values; their validated strings use the existing bounded heap
+path, with no additional workspace allocation during service. Empty defaults
+are reconstructed in place using SourceConfig's own defaults, eliminating a
+large overlapping temporary. Encoding clears its supplied record in place.
+
+The pinned target disassembly now measures configTask 64, service 80, scan 880
+and decodeConfig 944 bytes: 1968 bytes of simultaneously nested owner frames,
+versus the original 13024-byte defect. The configured task remains 12288 bytes.
+`scripts/check_config_stack.py` checks ELF/object frames for load/request/reset/
+retry/service, including GCC split helpers and the SDK boundary paths. A 4096-byte
+application budget includes an additional 1024-byte helper allowance; the remaining
+8192 bytes are reserved for SDK/libc/allocator/RTOS/interrupt work. This reserve is
+a conservative provisioning policy, not a complete indirect-call depth proof or
+measured high-water result. Current direct NVS API frames are 32..48 bytes; bounded
+NVS/flash functions observed in this build are at most 272 bytes individually.
+On-device high-water checks must exercise load, reset, retries, maximum records,
+GC, failures and simultaneous interrupts before stack qualification. Bounded
+string heap use and real flash latency also still require device measurement.
 Successful NVS admission never enables BLE, GPIO or another unqualified driver.
 Independently qualified GNSS/SD/IMU lifetimes remain independent of camera NVS.
 

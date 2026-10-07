@@ -54,9 +54,13 @@ public:
 };
 PersistResult encodeConfig(const SourceConfig &, uint64_t generation, ConfigRecord &);
 PersistResult decodeConfig(const ConfigRecord &, SourceConfig &, uint64_t &generation);
+// Exclusive, nonreentrant owner only. Store callbacks must not reenter any
+// method; request/load/service sequentially share fixed workspace.
 class ConfigPersistence {
 public:
   explicit ConfigPersistence(ConfigStore &store) : store_(store) {}
+  ConfigPersistence(const ConfigPersistence &) = delete;
+  ConfigPersistence &operator=(const ConfigPersistence &) = delete;
   PersistResult load(SourceConfig &);
   PersistResult request(const SourceConfig &, uint32_t now);
   PersistResult reset(uint32_t now);
@@ -66,8 +70,20 @@ public:
   PersistResult result() const { return result_; }
 
 private:
+  // Nonreentrant owner workspace, provisioned once with the owner. scan/read,
+  // canonicalization, request encoding and read-back reuse scratch_ sequentially.
+  struct Scan {
+    PersistResult result;
+    SourceConfig config;
+    ConfigRecord canonical;
+    int winner = -1;
+    uint64_t generation = 0;
+    bool blocked = false, migration = false;
+  };
+  void scan();
   ConfigStore &store_;
-  ConfigRecord desired_;
+  Scan scan_;
+  ConfigRecord scratch_, desired_;
   bool pending_ = false, latched_ = false, attempted_ = false, uncertain_ = false;
   uint32_t requested_ = 0, attempted_at_ = 0;
   unsigned failures_ = 0;
