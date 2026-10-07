@@ -57,6 +57,22 @@ motion measurements. Select the module during the IMU issue after checking
 wiring, usable ranges, timestamping, driver license and rigid mounting. Preserve
 raw samples; derived angles need a calibration and dynamic validation procedure.
 
+### Provisional IMU selection (#27)
+
+Research favors the SparkFun 6DoF BMI270 Qwiic breakout with SparkFun's
+BMI270 Arduino Library v1.0.3 over the compared Adafruit LSM6DSOX breakout:
+the BMI270 offers paired accel/gyro output, a 2 KiB FIFO with sensor-time
+support, data-ready/watermark interrupts, and an MIT-licensed wrapper exposing
+FIFO reads. Start later qualification at 200 Hz and ±16 g / ±2000 dps, with
+raw counts, configured scales and converted units retained. This is provisional
+only; no module is confirmed available or physically present. Its 3.3 V class
+interface is not 5 V tolerant. The breakout revision, actual unit pin routing,
+free interrupt/CS pins, bus electrical fit and mounting remain unverified.
+See [motion logging decision and calibration gates](motion_logging.md). Raw
+sensor counts may require direct register/FIFO parsing because the wrapper's
+documented sample struct provides converted values; verify the exact API
+before acquisition implementation.
+
 ## Observed bench evidence
 
 See [factory bring-up](hardware-results/2026-10-07-bringup.md) for the A7670E-FASE
