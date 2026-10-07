@@ -169,7 +169,9 @@ footer or guarantees about later writes. `terminal` disables admission after
 media error; `stopped` means the worker's close completed. A sink that hangs can
 leave either incomplete. `requestStop()` stops new admission, drains queued
 records, flushes cached records and closes in the worker. Quiesce the producer
-before releasing a storage object; the Arduino adapter additionally requires
+before releasing a storage object. Graceful closure rechecks the queue after
+acquiring the producer stop signal, so a final accepted enqueue cannot be skipped
+by an earlier empty-queue observation. The Arduino adapter additionally requires
 `workerFinished()` before releasing it, its sink or SPI bus.
 
 The worker has a 2048-byte serialization buffer (at most 2047 bytes plus NUL),
@@ -188,22 +190,45 @@ for recovery. No automatic format, deletion, truncation recovery or old-file reu
 ESP32 framework `3.20017.241212+sha.dcc1105b`; no additional dependency. Its
 configuration defaults disabled and requires explicit opt-in, qualified wiring/
 card/filesystem, exclusive volume ownership, output-capable CS and frequency.
-Caller supplies a dedicated already configured `SPIClass`; there are no board
-pin assignments or implicit SPI setup. `start()` only creates an 8192-byte-stack,
-priority-1 unpinned FreeRTOS task. **SD.begin (format disabled), exists, open,
-write, flush and close all execute there.** The serial firmware does not start it.
+Caller supplies a dedicated already configured `SPIClass`; the adapter assigns no
+board pins. Pinned `SDFS::begin()` calls `SPIClass::begin()` internally; its early
+return on an already initialized bus preserves the caller's configuration. This
+is why preconfiguration is required. `start()` only creates an 8192-byte-stack,
+priority-1 unpinned FreeRTOS task. **Private SDFS.begin (format disabled), POSIX
+open/write/fsync/close and SDFS.end all execute in that worker.** The serial
+firmware does not start it. The adapter constructs a private SDFS/VFS object,
+which uses SDK allocation outside the producer enqueue path.
 
-Arduino SD has no atomic exclusive-create API. The adapter checks existence and
-refuses collisions before `FILE_WRITE`; this is safe only with truthful exclusive
-volume ownership and a functioning filesystem. Other clients must never create,
-rename or write files in that volume concurrently. Corrupt media may invalidate
-filesystem guarantees. No automatic attempt to repair or format is made. Card
-mounting and every Arduino SD operation can block indefinitely: chunking bounds
+Exclusive creation uses `open(O_WRONLY | O_CREAT | O_EXCL, 0600)` against the
+private `/ridesync` VFS mount. There is no existence probe, truncating flag,
+`fopen` mode inference, fallback or creation retry. `EEXIST` and every allocation,
+path or I/O error fail closed without opening/truncating a previous log. The
+pinned ESP-IDF 4.4.7 [FAT VFS source](https://github.com/espressif/esp-idf/blob/v4.4.7/components/fatfs/vfs/vfs_fat.c)
+maps `O_CREAT | O_EXCL` to FatFs `FA_CREATE_NEW`; `fsync` calls `f_sync` and reports
+failure. This mapping was also checked in the pinned `libfatfs.a` disassembly.
+`ioError()` provides the latest reported errno (zero initially), preserving
+collision (`EEXIST`) versus allocation (`ENOMEM`) and I/O errors. SDK mount failure
+reports generic `EIO`; a busy adapter reservation reports `EBUSY`. Close errors
+are reported there too; they do not retroactively change flushed row counters.
+
+`/ridesync` is reserved for this adapter: no external user may mount or register
+that namespace. A lock-free atomic reservation serializes adapter ownership;
+other instances fail bounded mount attempts rather than adopting/releasing the
+first instance's mount. The private SDFS starts unmounted and never reuses or
+ends the application's global `SD` instance. Successful mounts are ended in the
+worker after descriptor close, before `workerFinished()` publishes completion.
+Failed SDFS initialization cleans up its own partial mount in the pinned SDK;
+the adapter releases only its own reservation. A caller can then retire the old
+SPI instance and construct a new logger on a newly qualified bus. Other clients
+must not access the same physical volume/bus concurrently. No repair, format,
+deletion or old-file reuse occurs.
+
+Mount, write, fsync, close and unmount can block indefinitely: chunking bounds
 bytes and calls, not their wall time. Dedicated SPI/volume ownership avoids shared
 control-task locks, but native tests cannot establish ESP32 scheduler fairness,
 SDK interrupt behavior or watchdog safety; measure them on the actual board.
-Arduino `File::flush()` returns void, so this backend reports completed calls and
-cannot detect silent flush/media failure. `flushed` never claims physical durability.
+Successful `fsync` detects reported FatFs sync failures but never establishes
+physical durability or detects every silent media failure.
 
 Flush occurs after configurable 1–8 complete records (default 4), on idle after
 any cached records, and during graceful stop. With worker progress and truthful

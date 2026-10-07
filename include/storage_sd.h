@@ -5,6 +5,7 @@
 #include <SPI.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <vfs_api.h>
 namespace ridesync {
 struct QualifiedSdConfig {
   bool opt_in = false, wiring_card_qualified = false, exclusive_volume = false;
@@ -13,20 +14,27 @@ struct QualifiedSdConfig {
 };
 // The caller supplies an already configured, dedicated SPI bus and qualified
 // CS/card/filesystem. No board pin defaults, SPI.begin, formatting or deletion.
-// No other SD/volume user may run while this object exists. Keep it alive until
-// workerFinished(), with the producer quiescent, before destruction.
+// /ridesync is an adapter-reserved VFS namespace. No other user may access the
+// same physical card/SPI bus or that namespace. Keep it alive until
+// workerFinished(), with the producer quiescent, before destruction. The worker
+// closes its descriptor and ends its private SDFS mount before that publication.
 class ArduinoSdStorage {
 public:
   ArduinoSdStorage(SPIClass &spi, const QualifiedSdConfig &pins, const StorageConfig &config);
   // Creates a priority-1 task; does no filesystem IO. Disabled by default.
   bool start();
   Storage &storage() { return storage_; }
+  // Latest reported failure (errno), zero initially. EEXIST is collision;
+  // allocation/IO errors remain distinct. Silent physical failure is undetectable.
+  int ioError() const { return sink_.ioError(); }
   bool workerFinished() const { return finished_.load(std::memory_order_acquire); }
 
 private:
   class Sink : public StorageSink {
   public:
-    Sink(SPIClass &spi, const QualifiedSdConfig &config) : spi_(spi), config_(config) {}
+    Sink(SPIClass &spi, const QualifiedSdConfig &config)
+        : spi_(spi), config_(config), sd_(fs::FSImplPtr(new VFSImpl())) {}
+    int ioError() const { return error_.load(std::memory_order_relaxed); }
     bool mount() override;
     bool openExclusive(const char *path) override;
     size_t write(const char *bytes, size_t length) override;
@@ -36,7 +44,11 @@ private:
   private:
     SPIClass &spi_;
     QualifiedSdConfig config_;
-    File file_;
+    fs::SDFS sd_;
+    int fd_ = -1;
+    std::atomic<int> error_{0};
+    bool reserved_ = false, mounted_ = false;
+    static std::atomic<bool> volume_reserved_;
   } sink_;
   const QualifiedSdConfig config_;
   Storage storage_;

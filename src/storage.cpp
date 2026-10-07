@@ -273,8 +273,13 @@ void Storage::workerStep() {
         writeChunk();
     } else if (cached_)
       stage_ = Stage::Flush;
-    else if (stop_.load())
-      stage_ = Stage::Close;
+    else if (stop_.load(std::memory_order_acquire)) {
+      // Stop is published by the sole producer AFTER its last enqueue. Acquire
+      // that publication before a final queue observation, never close from the
+      // earlier empty snapshot which may precede the producer's final record.
+      if (read_.load(std::memory_order_relaxed) == write_.load(std::memory_order_acquire))
+        stage_ = Stage::Close;
+    }
     break;
   }
   case Stage::Flush:

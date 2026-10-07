@@ -115,8 +115,13 @@ threshold and idle/stop flushing, and loss accounting. Condition-variable tests
 hold mount and write callbacks until the test explicitly releases them while the
 producer fills/drops from the queue and independent control work completes; no
 long sleeps stand in for scheduler evidence. Python host framework stand-ins
-exercise disabled defaults, task-deferred SD I/O, formatting disabled and refusal
-to open an existing path. ESP32 compilation verifies `storage_sd.cpp` against the
+exercise disabled defaults, task-deferred SDK/POSIX I/O, formatting disabled,
+failed existence probes against existing logs, exclusive flags and ENOMEM open
+failure, fsync failure, private-mount cleanup and replacement SPI lifetime while
+leaving an unrelated global SD mount untouched. A temporary test-only source
+copy uses a condition-variable scheduling barrier at the worker stop-load
+boundary, proving that a final enqueue after the earlier empty observation is
+written/flushed before close; shipped source has no scheduling test hooks. ESP32 compilation verifies `storage_sd.cpp` against the
 pinned framework, but it does not qualify hardware or validate blocking latency.
 
 **Not yet bench-verified; whole #11 stays open.** Record the board revision,

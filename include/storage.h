@@ -5,8 +5,8 @@
 #include <cstdint>
 namespace ridesync {
 // All calls run in ONE worker context. They may block, including mount/close.
-// Exclusive creation requires sole ownership of the volume namespace: a check
-// followed by append-open is not atomic against other filesystem users.
+// openExclusive must create a new path without truncating or opening an existing
+// log, including on allocation/probe errors. close releases owned mount state.
 class StorageSink {
 public:
   virtual ~StorageSink() = default;
