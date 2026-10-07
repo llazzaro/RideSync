@@ -27,3 +27,13 @@ and license before adding GNSS implementation sources.
 Current firmware has no external library dependencies beyond the PlatformIO
 Arduino framework/toolchain. The platform and resolved framework/toolchain/build
 packages are pinned explicitly in platformio.ini. Consult each installed package's own license.
+
+## GoPro planning references
+
+The official [Open GoPro portal](https://gopro.github.io/OpenGoPro/),
+[BLE setup](https://gopro.github.io/OpenGoPro/docs/ble/protocol/ble_setup/) and
+[control API](https://gopro.github.io/OpenGoPro/docs/ble/control/) were consulted
+on 2026-10-07 for compatibility, pairing and recording-control planning.
+[GoPro's repository](https://github.com/gopro/OpenGoPro) is a reference only;
+no code or SDK is included. GitHub's repository license metadata reports
+NOASSERTION; inspect the applicable file/package license before any reuse.

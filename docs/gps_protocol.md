@@ -25,3 +25,11 @@ Local CSV logging must continue without BLE: UTC, coordinates, optional altitude
 speed, heading, validity and satellites. Bounded buffers must prevent a missing
 or full microSD card from stalling control. Telemetry injection is opt-in per
 camera and disabled until its profile is validated.
+
+## Local ride logger scope
+
+Local GPS logging is a core project goal. An external IMU will add raw motion
+and separately validated derived acceleration/lean/pitch records. These use a
+shared session/timebase with camera events. Camera telemetry injection remains
+optional and profile-specific. HERO12 Black footage can be aligned with external
+logs; embedding the logs into camera metadata is not promised.

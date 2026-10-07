@@ -36,3 +36,24 @@ one model. Test unavailable SD, full SD, GNSS no-fix/stale fixes, and reset.
 
 Acceptance for milestone 1: repeatable single-X5 start/stop with observed state,
 bounded connect/command timeouts and honest serial status. It is not met yet.
+
+## Planned GoPro and mixed-camera validation
+
+Follow [GoPro milestone acceptance](gopro_plan.md) for each selected model and
+firmware. Test pairing persistence, video-mode selection, explicit shutter
+on/off, observed encoding state, busy responses, keep-alive, sleep versus full
+shutdown, power cycling and ESP32 reset during recording. Codec tests must cover
+notification fragmentation and malformed responses.
+
+For mixed-brand groups, test concurrent BLE roles, per-peer response routing,
+independent deadlines, one unavailable camera and measured command/recording
+skew. Continue GPS/SD logging throughout. No GoPro hardware tests have run yet.
+
+## Planned ride-logger validation
+
+GNSS and raw IMU logs must continue through camera disconnects. Test invalid or
+stale fixes, initial lack of UTC, clock corrections, missing/full/slow SD cards,
+queue overflow, power loss and absent/saturated IMU. Record loss counters and
+sensor quality. Validate linear acceleration and lean/pitch against an independent
+reference; stationary tilt alone does not validate motorcycle cornering behavior.
+See the [issue-backed plan](superpowers/plans/2026-10-07-ridesync.md).

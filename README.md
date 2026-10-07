@@ -1,9 +1,12 @@
 # RideSync
 
-An ESP32 motorcycle remote for multiple Insta360 cameras, targeting the
-**LILYGO TTGO T-A7670E R2 with A7670E built-in GPS**. The intended workflow is one handlebar button to
-wake/reconnect and start recording, then a second press to stop. Optional
-A7670E GNSS telemetry and microSD logging are later milestones.
+An ESP32 motorcycle camera remote and ride logger for **Insta360 X5, GO 3S,
+ONE RS, and GoPro HERO12 Black**, targeting the **LILYGO TTGO T-A7670E R2
+with A7670E built-in GPS**. One handlebar button is intended to wake/reconnect
+supported cameras and start recording, then stop recording on the next press.
+RideSync will also save timestamped GPS, acceleration, and estimated lean/pitch
+data to microSD. Motion measurements require an additional IMU; camera wake and
+telemetry forwarding depend on each model's verified capabilities.
 
 ## Current status
 
@@ -12,13 +15,19 @@ message and yields to the scheduler. BLE control, wake, buttons, LEDs, GNSS,
 logging, watchdog configuration, and persistent settings are not implemented.
 No board or camera has been tested. This is not yet ride-ready firmware.
 
-| Feature | X5 | GO 3S | ONE RS |
-|---|---|---|---|
-| BLE connect | Not tested | Not tested | Not tested |
-| Start recording | Not tested | Not tested | Not tested |
-| Stop recording | Not tested | Not tested | Not tested |
-| Wake | Not tested | Not tested | Not tested |
-| GPS telemetry | Not tested | Not tested | Not tested |
+| Feature | X5 | GO 3S | ONE RS | HERO12 Black |
+|---|---|---|---|---|
+| BLE connect | Not tested | Not tested | Not tested | Not tested |
+| Start recording | Not tested | Not tested | Not tested | Not tested |
+| Stop recording | Not tested | Not tested | Not tested | Not tested |
+| Wake | Not tested | Not tested | Not tested | Not tested |
+| GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
+
+GoPro HERO12 Black is the planned first GoPro target.
+BLE pairing/reconnect, start/stop and state reporting are planned using
+[Open GoPro](https://gopro.github.io/OpenGoPro/). Wake is model-dependent and
+untested. External GPS/IMU injection into GoPro is not assumed; local microSD
+ride logging remains independent. See [GoPro plan](docs/gopro_plan.md).
 
 These statuses refer to RideSync, not claims made by upstream projects.
 See [protocol research](docs/insta360_protocol.md) and
@@ -58,18 +67,21 @@ long press wakes/reconnects all configured cameras; optional double press
 resynchronizes state. Planned status: green ready, red recording, blinking amber
 partial availability, blue reconnecting, fast red error. None is wired yet.
 
-## Milestones
+## Implementation plan
 
-1. One X5: BLE integration, explicit start/stop semantics, serial status.
-2. X5 and ONE RS together, independent failures and retry timeouts.
-3. Add GO 3S using its own capability profile; verify three-camera operation.
-4. Camera-specific wake identifiers and multiple wake advertisements.
-5. A7670E GNSS acquisition and independent CSV logging to microSD.
-6. Verified Insta360 GPS telemetry encoding and transport.
-7. Waterproof button, LED backend, watchdog/recovery validation, enclosure.
+The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
+contains the delivery phases, GitHub issues, dependencies and acceptance criteria:
 
-Keep each milestone in reviewable commits. Details and acceptance tests are in
-[architecture](docs/architecture.md) and [testing](docs/testing.md).
+1. Verify board/protocol evidence and build the shared camera abstraction.
+2. Prove single-camera X5 and HERO12 Black recording control independently.
+3. Add ONE RS, GO 3S and mixed-brand group control with partial-success status.
+4. Implement debounced controls and verify per-model wake behavior.
+5. Acquire A7670E GPS and log it independently to microSD.
+6. Add an IMU, raw motion logging and validated acceleration/lean estimates.
+7. Verify optional Insta360 GPS forwarding, then complete recovery and field tests.
+
+These are planned capabilities, not current implementation results. Keep each
+issue in reviewable commits and promote support only with hardware evidence.
 
 ## Development
 

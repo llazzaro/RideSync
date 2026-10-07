@@ -20,3 +20,11 @@ The external momentary button will need a verified GPIO, pull resistor,
 debounce and appropriate environmental protection. External RGB LED wiring and
 power conditioning belong to milestone 7. Validate startup straps, peripheral
 conflicts and modem supply current before wiring accessories.
+
+## Planned motion logger hardware
+
+Acceleration and motorcycle lean/pitch logging require an external IMU with an
+accelerometer and gyroscope. The board/GNSS module alone does not provide these
+motion measurements. Select the module during the IMU issue after checking
+wiring, usable ranges, timestamping, driver license and rigid mounting. Preserve
+raw samples; derived angles need a calibration and dynamic validation procedure.
