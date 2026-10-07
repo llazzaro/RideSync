@@ -29,6 +29,7 @@ RecordingStatus RecordingManager::status() const {
     else
       ++s.unknown;
     p.pending = pending(static_cast<int>(peers_[i].stage));
+    p.terminal_failure = peers_[i].stage == Stage::Error;
     p.acknowledged = peers_[i].acknowledged;
     p.error = peers_[i].error == CameraError::None ? c.error : peers_[i].error;
     if (p.pending)

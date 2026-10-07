@@ -294,7 +294,8 @@ void phase_transitions_generation_and_gaps() {
       }
 }
 struct ClockStub : Clock {
-  uint32_t now() const override { return 0; }
+  uint32_t time = 0;
+  uint32_t now() const override { return time; }
 };
 struct TransportStub : CameraTransport {
   Token token;
@@ -396,6 +397,99 @@ void actual_group_observations_and_priority() {
   lives[0] = Lifecycle::Failed;
   TEST_ASSERT_EQUAL((int)LedState::Off, (int)selectLedState(&status, lives));
 }
+void terminal_group_failure_outweighs_recovery(bool admission_failure) {
+  ClockStub clock;
+  TransportStub transport;
+  CameraManager cameras(clock, transport);
+  RecordingManager group(cameras, clock);
+  SourceConfig config;
+  config.count = 1;
+  auto &camera = config.cameras[0];
+  camera.name = "Camera";
+  camera.family = CameraFamily::Insta360;
+  camera.model = CameraModel::X5;
+  camera.identifier = "01:23:45:67:89:A0";
+  camera.address_type = AddressType::Random;
+  TEST_ASSERT_TRUE(cameras.configure(config).ok());
+  cameras.request(0, Operation::Connect);
+  Event connected{0, transport.token, EventKind::Completed};
+  connected.capabilities.query = connected.capabilities.stop = CapabilityState::Supported;
+  connected.capabilities.start =
+      admission_failure ? CapabilityState::Unsupported : CapabilityState::Supported;
+  group.event(connected);
+  Event observation{0, transport.token.connection, EventKind::RecordingObserved};
+  observation.recording = RecordingState::Stopped;
+  group.event(observation);
+  group.request(RecordingState::Recording);
+  std::array<Lifecycle, kMaxCameras> lifecycle{};
+  if (!admission_failure) {
+    group.event(Event{0, transport.token, EventKind::Completed});
+    clock.time = 999;
+    group.tick();
+    auto pending = group.status();
+    lifecycle[0] = cameras.state(0)->lifecycle;
+    TEST_ASSERT_EQUAL(1, pending.pending);
+    TEST_ASSERT_FALSE(pending.peers[0].terminal_failure);
+    TEST_ASSERT_EQUAL((int)LedState::Partial, (int)selectLedState(&pending, lifecycle));
+    clock.time = 1000;
+    group.tick();
+  }
+  const auto failed = group.status();
+  lifecycle[0] = cameras.state(0)->lifecycle;
+  TEST_ASSERT_EQUAL((int)Lifecycle::Ready, (int)lifecycle[0]);
+  TEST_ASSERT_EQUAL(0, failed.pending);
+  TEST_ASSERT_EQUAL(1, failed.errors);
+  TEST_ASSERT_TRUE(failed.peers[0].terminal_failure);
+  TEST_ASSERT_EQUAL((int)(admission_failure ? CameraError::Unsupported : CameraError::Timeout),
+                    (int)failed.peers[0].error);
+  TEST_ASSERT_EQUAL((int)LedState::Error, (int)selectLedState(&failed, lifecycle));
+  LedHealth health;
+  health.adapter_recovery = true;
+  auto &device = health.devices[0];
+  device.enabled = device.qualified = device.current = true;
+  device.outcome = DeviceHealth::NoFix;
+  device.severity = LedSeverity::Partial;
+  TEST_ASSERT_EQUAL((int)LedState::Error, (int)selectLedState(&failed, lifecycle, health));
+  group.cancel();
+  const auto cancelled = group.status();
+  lifecycle[0] = cameras.state(0)->lifecycle;
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)cancelled.peers[0].error);
+  TEST_ASSERT_FALSE(cancelled.peers[0].terminal_failure);
+  TEST_ASSERT_EQUAL((int)LedState::Partial, (int)selectLedState(&cancelled, lifecycle));
+  TEST_ASSERT_EQUAL((int)LedState::Recovery, (int)selectLedState(&cancelled, lifecycle, health));
+}
+void actual_confirmation_deadline_outweighs_recovery() {
+  terminal_group_failure_outweighs_recovery(false);
+}
+void actual_admission_failure_outweighs_recovery() {
+  terminal_group_failure_outweighs_recovery(true);
+}
+void actual_pending_retry_remains_recovery() {
+  ClockStub clock;
+  TransportStub transport;
+  CameraManager cameras(clock, transport);
+  RecordingManager group(cameras, clock);
+  SourceConfig config;
+  config.count = 1;
+  auto &camera = config.cameras[0];
+  camera.name = "Camera";
+  camera.family = CameraFamily::Insta360;
+  camera.model = CameraModel::X5;
+  camera.identifier = "01:23:45:67:89:A0";
+  camera.address_type = AddressType::Random;
+  TEST_ASSERT_TRUE(cameras.configure(config).ok());
+  group.request(RecordingState::Recording);
+  clock.time = 1000;
+  group.tick();
+  const auto retry = group.status();
+  std::array<Lifecycle, kMaxCameras> lifecycle{};
+  lifecycle[0] = cameras.state(0)->lifecycle;
+  TEST_ASSERT_EQUAL((int)Lifecycle::Backoff, (int)lifecycle[0]);
+  TEST_ASSERT_EQUAL(1, retry.pending);
+  TEST_ASSERT_FALSE(retry.peers[0].terminal_failure);
+  TEST_ASSERT_EQUAL((int)CameraError::Timeout, (int)retry.peers[0].error);
+  TEST_ASSERT_EQUAL((int)LedState::Recovery, (int)selectLedState(&retry, lifecycle));
+}
 void availability_is_not_worker_liveness() {
   std::array<Lifecycle, kMaxCameras> lives{};
   LedHealth h;
@@ -448,6 +542,9 @@ int main() {
   RUN_TEST(all_pattern_edges_and_rollover);
   RUN_TEST(phase_transitions_generation_and_gaps);
   RUN_TEST(actual_group_observations_and_priority);
+  RUN_TEST(actual_confirmation_deadline_outweighs_recovery);
+  RUN_TEST(actual_admission_failure_outweighs_recovery);
+  RUN_TEST(actual_pending_retry_remains_recovery);
   RUN_TEST(availability_is_not_worker_liveness);
   RUN_TEST(backend_refuses_without_any_gpio);
   RUN_TEST(backend_polarities_and_failures);

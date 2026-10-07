@@ -17,7 +17,8 @@ LedState selectLedState(const RecordingStatus *group,
       const auto &peer = group->peers[i];
       if (!peer.enabled)
         continue;
-      error |= lifecycle[i] == Lifecycle::Failed && peer.error != CameraError::Cancelled;
+      error |= (peer.terminal_failure || lifecycle[i] == Lifecycle::Failed) &&
+               peer.error != CameraError::Cancelled;
       recovery |= lifecycle[i] == Lifecycle::Connecting || lifecycle[i] == Lifecycle::Backoff;
       partial |= peer.error != CameraError::None && peer.error != CameraError::Cancelled;
     }

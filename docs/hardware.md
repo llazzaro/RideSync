@@ -137,10 +137,17 @@ must not call managers recursively. The LED neither owns recording intent nor
 calls camera transports or manager commands.
 
 Error means an explicit application fault, safe mode, required-worker stall, or
-an enabled peer's terminal Failed lifecycle (ordinary Cancelled is excluded).
+an enabled peer's terminal Failed lifecycle or copied terminal group-operation
+failure (ordinary Cancelled is excluded). `RecordingPeerStatus::terminal_failure`
+publishes the group's retired error stage independently of camera lifecycle: a
+confirmation deadline or command admission failure is terminal even if the
+connection remains Ready. Active camera retry remains Recovery, and an ordinary
+pending confirmation remains Partial. Terminal group failure outranks recovery
+on another peer or an explicitly published adapter recovery signal.
 Connecting/Backoff or explicit adapter recovery selects Recovery, including
 command retry. A pending shutter or query alone selects Partial. Transient peer
-errors cannot mask recovery. A configured nonempty group with unavailable,
+errors cannot mask recovery; copied terminal group-operation failure can.
+A configured nonempty group with unavailable,
 unknown, pending, mixed, or nonterminal-error peers is Partial. Recording and
 Ready require every enabled peer ready, no pending or unknown observation, and
 all authoritative observed counts Recording or Stopped respectively. Intent and

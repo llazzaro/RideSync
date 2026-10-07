@@ -7,6 +7,8 @@ struct RecordingPeerStatus {
   bool ready = false;
   RecordingState observed = RecordingState::Unknown;
   bool pending = false;
+  // Group operation retired in error; distinct from an active camera retry.
+  bool terminal_failure = false;
   bool acknowledged = false;
   CameraError error = CameraError::None;
 };
