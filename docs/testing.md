@@ -104,3 +104,36 @@ queue overflow, power loss and absent/saturated IMU. Record loss counters and
 sensor quality. Validate linear acceleration and lean/pitch against an independent
 reference; stationary tilt alone does not validate motorcycle cornering behavior.
 See the [issue-backed plan](superpowers/plans/2026-10-07-ridesync.md).
+
+## GPS storage software and open hardware gates (#11)
+
+Run `pio test -e native -f test_storage`, then the full native suite. Tests cover
+missing/no-fix and expired UTC, immutable anchor/fix copies, retained stale fix
+and stale no-fix, unsafe metadata, invalid sessions/metrics/calendars/associations,
+queue overflow, mount retry cap, collision, zero/short writes, flush failure,
+threshold and idle/stop flushing, and loss accounting. Condition-variable tests
+hold mount and write callbacks until the test explicitly releases them while the
+producer fills/drops from the queue and independent control work completes; no
+long sleeps stand in for scheduler evidence. Python host framework stand-ins
+exercise disabled defaults, task-deferred SD I/O, formatting disabled and refusal
+to open an existing path. ESP32 compilation verifies `storage_sd.cpp` against the
+pinned framework, but it does not qualify hardware or validate blocking latency.
+
+**Not yet bench-verified; whole #11 stays open.** Record the board revision,
+qualified SPI bus/pins/CS, filesystem/card model/capacity, framework/firmware
+versions, dedicated-volume ownership, worker priority/stack high-water mark,
+producer rate and flush policy. With no cameras connected and GNSS initially
+without UTC/fix, verify flagged blank-coordinate rows; then test actual valid
+fixes, stale/no-fix transitions and anchor changes. Measure BLE/control/acquisition
+latency and watchdog behavior during missing/full/slow card and intentionally
+stalled worker conditions. Compare accepted/dropped/rejected/written/flushed/lost
+and health progress; native concurrency tests cannot prove SDK fairness.
+
+After graceful stop, reset and randomized power cuts during mount, header,
+partial row, write and flush, parse complete version-1 CSV rows with fixed column
+counts, session consistency and validity checks. Record trailing-row handling,
+observed missing rows versus the documented 12-record default software bound,
+and corruption affecting previously flushed data/directories. Preserve existing
+logs and collision fixtures; never format/delete to make a test pass. Physical
+power-loss durability and filesystem corruption remain unbounded until measured.
+Document every card/board failure rather than inferring success from compilation.

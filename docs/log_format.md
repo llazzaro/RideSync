@@ -2,13 +2,13 @@
 
 `SessionClock` is a C++11 clock/record contract for local GPS, raw IMU, derived
 motion and camera event producers. It has no camera connection dependency;
-producers can continue timestamping during camera loss. This change supplies no
+producers can continue timestamping during camera loss. The clock itself supplies no
 SD, UART, BLE, sensor driver, camera clock setting or footage importer.
 
 A record stores its complete `RecordTimestamp` by value when acquired. Raw sensor
 values and derived estimates belong in separate payload fields with their own
 validity/quality; a UTC estimate does not validate a fix or motion estimate.
-Storage/serialization is a later implementation. Serialize the named fields, not
+The GPS storage/serialization contract is specified below. Serialize the named fields, not
 C++ struct bytes (padding and enum representation are not a file format).
 
 ## Session identity and monotonic time
@@ -93,3 +93,129 @@ model: estimate uncertainty can grow with oscillator drift and age. Fresh means
 receipt-age freshness, not verified GNSS fix quality, camera-time agreement or
 frame synchronization. Actual timing accuracy requires hardware measurements;
 none are claimed here.
+
+## GPS CSV version 1 and storage ownership
+
+`Storage` writes `/gps-<16 lowercase hex session ID>.csv`. The caller supplies a
+unique nonzero session ID and immutable `RecordTimestamp` and `ModemSnapshot`
+from that same session and sampling instant (for example, `now = clock.snapshot()`
+then `modem.snapshot(now)`). A `Valid` monotonic timestamp is required; mismatched
+session IDs, contradictory anchor/age associations and malformed available
+values are rejected. Each accepted payload is copied deeply into eight fixed
+SPSC slots. One producer calls `enqueue()`/`requestStop()`; one isolated worker
+calls `workerStep()`. Do not reset a clock into a new session and keep using the
+old storage instance. No camera, IMU or camera-event dependency is present.
+
+Files begin with `#ridesync_gps,1`, session/firmware/provenance metadata and a
+flush/queue/chunk/retry policy line, then a named CSV header. Firmware and
+provenance are copied at construction: 1–48 ASCII letters, digits, underscore,
+period or hyphen; unsafe CSV/newline strings are rejected rather than escaped.
+All fields are ASCII with comma delimiters, decimal numbers and LF lines. The
+[sample CSV](example_gps.csv) is **synthetic**, not a receiver/card/ride capture.
+The current firmware entry point does not instantiate the logger or a qualified
+GNSS hardware profile and supplies no actual valid fix evidence.
+
+The header names define the serialization; no native struct bytes are persisted:
+
+| Fields | Units and validity |
+| --- | --- |
+| `session_id`, `monotonic_ms`, `monotonic_quality` | Decimal session ID, elapsed milliseconds, quality enum (0 Valid, 1 InvalidSession, 2 DurationExceeded); only Valid accepted |
+| `anchor_quality` | 0 Missing, 1 Fresh, 2 Expired |
+| `anchor_sequence`, `anchor_receipt_ms`, `anchor_utc_ms` | Copied association, local receipt milliseconds and signed POSIX UTC milliseconds; blank if missing |
+| `uncertainty_known`, `uncertainty_ms`, `anchor_age_ms` | Boolean, bound in milliseconds (blank when unknown), age in milliseconds (blank without anchor) |
+| `has_utc_estimate`, `utc_estimate_ms` | Boolean and extrapolated clock UTC milliseconds; estimate blank unless available; expired anchors stay in their own fields |
+| `modem_state` | 0 Disabled, 1 Startup, 2 Power, 3 WaitReady, 4 Poll, 5 Desynchronized, 6 Failed |
+| `uart_health` | 0 Disabled, 1 Healthy, 2 Timeout, 3 Overflow, 4 ProtocolError, 5 Exhausted, 6 InvalidClock |
+| `gnss_power`, `receiver_ready` | Boolean software observations, not independent physical measurements |
+| `fix_validity`, `fix_age_ms`, `fix_valid` | 0 Missing, 1 Valid, 2 NoFix, 3 Invalid, 4 Stale; receipt age blank when unavailable; `fix_valid` describes coordinate validity of the stored payload |
+| `latitude_deg`, `longitude_deg` | Signed degrees; blank when `fix_valid=0`; finite ranges ±90/±180 |
+| `altitude_msl_m`, `speed_m_s`, `course_deg` | Optional metres, metres/second, degrees; blank when unavailable. Admission bounds: altitude ±100000, speed 0–100000, course 0–360; these are defensive serialization bounds, not receiver accuracy claims |
+| `source_utc_date`, `source_utc_time` | Optional GNSS solution calendar, `YYYY-MM-DD` and `HH:MM:SS.cc`; blank when unavailable. Years 2000–2099, valid Gregorian dates and ordinary seconds 0–59 |
+| `fix_receipt_ms`, `satellites`, `fix_quality` | Local payload receipt milliseconds (blank without evidence), optional satellite count and documentary receiver quality code |
+| `accepted`, `dropped`, `rejected`, `lost`, `written`, `flushed` | Observational health counters sampled when formatting this row, before writing it |
+
+A retained stale payload can have `fix_valid=1` and coordinates; those coordinates
+are historical, not a current fix. A stale no-fix payload can have `fix_valid=0`.
+Only `fix_validity=Valid` and `fix_valid=1` identify a current valid coordinate
+solution. Source GNSS UTC is separately flagged calendar data generated before
+receipt; it is neither `fix_receipt_ms` nor `utc_estimate_ms`. None of these alone
+establishes measured latency, UTC precision or camera synchronization. Missing
+coordinates/optional fields are blank rather than manufactured zero readings.
+
+### Queue, counters and filesystem failures
+
+Producer work is bounded validation and copying. It does not allocate, format
+CSV, call a sink, acquire a mutex, or wait for the worker. uint32 and boolean
+atomics are compile-time required to be lock-free. Queue ownership uses release/
+acquire publication; the worker copies a slot before freeing it and holds no
+producer/control mutex across I/O. `health()` uses atomics and is suitable as the
+#15 health/progress hook: a hung sink leaves `progress` unchanged. Counters
+saturate at uint32 max and are not a coherent transaction across fields.
+
+- `accepted`: admitted into queue, not a persistence acknowledgment.
+- `dropped`: well-formed records refused because queue full, terminal or stopping.
+- `rejected`: invalid session/sample/value/metadata contract, before admission.
+- `written`: entire CSV record accepted by sink; bytes can still be cached.
+- `flushed`: entire records covered by a completed successful sink flush call.
+- `lost`: terminal failure's accepted records not covered by flush, including
+  queued, in-flight/partial and cached records; conservatively uncertain, not
+  necessarily all physically absent. A racing final producer publication is
+  included by `accepted - flushed` in terminal health. Exact accounting holds
+  until counter saturation; stop the session well before that point.
+
+Runtime health is authoritative for final losses: a failed card cannot reliably
+persist its own final failure/counter row. Row counters are snapshots, not a
+footer or guarantees about later writes. `terminal` disables admission after
+media error; `stopped` means the worker's close completed. A sink that hangs can
+leave either incomplete. `requestStop()` stops new admission, drains queued
+records, flushes cached records and closes in the worker. Quiesce the producer
+before releasing a storage object; the Arduino adapter additionally requires
+`workerFinished()` before releasing it, its sink or SPI bus.
+
+The worker has a 2048-byte serialization buffer (at most 2047 bytes plus NUL),
+256-byte write chunks, eight by-value records, and one temporary record. No core
+heap allocations. Each step does at most one mount/open/write/flush/close call;
+mount attempts are capped at 1–3 (default 2), with one attempt per step. Open,
+write and flush have no retries. **Any short/zero/oversized write result is
+terminal**, including a partial header: do not replay uncertain bytes or append
+more data to that stream. Remaining records become loss/uncertainty; close runs
+only in the worker. A new session/object and fresh unique filename are needed
+for recovery. No automatic format, deletion, truncation recovery or old-file reuse.
+
+### Opt-in Arduino SD worker and loss bounds
+
+`ArduinoSdStorage` uses the SD library bundled with the already pinned Arduino
+ESP32 framework `3.20017.241212+sha.dcc1105b`; no additional dependency. Its
+configuration defaults disabled and requires explicit opt-in, qualified wiring/
+card/filesystem, exclusive volume ownership, output-capable CS and frequency.
+Caller supplies a dedicated already configured `SPIClass`; there are no board
+pin assignments or implicit SPI setup. `start()` only creates an 8192-byte-stack,
+priority-1 unpinned FreeRTOS task. **SD.begin (format disabled), exists, open,
+write, flush and close all execute there.** The serial firmware does not start it.
+
+Arduino SD has no atomic exclusive-create API. The adapter checks existence and
+refuses collisions before `FILE_WRITE`; this is safe only with truthful exclusive
+volume ownership and a functioning filesystem. Other clients must never create,
+rename or write files in that volume concurrently. Corrupt media may invalidate
+filesystem guarantees. No automatic attempt to repair or format is made. Card
+mounting and every Arduino SD operation can block indefinitely: chunking bounds
+bytes and calls, not their wall time. Dedicated SPI/volume ownership avoids shared
+control-task locks, but native tests cannot establish ESP32 scheduler fairness,
+SDK interrupt behavior or watchdog safety; measure them on the actual board.
+Arduino `File::flush()` returns void, so this backend reports completed calls and
+cannot detect silent flush/media failure. `flushed` never claims physical durability.
+
+Flush occurs after configurable 1–8 complete records (default 4), on idle after
+any cached records, and during graceful stop. With worker progress and truthful
+sink flush behavior, the software bound on admitted records since the last flush
+is **queue capacity + flush threshold = 12 default, 16 maximum**, including the
+one in-flight row. Written-but-unflushed records are at most the threshold; a
+partially emitted row may remain. There is **no time bound** during blocked I/O.
+Drops/rejections are additional explicit pre-admission loss. Power loss may lose
+queued records, partial rows, cached bytes, metadata and even previously flushed
+sectors, or corrupt filesystem structures. No physical durability/corruption
+bound has been established. Parsers must reject incomplete trailing rows and
+unknown versions; do not silently promote partial or stale data to valid fixes.
+
+Future record families need a separately versioned payload/schema contract and
+bounded serialization; this version includes GPS only, with no IMU or camera rows.
