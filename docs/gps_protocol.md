@@ -116,7 +116,18 @@ the data line, and is retained until the command's successful terminal. It is no
 UTC, modem sampling time or terminal time. Sample the raw clock less than 2^32 ms
 apart as required by `SessionClock`; raw millis rollover is handled there. A new
 session, backwards/invalid time or exceeded clock duration invalidates acquisition.
-A new clock session requires a verified modem/receive barrier before reuse.
+A manager that sees invalid time latches InvalidClock until explicit recovery.
+After resetting SessionClock to a valid unique session, use
+`GpsManager::restartAfterVerifiedBarrier()` (rather than restarting its modem
+independently). This applies the modem's same receive-empty/profile/lifetime-cap
+guards and binds the manager to the new session only on success. Caller asserts
+that qualified physical supply/reset startup is complete and all old command
+executions and buffered/in-flight bytes are retired. Recovery deasserts an
+interrupted PWRKEY, resumes AT startup and marks the power stage Complete without
+replaying supply enable or a key pulse. Rejected recovery does not clear a latched InvalidClock; an interrupted key is
+released for safety. Old fixes and provisional data are
+cleared by the accepted modem restart. Invalid time or a session change during
+initial physical startup cannot issue an AT command before this recovery.
 
 The sequence is `AT` → successful terminal, `AT+CGNSSPWR=1` → successful terminal,
 then `+CGNSSPWR: READY!`, then serialized `AT+CGPSINFO` polling. V1.09 §24.2.1

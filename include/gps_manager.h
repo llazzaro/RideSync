@@ -19,6 +19,10 @@ public:
   GpsManager(SessionClock &clock, ModemGnss &modem, GnssPowerControl *power = nullptr,
              const QualifiedPowerTiming &timing = QualifiedPowerTiming{});
   void tick();
+  // Same verified physical/receive barrier contract as ModemGnss. Caller also
+  // asserts the qualified supply/reset sequence is complete. Does not replay
+  // supply enable/PWRKEY; deasserts an active key before restarting AT startup.
+  bool restartAfterVerifiedBarrier();
   ModemSnapshot snapshot();
   PowerStage powerStage() const { return stage_; }
 

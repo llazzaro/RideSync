@@ -288,10 +288,153 @@ void late_ready_cannot_rescue_expired_receiver_startup() {
   TEST_ASSERT_EQUAL((int)ModemState::Failed, (int)m.snapshot(timeAt(15002)).state);
   TEST_ASSERT_FALSE(m.snapshot(timeAt(15002)).receiver_ready);
 }
+QualifiedPowerTiming qualifiedTiming() {
+  QualifiedPowerTiming t;
+  t.qualified = true;
+  t.key_active_ms = 20;
+  t.settle_ms = 10;
+  return t;
+}
+void initially_invalid_manager_recovers_only_through_verified_barrier() {
+  RawClock raw;
+  SessionClock clock(raw, 0, 1000);
+  Uart u;
+  ModemGnss m(u, enabled());
+  GpsManager gps(clock, m, nullptr, qualifiedTiming());
+  gps.tick();
+  TEST_ASSERT_EQUAL((int)PowerStage::InvalidClock, (int)gps.powerStage());
+  TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+  TEST_ASSERT_TRUE(u.tx.empty());
+  TEST_ASSERT_TRUE(clock.reset(8));
+  gps.tick();
+  TEST_ASSERT_TRUE(u.tx.empty());
+  TEST_ASSERT_TRUE(gps.restartAfterVerifiedBarrier());
+  u.rx = "OK\r\n";
+  ++raw.raw;
+  gps.tick();
+  TEST_ASSERT_TRUE(u.rx.empty());
+  TEST_ASSERT_EQUAL_STRING("AT\rAT+CGNSSPWR=1\r", u.tx.c_str());
+  TEST_ASSERT_EQUAL((int)PowerStage::Complete, (int)gps.powerStage());
+  TEST_ASSERT_EQUAL_UINT64(8, gps.snapshot().session_id);
+  TEST_ASSERT_FALSE(gps.snapshot().fix.valid);
+}
+void active_power_session_reset_recovery_never_replays_key_pulse() {
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart u;
+  ModemGnss m(u, enabled());
+  Power power;
+  GpsManager gps(clock, m, &power, qualifiedTiming());
+  gps.tick();
+  TEST_ASSERT_TRUE(power.active);
+  TEST_ASSERT_EQUAL(1, power.enabled);
+  TEST_ASSERT_TRUE(clock.reset(2));
+  gps.tick();
+  TEST_ASSERT_FALSE(power.active);
+  TEST_ASSERT_EQUAL((int)PowerStage::InvalidClock, (int)gps.powerStage());
+  TEST_ASSERT_TRUE(gps.restartAfterVerifiedBarrier());
+  TEST_ASSERT_EQUAL(1, power.enabled);
+  TEST_ASSERT_FALSE(power.active);
+  u.rx = "OK\r\n";
+  raw.raw = 100;
+  gps.tick();
+  TEST_ASSERT_EQUAL_STRING("AT\rAT+CGNSSPWR=1\r", u.tx.c_str());
+  TEST_ASSERT_EQUAL(1, power.enabled);
+  TEST_ASSERT_FALSE(power.active);
+}
+void manager_recovery_preserves_barrier_rejection_and_lifetime_cap() {
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart u;
+  auto c = enabled();
+  c.max_restarts = 1;
+  ModemGnss m(u, c);
+  GpsManager gps(clock, m, nullptr, qualifiedTiming());
+  gps.tick();
+  TEST_ASSERT_TRUE(clock.reset(2));
+  gps.tick();
+  auto sent = u.tx;
+  u.rx = "OK\r\n";
+  TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+  TEST_ASSERT_EQUAL_STRING(sent.c_str(), u.tx.c_str());
+  TEST_ASSERT_EQUAL((int)PowerStage::InvalidClock, (int)gps.powerStage());
+  u.rx.clear(); // caller's physical/receive barrier; silence alone is insufficient
+  TEST_ASSERT_TRUE(gps.restartAfterVerifiedBarrier());
+  sent = u.tx;
+  TEST_ASSERT_TRUE(clock.reset(3));
+  gps.tick();
+  TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+  gps.tick();
+  TEST_ASSERT_EQUAL_STRING(sent.c_str(), u.tx.c_str());
+  TEST_ASSERT_EQUAL((int)PowerStage::InvalidClock, (int)gps.powerStage());
+}
+void manager_barrier_clears_old_fix_and_provisional_query() {
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart u;
+  ModemGnss m(u, enabled());
+  GpsManager gps(clock, m, nullptr, qualifiedTiming());
+  gps.tick();
+  for (auto response : {"OK\r\n", "OK\r\n", "+CGNSSPWR: READY!\r\n"}) {
+    u.rx = response;
+    ++raw.raw;
+    gps.tick();
+  }
+  u.rx = std::string(kManualCgpsinfo) + "\r\nOK\r\n";
+  ++raw.raw;
+  gps.tick();
+  TEST_ASSERT_TRUE(gps.snapshot().fix.valid);
+  raw.raw += 1000;
+  gps.tick();
+  u.rx = std::string(kManualCgpsinfo) + "\r\n";
+  ++raw.raw;
+  gps.tick();
+  TEST_ASSERT_TRUE(clock.reset(2));
+  gps.tick();
+  TEST_ASSERT_FALSE(gps.snapshot().fix.valid);
+  TEST_ASSERT_TRUE(gps.restartAfterVerifiedBarrier());
+  auto s = gps.snapshot();
+  TEST_ASSERT_FALSE(s.fix.valid);
+  TEST_ASSERT_FALSE(s.age_available);
+  TEST_ASSERT_EQUAL((int)FixValidity::Missing, (int)s.validity);
+  TEST_ASSERT_EQUAL_UINT64(2, s.session_id);
+  u.rx = "OK\r\n";
+  ++raw.raw;
+  gps.tick();
+  TEST_ASSERT_FALSE(gps.snapshot().fix.valid);
+  TEST_ASSERT_EQUAL((int)ModemState::Power, (int)gps.snapshot().state);
+}
+void manager_direct_barrier_releases_active_key_and_requires_qualification() {
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart u;
+  ModemGnss m(u, enabled());
+  Power power;
+  GpsManager gps(clock, m, &power, qualifiedTiming());
+  gps.tick();
+  TEST_ASSERT_TRUE(power.active);
+  TEST_ASSERT_TRUE(clock.reset(2));
+  TEST_ASSERT_TRUE(gps.restartAfterVerifiedBarrier());
+  TEST_ASSERT_FALSE(power.active);
+  TEST_ASSERT_EQUAL(1, power.enabled);
+  TEST_ASSERT_EQUAL_STRING("AT\r", u.tx.c_str());
+  TEST_ASSERT_EQUAL_UINT64(2, gps.snapshot().session_id);
+  Uart v;
+  ModemGnss n(v, enabled());
+  GpsManager unqualified(clock, n);
+  TEST_ASSERT_FALSE(unqualified.restartAfterVerifiedBarrier());
+  TEST_ASSERT_TRUE(v.tx.empty());
+  TEST_ASSERT_EQUAL((int)PowerStage::Disabled, (int)unqualified.powerStage());
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(manager_direct_barrier_releases_active_key_and_requires_qualification);
+  RUN_TEST(initially_invalid_manager_recovers_only_through_verified_barrier);
+  RUN_TEST(active_power_session_reset_recovery_never_replays_key_pulse);
+  RUN_TEST(manager_recovery_preserves_barrier_rejection_and_lifetime_cap);
+  RUN_TEST(manager_barrier_clears_old_fix_and_provisional_query);
   RUN_TEST(late_ready_cannot_rescue_expired_receiver_startup);
   RUN_TEST(reboot_urc_needs_verified_barrier_even_if_old_terminal_arrives);
   RUN_TEST(unsolicited_flood_cannot_extend_startup_forever);

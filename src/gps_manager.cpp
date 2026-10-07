@@ -10,7 +10,11 @@ void GpsManager::tick() {
     if (power_ && stage_ == PowerStage::KeyActive)
       power_->key(false);
     stage_ = PowerStage::InvalidClock;
-    modem_.tick(now);
+    // A session reset during the power sequence must invalidate the modem
+    // even when it has not yet sampled any session; never start AT here.
+    auto invalid = now;
+    invalid.monotonic_quality = MonotonicQuality::InvalidSession;
+    modem_.tick(invalid);
     return;
   }
   if (stage_ == PowerStage::InvalidClock)
@@ -39,6 +43,29 @@ void GpsManager::tick() {
     stage_ = PowerStage::Complete;
   if (stage_ == PowerStage::Complete)
     modem_.tick(now);
+}
+bool GpsManager::restartAfterVerifiedBarrier() {
+  const auto now = clock_.snapshot();
+  if (!timing_.qualified || now.monotonic_quality != MonotonicQuality::Valid ||
+      now.session_id == 0 ||
+      (power_ && (timing_.key_active_ms == 0 || timing_.settle_ms == 0 ||
+                  timing_.key_active_ms > 60000 || timing_.settle_ms > 60000)))
+    return false;
+  // Never send an AT command while our previously asserted PWRKEY is active.
+  // Even a rejected restart leaves that interrupted power pulse fail-closed.
+  if (power_ && stage_ == PowerStage::KeyActive) {
+    power_->key(false);
+    stage_ = PowerStage::InvalidClock;
+  }
+  if (!modem_.restartAfterVerifiedBarrier(now))
+    return false;
+  // The caller's barrier includes qualified physical startup. Replaying a key
+  // pulse here could power down/restart an already ready modem.
+  started_ = true;
+  session_ = now.session_id;
+  start_ms_ = now.monotonic_ms;
+  stage_ = PowerStage::Complete;
+  return true;
 }
 ModemSnapshot GpsManager::snapshot() { return modem_.snapshot(clock_.snapshot()); }
 } // namespace ridesync
