@@ -11,7 +11,11 @@
 - GoPro HERO12 Black is planned only; installed firmware needs recording. Open GoPro API
   compatibility, wake behavior and mixed BLE role capacity need validation.
   External GPS/IMU injection into GoPro is not assumed.
-- GO 3S may require a distinct protocol; no unsupported claim is made yet.
+- GO 3S/Action Pod control-link ownership, third-party pairing, services,
+  recording commands and authoritative state are unresolved. Official materials
+  document Pod remote control over Bluetooth but not a third-party GATT protocol;
+  there are no local hardware captures, and this is not an incompatibility
+  finding. See the [GO 3S evidence report](insta360_protocol.md#go-3s-and-action-pod-feasibility-6).
 - The selected A7670E has built-in GPS. Its AT command behavior still needs
   verification; parsing, camera telemetry and independent SD logging are pending.
 - An external IMU is required for motion sensing; sensor selection, calibration

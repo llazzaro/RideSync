@@ -5,6 +5,10 @@ Other license labels are metadata unless the audit notes explicitly say otherwis
 No third-party implementation or protocol documentation has been vendored.
 RideSync's MIT license does not relicense any referenced project.
 
+Official Insta360 GO 3S support pages were consulted on 2026-10-07. They describe
+pairing and product behavior, but do not publish BLE services or control frames.
+No official code or images are copied.
+
 | Source | Inspected commit | License metadata | Use |
 |---|---|---|---|
 | [pchwalek/insta360_ble_esp32](https://github.com/pchwalek/insta360_ble_esp32/tree/83d4748b68d6ee5fd4414994a9e26b7d2f21364b) | `83d4748b68d6ee5fd4414994a9e26b7d2f21364b` | MIT | Reference only; no code copied |
@@ -13,6 +17,10 @@ RideSync's MIT license does not relicense any referenced project.
 | [xaionaro-go/insta360ctl](https://github.com/xaionaro-go/insta360ctl/tree/f94193ce03c5af0921a9992bfd1af6bd946150d0) | `f94193ce03c5af0921a9992bfd1af6bd946150d0` | No license detected (do not copy) | Reference only; no code copied |
 | [TheAngryRaven/insta360-ble-gps-spec](https://github.com/TheAngryRaven/insta360-ble-gps-spec/tree/7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199) | `7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199` | No license detected (do not copy) | Reference only; no code copied |
 | [Xinyuan-LilyGO/LilyGo-Modem-Series](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/tree/e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00) | `e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00` | MIT | Reference only; no code copied |
+| [Insta360 GO Series: Action Pod Connection](https://onlinemanual.insta360.com/go3s/en-us/operating_tutorials/connect/actionpod) | Accessed 2026-10-07 | Official vendor support page; content reference only | GO 3S/Pod pairing prerequisites, control and stated Bluetooth range; no GATT protocol |
+| [Insta360: Using GO 3S and Action Pod](https://onlinemanual.insta360.com/go3s/en-us/camera/basicuse/go3s_actionpod) | Accessed 2026-10-07 | Official vendor support page; content reference only | Describes button/control behavior when docked and remote Bluetooth control when separated |
+| [Insta360 GO 3S Connection FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/connection) | Accessed 2026-10-07 | Official vendor support page; content reference only | Connection indicator, wait/reset guidance and Action Pod wake behavior |
+| [Insta360 GO 3S Firmware FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/firmware) | Accessed 2026-10-07 | Official vendor support page; content reference only | Firmware update method; firmware versions remain unobserved |
 
 The ESP32 example informs CE80 role/command research. The M5Stick fork and its
 original project are multicamera/wake comparison points; their reported device

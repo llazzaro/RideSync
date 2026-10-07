@@ -4,6 +4,50 @@ Research baseline: 2026-10-07. **No RideSync hardware observations exist.**
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
+## GO 3S and Action Pod feasibility (#6)
+
+**Finding: unresolved; no RideSync GO 3S or Action Pod is available for capture.**
+This is not evidence of incompatibility. No firmware versions, pairing state,
+advertisement, GATT database, command, notification or recording-state packet
+has been observed locally. No fixture is available; see
+[`test/fixtures/go3s/README.md`](../test/fixtures/go3s/README.md).
+
+Official Insta360 support material establishes product behavior, not the BLE
+service protocol. It says a connected Action Pod supplies live footage and
+remote shooting control; with GO 3S removed, the Pod can control and preview
+the camera over Bluetooth up to 5 m. When seated in the Pod, camera buttons are
+disabled and control is through the Pod buttons or app. Pairing guidance says
+power on both, remove the first-use rear sticker, insert the camera, and confirm
+the Pod displays live footage; incompatible firmware prompts an app update.
+The support material describes waiting 10–15 seconds for connection, cleaning
+the contacts, resetting both devices with a seven-second button hold after
+failure. The firmware FAQ describes updating the camera; this investigation
+requires recording camera and Pod firmware independently, though no Pod version
+was available to inspect here.
+See [Action Pod connection](https://onlinemanual.insta360.com/go3s/en-us/operating_tutorials/connect/actionpod),
+[using GO 3S and Action Pod](https://onlinemanual.insta360.com/go3s/en-us/camera/basicuse/go3s_actionpod),
+[connection FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/connection),
+and [firmware guidance](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/firmware).
+
+These sources do **not** identify which unit advertises or accepts a third-party
+BLE connection, publish GATT UUIDs, pairing/bonding requirements for such a
+controller, or map recording transitions to bytes. A Bluetooth control/preview
+link between camera and Pod is documented; whether an ESP32 can control the
+camera as a BLE peer, whether the Pod is the control target, and whether either
+unit exposes CE80/BE80 are **unknown**. Camera/Pod owner, address identity and
+firmware-specific behavior must be captured. Nothing in the X5 community
+CE80/BE80 reports can be transferred to GO 3S.
+
+**Operation evidence:** no GO 3S start, stop, toggle, mode-selection or
+authoritative state operation is currently evidenced for RideSync. The
+community shutter frame elsewhere in this document remains a reported toggle
+for another target, not a GO 3S command. A UI change, BLE write accepted by a
+stack, elapsed-time heuristic or file appearing later is insufficient alone to
+claim a command/state mapping. Require repeatable packet correlation with the
+camera/Pod recording indicator and saved media; classify each operation and
+firmware combination independently. The recording procedure and exact gaps are
+in [validation](testing.md#go-3s-and-action-pod-evidence-protocol).
+
 ## Separate BLE roles
 
 Community [ESP32 example](https://github.com/pchwalek/insta360_ble_esp32)
