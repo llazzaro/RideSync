@@ -5,10 +5,29 @@ commands. No external GPS module is planned. No GNSS parser, AT driver, SD
 logger or GPS BLE encoder is implemented.
 
 LILYGO's [modem examples](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series)
-are the starting point for identifying the modem and its GNSS variant. Capture
-modem identification/firmware, consult its exact SIMCom AT manual, then verify
-GNSS power/fix commands and response fields. Do not infer command support or
+are the starting point for identifying the modem and its GNSS variant. The
+factory probe recorded `A7670E-FASE`, ATI revision `A7670M7_V1.11.1` and CGMR
+`A110B01A7670M7_F` on the preinstalled 2022-11-21 AT firmware. The closest
+date-matched manual located is the SIMCom-authored [A76XX Series AT Command
+Manual V1.09](https://files.waveshare.com/wiki/A7670E-Cat-1-GNSS-HAT/A76XX_Series_AT_Command_Manual_V1.09.pdf),
+hosted by Waveshare; its revision history ends in 2023. V1.09 is a working
+documentary reference, not confirmation that it is the exact manual supplied
+for this firmware. SIMCom now lists V2.03 in its [technical-document
+index](https://cn.simcom.com/technical_files-p2.html?filetype=0&pro_cat=0&pro_li=83&time=0).
+Retain the manual version with every command test and recheck against the module
+variant and firmware before implementation. Do not infer command support or
 speed/altitude units from another A76xx model.
+
+In V1.09, `AT+CGNSSPWR=1` returns `OK` on acceptance and may later emit
+`+CGNSSPWR: READY!`; the manual says the position queries are valid after READY.
+This probe observed acceptance and READY, then empty `AT+CGNSSINFO` and
+`AT+CGPSINFO` fields, so it confirms enabled/ready with **no fix observed**.
+It ran without a SIM, which establishes only that this startup path did not
+require an inserted SIM. A valid fix, actual antenna hookup, and outdoor sky-view
+test remain unverified. The manual specifies CGPSINFO latitude/longitude as
+degrees-and-minutes, altitude in metres, speed in knots and course in degrees;
+these are manual definitions, not fields validated against a real fix on this
+unit. Keep unit conversion out of the parser until a valid sample is captured.
 
 Proposed normalized fix: validity, latitude/longitude in degrees, altitude in
 metres when available, speed in metres/second, heading in degrees, UTC timestamp,
