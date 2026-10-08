@@ -41,7 +41,7 @@ partial GC erases remain enabled. Sequential partial erases, raw flash APIs,
 bootloader/provisioning/upload paths and same-object/internal future SDK calls
 can bypass the guard. Encryption/key partitions are not qualified. SDK/compiler/
 LTO changes require new archive and final-ELF proof. Settings/bond persistence,
-reboot and power-failure acceptance remain physical gates in #18/#31.
+reboot and power-failure acceptance remain physical gates in #22/#31.
 
 ## Settings formats and storage ownership
 
@@ -313,7 +313,7 @@ expand 816, and canonical-copy wrapper 32 plus split helper 1056. The enhanced
 stack checker includes these actual nested owner paths and still reserves 8192
 bytes for SDK/RTOS/interrupt work within the 12288-byte task. Runtime high-water,
 heap fragmentation, flash latency, capacity/timing and physical power-loss
-behavior remain unmeasured and retain their existing hardware gates (#18/#22/#31).
+behavior remain unmeasured and retain their physical hardware gates (#22/#31).
 
 Native behavior tests cover the bootstrap barrier, bounded copies/refusal,
 publication pressure, stale epochs/generations, concurrent owned-copy lifetime,
@@ -400,7 +400,7 @@ bytes later in the same boot. Any failed/uncertain marker transaction admits NO
 host deletion. An admitted write may finish after cancellation and retain durable
 denial; no late host submission follows. Current-boot unrelated peers remain
 admitted. Settings reset cannot clear the marker. Physical power-cut durability,
-flash latency and installed-device stack high-water still require #18 evidence.
+flash latency and installed-device stack high-water still require #22/#31 evidence.
 This explicit API is not activated by default firmware.
 
 The host installs a capacity-refusal callback and never invokes NimBLE's default
@@ -410,8 +410,8 @@ compile-time guards require requalification before those macros change. Four
 central peers are admitted; these settings do not prove physical capacity.
 See [BLE transport](ble_transport.md) and [source evidence](sources.md).
 
-Issue #18 remains OPEN pending installed-firmware reboot/migration/power-failure
-recovery, actual bond restoration and scoped reset, capacity measurements,
-watchdog/task-memory/latency qualification, and observed absence of recording
-command replay. Host fault injection and pinned ESP32 compilation are software
-evidence only. No physical camera or radio was used for this change.
+Issue #18 covers settings persistence and explicit authorized reset software,
+reusing #43/#44. Installed-firmware reboot/power-failure recovery, actual bond
+restoration/scoped reset and physical capacity/watchdog/task-memory/latency checks
+are owned by #22/#31. Host fault injection and pinned ESP32 compilation are
+software evidence only. No physical camera/bond qualification is claimed.

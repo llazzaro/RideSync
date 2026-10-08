@@ -188,8 +188,12 @@ prechecks, one writer and bounded writes without flush or busy waits. Callbacks
 must return promptly; tick cadence must satisfy the qualified physical pulse
 upper bounds. These adapters compile but have not been operated on hardware.
 
-Physical #10 acceptance remains **open / Not tested**: verify board routing and
+Physical qualification belongs to #30/#31 and remains **Not tested**: verify board routing and
 power/boot timing, exact firmware/manual/terminal semantics, antenna handling,
 RideSync startup/READY, outdoor cold-start fix/no-fix duration, field units,
 stale-data behavior and power/recovery with annotated sanitized bench captures.
 The factory probe and fake-UART tests do not qualify these physical behaviors.
+
+The opt-in production-driver diagnostic in `tools/bench/gnss_driver/` is
+prepared and compiled, with host fault-injection coverage. It has not been run
+on the fitted board and does not supply physical qualification evidence.

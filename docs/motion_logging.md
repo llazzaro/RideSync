@@ -5,14 +5,18 @@ in hand, purchased, wired, or tested on the RideSync unit.
 
 ## Decision
 
-Provisional candidate: SparkFun 6DoF BMI270 Qwiic breakout, using the Bosch
-BMI270 sensor API through SparkFun BMI270 Arduino Library v1.0.3. It combines
+Provisional candidate: the **standard SparkFun 6DoF BMI270 Qwiic breakout**
+(not the Micro form factor), as distinguished in SparkFun's [hardware overview](https://docs.sparkfun.com/SparkFun_Qwiic_6DoF_BMI270/hardware_overview/),
+using the Bosch BMI270 sensor API through SparkFun BMI270 Arduino Library
+v1.0.3. This names a preferred form factor only; the fitted board and exact PCB
+revision remain unknown, as do availability, schematic fit and pin access. It
+combines
 raw tri-axis acceleration and angular-rate measurements, programmable ranges,
 a sensor FIFO and interrupt support. SparkFun's wrapper exposes FIFO setup,
 watermark and read functions; the driver is MIT-licensed. This is enough to
 select a candidate for later physical qualification, not to authorize purchase
-or integration. The exact breakout (standard or Micro), board revision,
-availability, breakout schematic fit and pin access are unresolved.
+or integration. The exact fitted breakout, board revision, availability,
+breakout schematic fit and pin access are unresolved.
 
 One comparison was retained: Adafruit LSM6DSOX breakout and Adafruit_LSM6DS
 library. ST specifies 208 Hz batch rate, FIFO watermark/overrun interrupts and
@@ -22,9 +26,20 @@ individual sensor events and its driver path was not assessed for RideSync's
 FIFO/raw-frame needs. No third candidate adds enough evidence to justify the
 extra comparison.
 
+GitHub repository metadata checked 2026-10-08 shows both upstreams are
+unarchived. The [SparkFun repository](https://github.com/sparkfun/SparkFun_BMI270_Arduino_Library)
+latest commit/release was `21ea234` / v1.0.3 on 2024-06-26; the [Adafruit
+repository](https://github.com/adafruit/Adafruit_LSM6DS) latest commit/release
+was `379a520` / 4.7.4 on 2024-12-03. These dates are activity observations, not
+a support guarantee; neither was recently updated at the time checked, and the
+Adafruit repo is more recent by this limited indicator. Maintenance evidence
+therefore does not favor BMI270; its provisional selection remains based on the
+documented FIFO/raw timing fit. Recheck upstream status and notices before a
+later dependency update.
+
 | Candidate | Evidence relevant to RideSync | Decision |
 |---|---|---|
-| SparkFun 6DoF BMI270 Qwiic (standard or Micro) | BMI270: 16-bit accel and gyro; accel ±2/4/8/16 g, gyro ±125…2000 dps; ODR covers 200 Hz; 2 KiB FIFO with sensor-time support; data-ready and watermark interrupts. Breakout has I²C/SPI pins and interrupt pin(s), on-board I²C pull-ups, selectable address/SPI strap, 1.71–3.6 V sensor supply. SparkFun wrapper v1.0.3 exposes FIFO reads/configuration and reports converted g, dps and sensor time. | Preferred provisional module/driver pair. FIFO API and sensor time are a useful fit for buffered local logging. |
+| SparkFun 6DoF BMI270 Qwiic (standard form factor; PCB revision unverified) | BMI270: 16-bit accel and gyro; accel ±2/4/8/16 g, gyro ±125…2000 dps; ODR covers 200 Hz; 2 KiB FIFO with sensor-time support; data-ready and watermark interrupts. Breakout has I²C/SPI pins and interrupt pin(s), on-board I²C pull-ups, selectable address/SPI strap, 1.71–3.6 V sensor supply. SparkFun wrapper v1.0.3 exposes FIFO reads/configuration and reports converted g, dps and sensor time. | Preferred provisional module/driver pair. FIFO API and sensor time are a useful fit for buffered local logging. |
 | Adafruit LSM6DSOX breakout | ST sensor supports 208 Hz ODR/batch, ±2/4/8/16 g and ±125/250/500/1000/2000 dps, programmable FIFO and interrupts. Adafruit breakout presents 3–5 V power/logic through regulator/level shifting; Adafruit driver is BSD. | Credible fallback, but review actual FIFO support and its treatment of sample timing before selecting it for raw logging. |
 
 The breakout is a module, not the bare sensor. BMI270 bare-sensor VDD is
@@ -52,12 +67,13 @@ Use data-ready/FIFO watermark interrupt to wake the collector, drain complete
 frames, and retain the BMI270 sensor-time value or reconstruct per-frame sensor
 time from FIFO timing metadata. Timestamp FIFO-drain and SD-write boundaries
 with the ESP32 monotonic clock as separate host-side timing evidence. Proposed
-first bench acceptance budget: over a 10-minute 200 Hz run, account for all
+optional measurement example for a declared #31 campaign: over a 10-minute 200 Hz run, account for all
 120,000 expected paired samples, record zero FIFO overruns or unexplained
 sequence gaps, and keep the 99th-percentile data-ready-to-buffered-record delay
 below 10 ms. Measure actual inter-sample timing from sensor timestamps; report
 sensor-time quantization and host scheduling jitter separately. These limits
-are qualification targets to test, not demonstrated performance.
+are unmeasured planning targets, not software closure criteria or an additional
+mandatory campaign. #31 fixes the actual finite campaign before execution.
 
 The BMI270 FIFO is 2 KiB (Bosch notes a larger 6 KiB mode in an application
 note); do not assume the larger mode without checking its separate setup
@@ -72,6 +88,28 @@ checked; the BMI270 default 0x68 can be changed to 0x69. For SPI, the IMU needs
 a free CS and accessible SCK/MISO/MOSI plus interrupt GPIO; do not share the SD
 CS or presume any header pin is free. GPIO2 and GPIO15 are ESP32 strapping pins.
 No exact pin assignment is approved by this research.
+
+Expected resource costs are estimates from the inspected source/interface, not
+measurements. In the pinned Bosch BMI270 source, the configuration image is an
+8 KiB `const` array in the firmware image and initialization uploads it through
+32-byte callbacks. That implies roughly 256 32-byte transfer chunks in the
+configuration phase, before register setup and readback; this is a callback
+chunk size, not a measured transfer time or a separate staging allocation. The
+2 KiB sensor FIFO is additional on-device storage. The selected logger path later budgets
+112 bytes of FIFO input, 968 bytes for a publication batch, 240 bytes of copied
+base evidence and an 8192-byte worker stack capacity; the stack number is a
+chosen capacity, not measured use ([raw IMU path](raw_imu.md#profile-fifo-and-evidence)).
+
+For the LSM6DSOX alternative, the inspected comparison sources document 208 Hz
+batching, FIFO/watermark operation, programmable ranges and the Adafruit driver
+interface, but this baseline gives no comparable FIFO capacity, firmware-image
+size, initialization transfer size, or RideSync buffer/stack estimate. Its
+expected firmware-transfer and RAM cost are therefore **unquantified**, not
+assumed to be zero or lower. The BMI270 has a known 8 KiB configuration-image
+cost and documented 2 KiB FIFO; these facts support a bounded estimate but do
+not predict boot time, final linked image growth, runtime peak RAM, or sampling
+performance. Those remain unmeasured and belong to later implementation and
+qualification.
 
 ## Mounting, calibration and angle claims
 

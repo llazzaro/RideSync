@@ -369,8 +369,8 @@ main does not invoke them. The pre-build patch must verify both freshly installe
 and cached sources, fail on drift and run before vendor object compilation. The
 source SHA pair and public APIs are documented in [sources.md](sources.md).
 Neither build activates BLE, flashes firmware, proves pairing/restore/capacity
-or measures SDK lock/NVS/init/teardown latency. Physical #17/#18/#4/#22 acceptance
-remains OPEN; qualification procedure and lifetime limits are in
+or measures SDK lock/NVS/init/teardown latency. Physical acceptance is owned by
+#22/#31 and remains OPEN; qualification procedure and lifetime limits are in
 [ble_transport.md](ble_transport.md).
 
 ## Camera event software checks (#37)

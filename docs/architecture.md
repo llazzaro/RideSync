@@ -87,9 +87,9 @@ original brief's milestone ordering while preserving single-X5-first delivery.
 **Decision: provisional, source-backed; hardware qualification unresolved.**
 Use `h2zero/NimBLE-Arduino@2.3.6`, upstream commit
 `dfb4ac561a06797081be9e752902a6582e7f029e`, with the existing
-`espressif32@6.12.0` / Arduino ESP32 2.0.17 package pins. Add the dependency only
-when the probe/adapter work starts; this documentation decision does not modify
-`platformio.ini`. Use one NimBLE host, with both central and peripheral roles.
+`espressif32@6.12.0` / Arduino ESP32 2.0.17 package pins. The dependency is now
+pinned in `platformio.ini`, with retained compile checks for the shared host and
+HERO12 adapter. Use one NimBLE host, with both central and peripheral roles.
 CE80 peripheral emulation is the first X5 experiment; HERO12 uses a central
 client. ONE RS and GO 3S remain separately qualified CE80 candidates. BE80 direct
 control is a later, capture-gated alternative for each Insta360 model.
@@ -119,12 +119,13 @@ Maintain configured identity plus a connection generation, because handles can
 be reused after disconnect. Revalidate before sending any queued command.
 
 The library defaults to **3 total simultaneous connections**, insufficient for
-three Insta360 cameras plus HERO12. The next probe should explicitly set
-`-DCONFIG_BT_NIMBLE_MAX_CONNECTIONS=4`. The upstream config comment gives an
+three Insta360 cameras plus HERO12. The production compile configuration sets
+`-DCONFIG_BT_NIMBLE_MAX_CONNECTIONS=5`: four admitted peers plus one reserved
+slot for explicit maintenance. The isolated CE80 capture probe uses one link. The upstream config comment gives an
 ESP controller ceiling of 9, not a measured RideSync budget. Client object slots
 and host/controller configuration use the connection macro; roles do not have
 independent four-link budgets. No usable mixed-role connection count is yet
-measured. No spare fifth connection is reserved for pairing/diagnostics.
+measured. The configured fifth slot is not evidence of a measured fifth link.
 
 ### Concurrency and bounded memory decision
 
@@ -149,13 +150,14 @@ upstream RAM-saving marketing as a RideSync memory result.
 
 ### Required bounded probe and fallback
 
-Run a ten-minute test on the qualified board, with three subscribed CE80 camera
-centrals and one HERO12 peripheral: uniquely tag notifications for each CE80
-peer, prove only the selected peer receives each, exercise central responses,
-advertise/reconnect while links remain active, and collect connection parameters,
-heap/queue counters and failures. Repeat with a peer missing and after reset.
-The first X5 run must retain GATT, handshake, firmware and command/state captures;
-record installed HERO12 firmware against its official minimum v01.10.00.
+#22 owns the finite staged single-X5, X5+ONE RS, three-Insta360 and four-target
+camera matrix. At each added connection, check addressed routing, active-link
+advertising/reconnect and per-peer response identity, retaining parameters,
+heap/queue counters and failures. Reuse component evidence rather than requiring
+another universal ten-minute prerequisite for this provisional decision.
+The X5 smoke run records firmware and command/state observations; installed
+HERO12 firmware/API compatibility remains an independent #22 observation.
+#31 owns integrated missing-peer/reset and control-progress checks.
 
 A local compile-only probe on 2026-10-07 passed with the existing package pins,
 NimBLE 2.3.6, both role flags asserted and connection macro set to 4. It compiled
@@ -165,10 +167,12 @@ callbacks and central notification subscription/client routing. Linker size was
 and production SD/GNSS work and do not establish memory headroom. Probe source,
 command/log and hashes are retained in the issue #17 investigation report.
 
-No live camera availability has been confirmed. Therefore X5 captures, HERO12
-installed-firmware verification, over-air routing, role coexistence and memory/
-connection budget are unresolved hardware gaps. A compile probe can prove only
-API/build compatibility. Issue #17 remains partial until these measurements.
+The [X5-associated BE80 discovery and CE80 advertising trial](hardware-results/2026-10-08-x5-discovery.md)
+now provide limited live observations. CE80 camera pairing, installed HERO12
+firmware, over-air routing, mixed-role coexistence and measured memory/connection
+capacity remain unresolved. #17 closes the provisional source/stack decision;
+#22/#31 own those physical checks. Compile success and advertising visibility
+do not establish recording control.
 If mixed roles fail, keep single-X5 CE80 qualification and separate single-GoPro
 qualification; gate group mode. Prefer central-only operation only after BE80
 explicit control/state is independently validated for every participating model.

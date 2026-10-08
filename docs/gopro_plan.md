@@ -261,7 +261,8 @@ manual shutdown, USB, and battery condition. The generic Open GoPro FAQ's
 multi-link ceiling does not prove simultaneous HERO12 control; claim refusal
 is a failed recovery, never proof that a specific competing client caused it.
 
-Physical acceptance for #24 remains **OPEN / Not tested**. Record the actual
+Physical recovery qualification belongs to #22 and remains **Not tested**;
+integrated reset checks belong to #31. Record the actual
 model, installed firmware/API, pairing and verified identity, wireless and Auto
 Power Down settings, power source, battery level, and competing phone/remote
 state. For awake, deliberate Sleep, idle auto-sleep before and after the

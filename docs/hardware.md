@@ -41,9 +41,9 @@ Bring-up: attach USB, enumerate the serial port, build/upload and follow the
 [macOS serial connection procedure](device_connection.md) before opening a
 115200-baud monitor. Record any startup message. This unit's factory AT firmware restarted
 on serial open; wait for its startup output to settle and require `AT` → `OK`
-before issuing other commands. The baseline contains no elapsed-time measurement,
-so a numeric command-ready deadline is still unqualified and must be measured
-before firmware relies on one. Record board revision and modem firmware. Test on
+before issuing other commands. Use a finite configurable startup timeout as
+policy. Existing observations do not establish a guaranteed worst-case physical
+command-ready deadline. Record board revision and modem firmware. Test on
 a bench before mounting on a motorcycle.
 
 The external momentary button will need a verified GPIO, pull resistor,
@@ -79,8 +79,9 @@ before acquisition implementation.
 
 See [factory bring-up](hardware-results/2026-10-07-bringup.md) for the A7670E-FASE
 identity, GNSS power-on/READY and empty no-fix responses. This verifies only the
-factory-firmware probe, not the planned RideSync drivers. #1 retains remaining
-board/pin/antenna qualification work.
+factory-firmware probe, not the production RideSync driver path. #1 documents
+this fitted-board baseline and its unknowns; physical pin/antenna/electrical
+qualification is retained in #30/#31.
 
 The [October 8 reconnect investigation](hardware-results/2026-10-08-reconnect.md)
 initially reproduced USB communication and factory ESP32 boot without modem
@@ -145,7 +146,8 @@ continuity, fitted-device conflicts (including I2C), voltage, pull resistance,
 and the actual PCB/schematic still require physical qualification.
 
 No external button wiring, pull resistor, GPIO reading or event trace has been
-bench verified for RideSync. #8 remains open. Before enabling a pin, identify the
+bench verified for RideSync. #8 covers the implemented software; #30/#31 own
+physical wiring and gesture checks. Before enabling a pin, identify the
 PCB revision, establish an electrically safe free input against its matching
 schematic/continuity, document active polarity and measured pull, then capture
 startup-held/release, bounce, short, long, double (if enabled) and repeat traces.
@@ -251,7 +253,8 @@ glitch-free boot are not guaranteed by this software. Backend faults never alter
 recording state, worker progress, recovery metadata or watchdog feed policy.
 
 No onboard LED or external RGB module, pin, polarity, current, resistor value or
-power source is physically qualified. #23 stays open for bench acceptance.
+power source is physically qualified. #23 covers the software backend; physical
+pattern/current checks remain in #30/#31.
 Before opt-in, record exact PCB revision/matching schematic, LED type and common
 anode/cathode, each channel's series resistor, voltage/current and any required
 driver, power source, routing and active polarity. Verify no modem/SD/IMU/button/

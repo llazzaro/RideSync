@@ -35,7 +35,10 @@ not show a paired remote; no manual recording/stopped-state annotation was
 obtained. The messages are therefore unclassified, not recording/readiness
 observations or a proven handshake. Raw payloads remain private pending field
 classification and anonymization. No shutter command has been sent by RideSync.
-Firmware remains unrecorded. Issues #3/#17/#19 stay open.
+Firmware remains unrecorded. At this trial, issues #3/#17/#19 stayed open.
+Under the later [acceptance revision](../acceptance_policy.md), #17 owns the
+provisional architecture decision; #3/#19 still require actual control work, and
+physical integration remains in #22/#31.
 
 ## ESP32 peripheral trial
 

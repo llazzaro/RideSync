@@ -1,8 +1,9 @@
 # Selected raw BMI270 software path (#12)
 
-Physical #12 remains OPEN. Exact SparkFun SKU/revision, PCB/bus connections,
+Installed qualification belongs to #30/#31 and remains **Not tested**. Exact SparkFun SKU/revision, PCB/bus connections,
 mount/calibration, stationary/known-axis checks, 200 Hz throughput/jitter under
 SD/GNSS load, and camera/GPS continuity on real IMU failure remain unverified.
+#31 owns the known-axis, sensor-fault and concurrent-load observations.
 No peripheral starts in main. No purchase, pin, interrupt or mount is selected.
 
 `Bmi270Imu` uses the Bosch 2.86.1 API bundled in SparkFun v1.0.3, immutable

@@ -1,5 +1,13 @@
 # Factory firmware reconnect investigation — 2026-10-08
 
+## Current acceptance ownership
+
+The dated observations below preserve what was known at each trial. The October 8
+[acceptance revision](../acceptance_policy.md) now separates #1's hardware baseline
+and #11's logging implementation from physical qualification in #30/#31. Historical
+“issue remains open” notes are trial-time status, not new component completion gates.
+Actual active power-loss, corruption and concurrent-load results remain untested.
+
 ## Observations
 
 After the user reconnected the board, macOS enumerated its USB serial bridge
