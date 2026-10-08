@@ -101,6 +101,26 @@ observations, not our target models. Wake identifier derivation, byte order,
 advertisement timing, shutdown window and pairing prerequisites remain untested.
 Do not assume a BLE MAC is interchangeable with a wake serial identifier.
 
+The [pinned MIT M5 fork's `camera.h`](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/camera.h)
+uses the final six characters of the advertised camera name as six bytes in
+forward order, storing the BLE address separately. Its scanner accepts `X5 `;
+that source-side filter does not prove X5 wake behavior or a canonical serial.
+[Its wake builder](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h)
+specifies 26 manufacturer-value bytes: `4C 00 02 15 09 4F 52 42 49 54 09 FF 0F 00`,
+then those six name-suffix bytes, then `00 00 00 00 E4 01`. Keep unknown constants
+opaque. The independent MIT ESP32 example agrees on the fixed regions but
+provides camera-specific suffix examples only for X3 and RS 1-inch. The M5
+original and fork are one lineage, not independent camera confirmation.
+
+These licensed source facts can specify software expectations without requiring
+raw captures for every byte. Manufacturer contents are distinct from the full
+serialized advertisement, which must account for AD lengths, flags, services,
+name placement and the legacy payload limit in the pinned SDK. No RideSync
+wake transmission, actual X5 identifier or successful wake has been observed.
+#9 still needs its actual bounded shared advertising/reconnect route; #22 owns
+physical per-model wake confirmation. Do not add wake data to normal pairing
+or infer recording state from a wake or connection response.
+
 Multi-camera wake is a hypothesis to test by rotating identifiers with deadlines
 while preserving existing connections. Advertising support under multiple links
 must be measured on the selected ESP32 stack. No wake implementation exists.
