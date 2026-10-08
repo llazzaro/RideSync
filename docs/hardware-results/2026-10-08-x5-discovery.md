@@ -61,6 +61,24 @@ anchor and an ELF regression check for the strong true-returning `btInUse()`.
 Build and source evidence establish this defect; a new physical attempt must
 establish corrected startup. No camera control success is claimed.
 
+The corrected probe at `b6ae946` was uploaded with four written regions hash
+verified. An explicit `HA` attempt physically synchronized the host and began
+advertising (`synced=1`, `advertising=1`, startup SDK status zero). A separate
+eight-second Mac scan observed `RideSync CE80 Probe` advertising CE80 and
+`0000D0FF-3C17-D293-8E48-14FE2E4DA212`. Initial serial observations showed no
+camera connection and NVS refusal counters `1/2/0`. Advertising visibility
+confirms startup and radio output; it does not establish camera acceptance,
+pairing or recording control. The full 120-second window ended with no camera
+connection, read, write, subscription or security event. The policy expired with
+stop reason 3; SDK advertising state returned to zero, cleanup returned zero,
+and no operation remained in flight. All 16 events were reported, with zero
+queue drops or truncations. Camera UI confirmation remains pending; an absent
+connection alone cannot distinguish search timing, name filtering or profile
+acceptance. No subsequent attempt is automatically started.
+Post-trial readback of the 20 KiB NVS partition again matched the original
+pre-trial baseline byte for byte. The readback reset the ESP32 into its idle
+diagnostic state. Exact-head CI for `b6ae946` passed.
+
 ## Reproduction and limits
 
 Close competing camera apps, keep the owner-selected camera available, perform
