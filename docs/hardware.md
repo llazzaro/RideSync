@@ -93,6 +93,14 @@ received AT responses without an observed ESP32 reset banner. See the
 [connection procedure](device_connection.md) and dated report for limits.
 RideSync drivers and worst-case startup/recovery remain unqualified.
 
+The later isolated SD diagnostic successfully mounted the owner's 16 GB FAT32
+card at 1 MHz and validated both freshly commissioned ledger slots by readback
+and CRC using GPIO12 power enable and SPI pins 14/2/15/13. See the dated report
+for the exact transcript. This qualifies one functional mount/read observation,
+not production logging, electrical margins or reset/power-loss durability. The
+board currently runs that diagnostic; it does not start the modem.
+
+
 ## Button software and qualification (#8)
 
 `SourceConfig::button` supplies separately validated timing/action settings;

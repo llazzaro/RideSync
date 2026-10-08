@@ -245,3 +245,33 @@ result for the empty board socket. This is a negative-path check, not a
 successful physical card test. The prepared host card was then safely ejected
 for insertion with all board power removed. Actual card/ledger reading on the
 ESP32 is the next pending bench step.
+
+## Physical microSD read result
+
+After the owner reported inserting the prepared card and reconnecting the board,
+the host opened the existing diagnostic with the passive serial setup and sent
+one `S` command. The ESP32 reported:
+
+```text
+SD_READONLY: mounting at 1 MHz; format disabled
+SD_READONLY: type=3 capacity_bytes=15931539456
+SD_READONLY: baseline_slot_0=VALID
+SD_READONLY: baseline_slot_1=VALID
+SD_READONLY: baseline_pair=VALID; no files written
+```
+
+Type 3 is `CARD_SDHC` in the pinned Arduino SD API. The raw card capacity is
+15,931,539,456 bytes; this is distinct from the host FAT32 volume size recorded
+above. Both fresh baseline files passed length, magic/version, nonzero namespace,
+zero counter/sequence, complements, reserved-field and CRC checks; the two records
+matched. No ESP32 reset banner was observed in this capture. The bounded host
+capture ended after approximately 12 seconds and closed serial. The diagnostic
+calls `SD.end()` after the read and does not create/write/format files.
+
+This is the first successful physical SD mount/read evidence on this board/card
+using power enable GPIO12, SCK14, MISO2, MOSI15 and CS13 at 1 MHz. It supports
+that functional read path, not complete electrical/continuity, maximum speed,
+production storage worker, session allocation/write, post-reset persistence or
+power-loss durability qualification. The user card remains in the board; no
+post-test host readback has yet been performed. #1 and #11 remain open. The
+installed firmware remains the SD diagnostic, not ATdebug or the production app.
