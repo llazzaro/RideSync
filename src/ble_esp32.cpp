@@ -28,7 +28,12 @@ static_assert(MYNEWT_VAL(BLE_HOST_BASED_PRIVACY) == 1 && MYNEWT_VAL(ENC_ADV_DATA
                   MYNEWT_VAL(BLE_STORE_MAX_CCCDS) == 32,
               "Requalify targeted reset before changing the pinned store/privacy schema");
 
+static_assert(sizeof(ble_hs_peer_sec) == 24 && sizeof(ble_hs_dev_records) == 44 &&
+                  offsetof(ble_hs_dev_records, peer_sec) == 20,
+              "Requalify the pinned private peer-record ABI");
+
 extern "C" void ble_store_config_init(void);
+extern "C" int ridesync_ble_resolv_read(unsigned, ble_hs_resolv_entry *);
 namespace ridesync {
 namespace {
 constexpr unsigned kStoreKeys = 80;
@@ -238,7 +243,7 @@ BleStoreObservation Esp32BleHost::inspectStore(bool compare_stack) {
       const auto prefix_size = std::strlen(prefixes[t]);
       if (std::strncmp(name, prefixes[t], prefix_size) == 0) {
         const char *digit = name + prefix_size;
-        if (!*digit)
+        if (*digit < '1' || *digit > '9')
           break;
         bool digits = true;
         for (; *digit; ++digit) {
@@ -257,9 +262,9 @@ BleStoreObservation Esp32BleHost::inspectStore(bool compare_stack) {
         break;
       }
     }
-    if (schema == 7 ||
-        index >= (schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
-                              : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0))) {
+    if (schema == 7 || !index ||
+        index > (schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
+                             : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0))) {
       valid = false;
       break;
     }
@@ -568,7 +573,7 @@ int Esp32BleHost::resetClassify(unsigned schema, const void *blob) const {
       return 1;
     // The SDK's private peer-record lookup is untyped. Never authorize it from
     // raw aliases when independently typed ownership cannot be established.
-    return bytes_match ? -1 : 0;
+    return bytes_match || sameAddress(record.peer_sec.peer_addr, target) ? -1 : 0;
   }
   return peer && sameAddress(*peer, target) ? 1 : 0;
 }
@@ -604,6 +609,7 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
               return std::strncmp(a.data(), b.data(), 16) < 0;
             });
   unsigned foreign_count = 0;
+  std::array<unsigned, CONFIG_BT_NIMBLE_MAX_BONDS + 1> private_matches{};
   auto digestRecord = [&](unsigned schema, const uint8_t *bytes, size_t length) {
     if (foreign_count == reset_.digests.size())
       return false;
@@ -636,7 +642,7 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
       if (std::strncmp(name, prefixes[t], length))
         continue;
       const char *digit = name + length;
-      bool digits = *digit != 0;
+      bool digits = *digit >= '1' && *digit <= '9';
       for (; *digit && digits; ++digit) {
         digits = *digit >= '0' && *digit <= '9';
         if (digits) {
@@ -648,9 +654,9 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
         schema = t;
       break;
     }
-    if (schema == 7 ||
-        index >= (schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
-                              : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0))) {
+    if (schema == 7 || !index ||
+        index > (schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
+                             : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0))) {
       valid = false;
       break;
     }
@@ -668,6 +674,28 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
       break;
     }
     if (classification == 1) {
+      if (schema == 6) {
+        // Persistence identifies a missing device record by peer_sec alone.
+        // Its target member must name exactly one owned live record before any
+        // delete, otherwise membership cannot select a safe durable key.
+        const auto &record = *reinterpret_cast<const ble_hs_dev_records *>(reset_.bytes.data());
+        const int total = ble_rpa_get_num_peer_dev_records();
+        const auto *entries = ble_rpa_get_peer_dev_records();
+        unsigned matches = 0, matched_index = 0;
+        if (total < 0 || total > CONFIG_BT_NIMBLE_MAX_BONDS + 1)
+          valid = false;
+        for (int i = 0; valid && i < total; ++i)
+          if (!std::memcmp(&record.peer_sec, &entries[i].peer_sec, sizeof record.peer_sec)) {
+            ++matches;
+            matched_index = unsigned(i);
+            valid = resetClassify(6, &entries[i]) == 1;
+          }
+        if (!valid || matches != 1 || ++private_matches[matched_index] != 1) {
+          reset_.ambiguous = true;
+          valid = false;
+          break;
+        }
+      }
       ++target_records;
       continue;
     }
@@ -699,6 +727,11 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
         reset_.ambiguous = true;
         valid = false;
       } else if (classification == 1) {
+        if (schema == 6 && private_matches[unsigned(n)] != 1) {
+          reset_.ambiguous = true;
+          valid = false;
+          break;
+        }
         ++live_targets;
       } else {
         valid &= digestRecord(schema, bytes, sizes[schema]);
@@ -710,6 +743,39 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
   if (opened == ESP_OK)
     nvs_close(handle);
   return valid && resetAllowed();
+}
+bool Esp32BleHost::resetResolving(std::array<uint8_t, 32> &foreign, bool &found) {
+  found = false;
+  const auto target = address(reset_.identity);
+  mbedtls_sha256_context hash;
+  mbedtls_sha256_init(&hash);
+  bool valid = mbedtls_sha256_starts_ret(&hash, 0) == 0;
+  for (unsigned index = 0; index <= CONFIG_BT_NIMBLE_MAX_BONDS && valid; ++index) {
+    ble_hs_resolv_entry entry{};
+    const int rc = ridesync_ble_resolv_read(index, &entry);
+    if (rc == BLE_HS_ENOENT)
+      break;
+    if (rc || index == CONFIG_BT_NIMBLE_MAX_BONDS) {
+      valid = false;
+      break;
+    }
+    const bool identity_match = std::memcmp(entry.rl_identity_addr, target.val, 6) == 0;
+    const bool typed_target = identity_match && entry.rl_addr_type == target.type;
+    const bool alias = identity_match || std::memcmp(entry.rl_pseudo_id, target.val, 6) == 0 ||
+                       std::memcmp(entry.rl_peer_rpa, target.val, 6) == 0;
+    if ((alias && !typed_target) || (typed_target && found)) {
+      valid = false;
+      break;
+    }
+    if (typed_target)
+      found = true;
+    else
+      valid = mbedtls_sha256_update_ret(&hash, reinterpret_cast<const uint8_t *>(&entry),
+                                        sizeof entry) == 0;
+  }
+  valid &= mbedtls_sha256_finish_ret(&hash, foreign.data()) == 0;
+  mbedtls_sha256_free(&hash);
+  return valid;
 }
 void Esp32BleHost::performBondReset() {
   auto &result = reset_.result;
@@ -733,10 +799,10 @@ void Esp32BleHost::performBondReset() {
     result.outcome = BondOutcome::Busy;
     return;
   }
-  auto *resolving = ble_hs_resolv_list_find(const_cast<uint8_t *>(target.val));
-  if (resolving && (resolving->rl_addr_type != target.type ||
-                    std::memcmp(resolving->rl_identity_addr, target.val, 6)))
-    return; // Untyped alias cannot prove ownership.
+  std::array<uint8_t, 32> resolving_before{}, resolving_after{};
+  bool resolving = false, resolving_remaining = false;
+  if (!resetResolving(resolving_before, resolving))
+    return; // Complete typed mapping must be unambiguous before any deletion.
   std::array<uint8_t, 32> before{}, after{};
   unsigned records = 0, remaining = 0;
   if (!resetInventory(before, records)) {
@@ -813,7 +879,8 @@ void Esp32BleHost::performBondReset() {
       error = BLE_HS_ESTORE_FAIL;
   }
   const bool verified = resetInventory(after, remaining) && !remaining && before == after &&
-                        !ble_hs_resolv_list_find(const_cast<uint8_t *>(target.val));
+                        resetResolving(resolving_after, resolving_remaining) &&
+                        !resolving_remaining && resolving_before == resolving_after;
   result.error = error;
   result.outcome = !error && verified ? BondOutcome::Removed : BondOutcome::Indeterminate;
   if (!verified || error)

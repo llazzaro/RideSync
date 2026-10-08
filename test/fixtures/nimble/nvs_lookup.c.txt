@@ -1,0 +1,125 @@
+/*
+* Copyright 2015-2019 Espressif Systems (Shanghai) PTE LTD
+*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*  http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+
+static int
+get_nvs_matching_index(void *nvs_val, void *db_list, int db_num, size_t
+                       item_size)
+{
+    uint8_t *db_item = (uint8_t *)db_list;
+    int i;
+
+    for (i = 0; i < db_num; i++) {
+        if (memcmp(nvs_val, db_item, item_size) == 0) {
+            /* Key matches with the one in RAM database */
+            return i;
+        }
+        db_item += item_size;
+    }
+    return -1;
+}
+
+static int
+get_nvs_db_attribute(int obj_type, bool empty, void *value, int num_value)
+{
+    union ble_store_value cur = {0};
+#if MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
+    struct ble_hs_dev_records p_dev_rec = {0};
+#endif
+    esp_err_t err;
+    int i, count = 0, max_limit = 0;
+    char key_string[NIMBLE_NVS_STR_NAME_MAX_LEN];
+
+    max_limit = get_nvs_max_obj_value(obj_type);
+
+    for (i = 1; i <= max_limit; i++) {
+        get_nvs_key_string(obj_type, i, key_string);
+
+#if MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
+        if (obj_type != BLE_STORE_OBJ_TYPE_PEER_DEV_REC) {
+#endif
+            err = get_nvs_db_value(obj_type, key_string, &cur);
+#if MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
+        } else {
+            err = get_nvs_peer_record(key_string, &p_dev_rec);
+        }
+#endif
+        /* Check if the user is searching for empty index to write to */
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            if (empty) {
+                ESP_LOGD(LOG_TAG, "Empty NVS index found = %d for obj_type = %d", i, obj_type);
+                return i;
+            }
+        } else if (err == ESP_OK) {
+            count++;
+            /* If user has provided value, then the purpose is to find
+             * non-matching entry from NVS */
+            if (value) {
+#if MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
+                if (obj_type == BLE_STORE_OBJ_TYPE_PEER_DEV_REC) {
+                    err = get_nvs_matching_index(&p_dev_rec.peer_sec,
+                                                 &((struct ble_hs_dev_records *)value)->peer_sec,
+                                                 num_value,
+                                                 sizeof(struct ble_hs_peer_sec));
+                } else
+#endif
+                {
+                    if (obj_type == BLE_STORE_OBJ_TYPE_CCCD) {
+                        err = get_nvs_matching_index(&cur.sec, value, num_value,
+                                                     sizeof(struct ble_store_value_cccd));
+                    } else if (obj_type == BLE_STORE_OBJ_TYPE_CSFC) {
+                        err = get_nvs_matching_index(&cur.csfc, value, num_value,
+                                                     sizeof(struct ble_store_value_csfc));
+#if MYNEWT_VAL(ENC_ADV_DATA)
+                    } else if (obj_type == BLE_STORE_OBJ_TYPE_ENC_ADV_DATA) {
+                        err = get_nvs_matching_index(&cur.sec, value, num_value,
+                                                     sizeof(struct ble_store_value_ead));
+#endif
+                   } else if (obj_type == BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
+                       err = get_nvs_matching_index(&cur.local_irk, value, num_value,
+                                                    sizeof(struct ble_store_value_local_irk));
+
+                   } else if (obj_type == BLE_STORE_OBJ_TYPE_PEER_ADDR){
+                        err = get_nvs_matching_index(&cur.rpa_rec,value,num_value,
+                                                     sizeof(struct ble_store_value_rpa_rec));
+                    } else {
+                        err = get_nvs_matching_index(&cur.cccd, value, num_value,
+                                                     sizeof(struct ble_store_value_sec));
+                    }
+                }
+                /* If found non-matching/odd entry of NVS with entries in the
+                 * internal database, return NVS index so can be deleted */
+                if (err == -1 && !empty) {
+                    return i;
+                }
+            }
+        } else {
+            ESP_LOGE(LOG_TAG, "NVS read operation failed while fetching size !!");
+            return -1;
+        }
+    }
+
+    if (empty == 0) {
+        return count;
+    } else {
+        return (max_limit + 1);
+    }
+}

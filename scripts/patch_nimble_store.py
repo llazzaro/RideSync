@@ -19,18 +19,60 @@ def guard_zero_counts(source):
     return upstream.replace(ORIGINAL, FIXED)
 
 
+PRIVATE_ORIGINAL = """                    err = get_nvs_matching_index(&p_dev_rec.peer_sec,
+                                                 &((struct ble_hs_dev_records *)value)->peer_sec,
+                                                 num_value,
+                                                 sizeof(struct ble_hs_peer_sec));"""
+PRIVATE_FIXED = """                    /* Device records have a larger stride than peer_sec. */
+                    int peer_index;
+                    err = -1;
+                    for (peer_index = 0; peer_index < num_value; peer_index++) {
+                        if (get_nvs_matching_index(&p_dev_rec.peer_sec,
+                                &((struct ble_hs_dev_records *)value)[peer_index].peer_sec,
+                                1, sizeof(struct ble_hs_peer_sec)) == 0) {
+                            err = peer_index;
+                            break;
+                        }
+                    }"""
+
+
+def guard_private_stride(source):
+    source = source.replace(PRIVATE_FIXED, PRIVATE_ORIGINAL)
+    if source.count(PRIVATE_ORIGINAL) != 1:
+        raise RuntimeError("NimBLE private-record stride match missing/ambiguous")
+    return source.replace(PRIVATE_ORIGINAL, PRIVATE_FIXED)
+
+
 def corrected(source):
-    upstream = source.replace(FIXED, ORIGINAL)
+    upstream = source.replace(FIXED, ORIGINAL).replace(PRIVATE_FIXED, PRIVATE_ORIGINAL)
     if hashlib.sha256(upstream.encode()).hexdigest() != SOURCE_SHA256:
         raise RuntimeError(f"NimBLE {PIN} restore source mismatch")
     if upstream.count(ORIGINAL) != 1:
         raise RuntimeError("NimBLE restore guard match missing/ambiguous")
-    return guard_zero_counts(upstream)
+    return guard_private_stride(guard_zero_counts(upstream))
 
 
 PRIVACY_RELATIVE = "src/nimble/nimble/host/src/ble_hs_resolv.c"
 PRIVACY_SHA256 = "d4392a827f71ad2dfb04a137c95d3d9886cd37f2c253ed535885a639adcab5f4"
+RESOLV_READ = """/* RideSync: bounded read-only inspection of every peer resolving entry. */
+int
+ridesync_ble_resolv_read(unsigned index, struct ble_hs_resolv_entry *entry)
+{
+    if (g_ble_hs_resolv_data.rl_cnt < 1 ||
+        g_ble_hs_resolv_data.rl_cnt > BLE_RESOLV_LIST_SIZE) {
+        return BLE_HS_EUNKNOWN;
+    }
+    if (index >= g_ble_hs_resolv_data.rl_cnt - 1) {
+        return BLE_HS_ENOENT;
+    }
+    *entry = g_ble_hs_resolv_list[index + 1];
+    return 0;
+}
+
+"""
+
 PRIVACY_CHANGES = (
+    ("int\nble_hs_resolv_list_rmv", RESOLV_READ + "int\nble_hs_resolv_list_rmv"),
     ("(g_ble_hs_resolv_data.rl_cnt - position) * sizeof (struct",
      "(g_ble_hs_resolv_data.rl_cnt - position - 1) * sizeof (struct"),
     ("if ((!memcmp(rl->rl_identity_addr, addr, BLE_DEV_ADDR_LEN)) || (!memcmp(rl->rl_peer_rpa, addr, BLE_DEV_ADDR_LEN))) {",

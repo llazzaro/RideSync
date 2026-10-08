@@ -26,6 +26,7 @@ copyright/license header. Paths below are relative to `src/nimble/nimble/`:
 | Fixture | Source and exact function bodies |
 | --- | --- |
 | `config_reset.c.txt` | `host/store/config/src/ble_store_config.c`: delete_obj, find_sec, delete_sec, delete_our_sec, delete_peer_sec, find_cccd, delete_cccd, find_rpa_rec, delete_rpa_rec, find_csfc, delete_csfc (all `ble_store_config_` prefixed). |
+| `nvs_lookup.c.txt` | `host/store/config/src/ble_store_nvs.c`: `get_nvs_matching_index`, `get_nvs_db_attribute`. Exact original bodies, plus the separately applied guarded private-record stride correction in GREEN. |
 | `nvs_reset.c.txt` | `host/store/config/src/ble_store_nvs.c`: `ble_nvs_delete_value`, `ble_store_config_persist_{cccds,csfcs,rpa_recs,peer_secs,our_secs}`, `ble_store_persist_peer_records`. |
 | `privacy_reset.c.txt` | `host/src/ble_hs_resolv.c`: `ble_hs_is_on_resolv_list`, `ble_hs_resolv_list_find`, `ble_hs_resolv_list_rmv`, `ble_rpa_remove_peer_dev_rec`. |
 | `privacy_add.c.txt` | Same privacy source: `ble_hs_resolv_list_add`. |
@@ -44,3 +45,22 @@ Privacy tests run the exact original bodies for independent ASan and typed alias
 RED, then only the two approved corrections for GREEN. Whole-source SHA guards
 apply at installation; partial excerpts alone cannot qualify an SDK dependency.
 No addresses, keys or camera captures are recorded in test output.
+
+
+Repair fixtures use real one-based durable keys, zero-based RAM and the pinned
+uint8_t private bitfield (24-byte peer security, 44-byte enclosing record, offset20).
+The actual NVS key-selection helpers execute without a correct-behavior substitute.
+Two foreign private peers precede/follow the target across first/middle/last
+permutations. Original target-last lookup erases a foreign durable key and fails;
+original first/middle controls pass, and all permutations pass after correction.
+Cold maximum-index/hole restoration, all resolving identity/pseudo/RPA aliases
+in both orders, and exact/beyond/rollover reserved-connect deadlines are covered.
+The read-only resolving SDK addition is authored by RideSync in the guarded patch,
+not represented as an original upstream source excerpt.
+
+Duplicate target private members and a foreign identity carrying target peer_sec
+refuse before mutation; equal unrelated foreign members with a unique target
+remain removable and preserved.
+
+Duplicated durable target members hiding a different live target member also
+refuse before mutation: target membership must be a durable/live bijection.

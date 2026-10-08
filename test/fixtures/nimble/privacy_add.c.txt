@@ -67,4 +67,3 @@ ble_hs_resolv_list_add(uint8_t *cmdbuf)
 
     return 0;
 }
-

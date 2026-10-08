@@ -102,6 +102,7 @@ private:
   } reset_;
   bool resetAllowed();
   bool resetInventory(std::array<uint8_t, 32> &, unsigned &target_records);
+  bool resetResolving(std::array<uint8_t, 32> &, bool &found);
   int resetClassify(unsigned schema, const void *blob) const;
   static void resetEvent(ble_npl_event *);
   void performBondReset();

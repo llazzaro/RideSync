@@ -229,7 +229,8 @@ private:
     uint8_t service = 0, endpoint = 0, char_count = 0;
     uint32_t deadline = 0, next_procedure = 0;
     bool active = false, complete = false, retired_reported = false, terminate_submitted = false;
-    bool cancel_submitted = false, deferred = false, security_waiting = false;
+    bool cancel_submitted = false, deferred = false, security_waiting = false,
+         connect_waiting = false;
     BleCommand deferred_command;
     int error = 0;
     BleFault retirement = BleFault::None;

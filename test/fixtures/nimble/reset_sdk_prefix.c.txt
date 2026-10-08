@@ -1,5 +1,7 @@
 /* Synthetic boundary declarations. Production target compilation checks SDK ABI. */
 #include <stdint.h>
+#include <stdbool.h>
+#define ESP_ERR_NVS_NOT_FOUND 0x1102
 #include <stddef.h>
 #include <string.h>
 #define MYNEWT_VAL(x) V_##x
@@ -40,7 +42,7 @@ struct ble_store_key_sec { ble_addr_t peer_addr;uint8_t idx; };
 struct ble_store_key_cccd { ble_addr_t peer_addr;uint16_t chr_val_handle;uint8_t idx; };
 struct ble_store_key_csfc { ble_addr_t peer_addr;uint8_t idx; };
 struct ble_store_key_rpa_rec { ble_addr_t peer_rpa_addr;uint8_t idx; };
-struct ble_hs_peer_sec { ble_addr_t peer_addr;uint8_t irk[16];unsigned irk_present:1; };
+struct ble_hs_peer_sec { ble_addr_t peer_addr;uint8_t irk[16];uint8_t irk_present:1; };
 struct ble_hs_dev_records { _Bool rec_used;uint8_t rand_addr_type,pseudo_addr[6],rand_addr[6],identity_addr[6];struct ble_hs_peer_sec peer_sec; };
 struct ble_hs_resolv_entry { uint8_t rl_addr_type,rl_local_irk[16],rl_peer_irk[16],rl_identity_addr[6],rl_pseudo_id[6],rl_local_rpa[6],rl_peer_rpa[6],rl_isrpa; };
 union ble_store_value { struct ble_store_value_sec sec;struct ble_store_value_cccd cccd;struct ble_store_value_csfc csfc;struct ble_store_value_rpa_rec rpa_rec;struct ble_store_value_local_irk local_irk; };
@@ -66,7 +68,10 @@ void reset_nvs_close(nvs_handle_t);
 #define nvs_erase_key reset_nvs_erase_key
 #define nvs_commit reset_nvs_commit
 #define nvs_close reset_nvs_close
-int get_nvs_db_attribute(int,int,const void*,int),get_nvs_max_obj_value(int);
+static int get_nvs_db_attribute(int,bool,void*,int);
+int get_nvs_max_obj_value(int);
+int get_nvs_db_value(int,char*,union ble_store_value*);
+int get_nvs_peer_record(char*,struct ble_hs_dev_records*);
 void get_nvs_key_string(int,int,char*);
 int ble_store_nvs_write(int,const union ble_store_value*);
 int ble_store_nvs_peer_records(int,const struct ble_hs_dev_records*);

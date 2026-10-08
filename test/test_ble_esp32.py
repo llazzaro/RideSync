@@ -92,7 +92,7 @@ struct ble_store_value_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle=0,fl
 struct ble_store_value_csfc { ble_addr_t peer_addr; uint8_t csfc[1]{}; };
 struct ble_store_value_local_irk { ble_addr_t addr; uint8_t irk[16]{}; };
 struct ble_store_value_rpa_rec { ble_addr_t peer_rpa_addr,peer_addr; };
-struct ble_hs_peer_sec { ble_addr_t peer_addr; uint8_t irk[16]{}; unsigned irk_present:1; };
+struct ble_hs_peer_sec { ble_addr_t peer_addr; uint8_t irk[16]{}; uint8_t irk_present:1; };
 struct ble_hs_dev_records { bool rec_used=false; uint8_t rand_addr_type=0,pseudo_addr[6]{},rand_addr[6]{},identity_addr[6]{}; ble_hs_peer_sec peer_sec{}; };
 struct ble_hs_resolv_entry { uint8_t rl_addr_type=0,rl_local_irk[16]{},rl_peer_irk[16]{},rl_identity_addr[6]{},rl_pseudo_id[6]{},rl_local_rpa[6]{},rl_peer_rpa[6]{},rl_isrpa=0; };
 struct ble_store_key_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle; uint8_t idx; };
@@ -116,6 +116,7 @@ static int ble_gap_conn_active(){return gap_connect;}
 struct ble_gap_conn_desc;
 static int ble_gap_conn_find_by_addr(const ble_addr_t*,ble_gap_conn_desc*);
 static ble_hs_resolv_entry *ble_hs_resolv_list_find(uint8_t*){return nullptr;}
+static int ridesync_ble_resolv_read(unsigned,ble_hs_resolv_entry*){return BLE_HS_ENOENT;}
 static int ble_hs_resolv_list_rmv(uint8_t,uint8_t*){return BLE_HS_ENOENT;}
 static int ble_rpa_remove_peer_dev_rec(ble_hs_dev_records*){return 0;}
 
@@ -218,18 +219,18 @@ extern "C" void ble_store_config_init(){assert(ble_hs_cfg.store_status_cb!=nullp
 static int ble_store_util_count(int type,int*n){
  if(readback_error)return 99;*n=0;
  for(auto &entry:nvs_entries)
-  if((type==1&&entry.first=="our_sec_0")||(type==3&&entry.first=="cccd_sec_0"))++*n;
+  if((type==1&&entry.first=="our_sec_1")||(type==3&&entry.first=="cccd_sec_1"))++*n;
  return 0;
 }
 static int ble_store_read_our_sec(const ble_store_key_sec*key,ble_store_value_sec*value){
- for(auto &entry:nvs_entries)if(entry.first=="our_sec_0"){
+ for(auto &entry:nvs_entries)if(entry.first=="our_sec_1"){
   assert(key->peer_addr.val[0]==1);*value=stored_sec;if(stack_bad)value->ltk[0]^=1;return 0;
  }return BLE_HS_ENOENT;
 }
 static int ble_store_read_peer_sec(const ble_store_key_sec*,ble_store_value_sec*){return BLE_HS_ENOENT;}
 static int ble_store_read_cccd(const void*pointer,ble_store_value_cccd*value){
  const auto*key=static_cast<const decltype(ble_store_key{}.cccd)*>(pointer);
- for(auto &entry:nvs_entries)if(entry.first=="cccd_sec_0"){
+ for(auto &entry:nvs_entries)if(entry.first=="cccd_sec_1"){
   assert(key->peer_addr.val[0]==1&&key->chr_val_handle==3);*value=stored_cccd;if(stack_bad)value->flags^=1;return 0;
  }return BLE_HS_ENOENT;
 }
@@ -317,7 +318,7 @@ int main(int argc,char**argv){
   size_t size=scenario==13||scenario==14?sizeof stored_cccd:sizeof stored_sec;
   std::vector<uint8_t> bytes(static_cast<const uint8_t*>(blob),static_cast<const uint8_t*>(blob)+size);
   if(scenario==16)bytes.push_back(0);
-  nvs_entries.push_back({scenario==15?"unknown_0":scenario==13||scenario==14?"cccd_sec_0":"our_sec_0",bytes});
+  nvs_entries.push_back({scenario==15?"unknown_0":scenario==13||scenario==14?"cccd_sec_1":"our_sec_1",bytes});
   // Read a synthetic previous-boot fixture. Production never gives a snapshot
   // its nonzero independent qualification record or installs it automatically.
   auto observed=host.inspectStore(false);

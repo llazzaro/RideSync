@@ -109,7 +109,7 @@ bool BleCentral::connect(uint8_t i, uint32_t gen, const BondIdentity &id,
   p.service_start = {};
   p.service_end = {};
   p.next_procedure = 0;
-  p.deferred = p.security_waiting = false;
+  p.deferred = p.security_waiting = p.connect_waiting = false;
   p.active = p.complete = p.retired_reported = p.terminate_submitted = p.cancel_submitted = false;
   p.retirement = BleFault::None;
   p.error = 0;
@@ -677,9 +677,9 @@ void BleCentral::service(uint32_t now) {
         retire(i, lf != BleFault::None ? lf : pf, p.link.terminal_status.load());
       else if (p.link.terminal.load() && p.phase != BlePhase::Queued)
         retire(i, BleFault::Att, p.link.terminal_status.load());
-      else if (p.phase != BlePhase::Queued && p.phase != BlePhase::ReadyForProfile &&
-               p.phase != BlePhase::Retiring && p.phase != BlePhase::Quarantined &&
-               expired(now, p.deadline))
+      else if ((p.phase != BlePhase::Queued || p.connect_waiting) &&
+               p.phase != BlePhase::ReadyForProfile && p.phase != BlePhase::Retiring &&
+               p.phase != BlePhase::Quarantined && expired(now, p.deadline))
         retire(i, BleFault::Timeout);
     }
   };
@@ -751,12 +751,14 @@ void BleCentral::service(uint32_t now) {
       initiating_ = i;
       admitted = true;
       p.phase = BlePhase::Connect;
-      p.deadline = now + kPhaseDeadlineMs;
+      if (!p.connect_waiting)
+        p.deadline = now + kPhaseDeadlineMs;
+      p.connect_waiting = true;
       p.link.terminal.store(false);
       BleCommand c;
       c.phase = BlePhase::Connect;
       c.identity = p.identity;
-      c.duration_ms = kPhaseDeadlineMs;
+      c.duration_ms = p.deadline - now;
       const int rc = host_.submit(c, p.link);
       if (rc == kBleHostReserved) {
         p.phase = BlePhase::Queued;

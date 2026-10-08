@@ -263,3 +263,19 @@ See [configuration](configuration.md#stack-owned-bonds-and-reset-admission) for
 the unchanged-durable-write-failure limit. No reset entry point is activated by
 normal firmware. The retained qualification image contains data-only member
 pointer anchors for submit/cancel/poll and the actual SDK deletion/readback paths.
+
+
+Reserved connection attempts retain the first attempted admission's finite
+deadline, distinct from a never-attempted queued peer. Exact/beyond/wrapped
+expiry closes a never-submitted attempt without a fabricated callback, and later
+service cannot launch it with a fresh deadline. A timely resubmission supplies
+only the remaining duration to the SDK. Cancellation and fresh generation reuse
+retain the existing terminal/barrier rules for genuinely submitted contexts.
+
+Every resolving peer entry is inspected through the pinned read-only SDK helper
+before mutation. A foreign identity, pseudo address or RPA alias of the target
+refuses before deletion in either ordering. Foreign resolving bytes are checked
+again after removal. Durable NVS key indices are canonical one based/inclusive;
+RAM bounds stay zero based. Private-device persistence uses the qualified SDK
+member comparison with the correct enclosing record stride, so a later target
+cannot cause an earlier foreign durable key to be erased.

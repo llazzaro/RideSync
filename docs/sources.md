@@ -178,7 +178,7 @@ reproduces upstream index -1 for normal empty/one-sided stores.
 `scripts/patch_nimble_store.py` runs before compilation, validates the whole source
 and exact unique two-line pattern, is idempotent and rejects drift. Original file
 SHA256 `e4d61d3b6403e263d40f2f498c4d6ac64ee1727ccd3fd6f040ba0e1908c26144`;
-modified SHA256 `04c3363f08b532867c70d0c55b742745a88b1fb1aa954eafeb71028f7ce1c8c8`.
+zero-count-only SHA256 `04c3363f08b532867c70d0c55b742745a88b1fb1aa954eafeb71028f7ce1c8c8` (the later #43 stride correction changes this; current hashes below).
 No persistent store bytes are modified by the build patch. Other initializer
 restore errors can be logged/ignored upstream, so actual persisted-vs-stack
 readback and independent restoration proof remain mandatory.
@@ -227,3 +227,41 @@ Compile guards require host privacy=1, ENC_ADV_DATA=0, SMP_ID_RESET=0, five bond
 The attributed reset fixtures retain their original notices and Apache license;
 [fixture attribution](../test/fixtures/nimble/README.md) names each source/function.
 Synthetic NVS/radio/timing boundaries are not device captures or physical proof.
+
+
+Task #43 repair qualifies the actual private-device key-selection helper as well.
+`get_nvs_db_attribute` passed a pointer into `peer_sec` to a matcher that strides
+by that member's size, rather than the enclosing device record. The narrow
+exact-file-guarded correction compares each array element's `peer_sec` separately;
+it preserves the original comparison semantics and never substitutes a different
+key-selection algorithm in the test boundary. The exact original helper bodies
+are now attributed in `nvs_lookup.c.txt` and compiled in both original RED and
+corrected GREEN. The pinned private ABI uses a **uint8_t bitfield**: peer_sec24,
+device record44, member offset20, checked by actual target static assertions.
+
+Durable SDK indices are canonical **1 through maximum inclusive**; RAM arrays
+remain zero based. Startup and reset validate those different ranges separately,
+including holes and maximum occupied keys. Full cold restoration fixtures reach
+bond5, CCCD32 and device6 with one-based keys before reset admission.
+
+The privacy source patch also supplies `ridesync_ble_resolv_read`, a bounded
+read-only copy of each peer entry (excluding the reserved local slot). This
+allows the concrete host to inspect every identity/pseudo/RPA alias before any
+mutation instead of trusting the untyped first-match finder. Ambiguous foreign
+aliases refuse consistently in either order. Post-removal typed absence and
+unchanged foreign resolving bytes are checked without globally faulting the host
+because an unrelated typed identity remains. The new helper and stride change
+share the same original full-file SHA/reversal/idempotence/drift guards above;
+SDK notices remain intact. No generic SDK cleanup or new firmware activation is
+introduced.
+
+The qualified corrected files now hash to NVS
+`553f26195d6d8dc4deae9dd068f25030857d65b1794219b00186c2907a13db30`
+and privacy
+`9ef6437fc7d61d46155314024bb80b583161ee172b9854b443b1b3a84223995d`.
+Private target membership must map one-to-one between durable blobs and owned
+live `peer_sec` members before mutation. Duplicate target members, or a foreign identity carrying the typed
+target member, are refused before any deletion. Equal members among unrelated
+foreign records remain admissible when the target member is unique. This guards
+the SDK membership-based durable selection without treating every multi-peer
+store as ambiguous.
