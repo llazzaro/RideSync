@@ -101,7 +101,8 @@ not production logging, electrical margins or reset/power-loss durability. The
 board subsequently received the [production storage writer bench](../tools/bench/sd_logging/README.md).
 Its upload hashes were verified, and one physical four-row run completed with
 all rows written/flushed, zero IO/loss errors and worker cleanup finished. Host
-readback and reset/power-loss qualification remain pending. It does not start the modem.
+CSV/ledger readback and original-file checksums passed; reset/power-loss
+qualification remains pending. It does not start the modem.
 
 
 ## Button software and qualification (#8)

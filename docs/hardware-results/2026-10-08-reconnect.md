@@ -342,3 +342,28 @@ card. No reset banner was observed. The observed maximum control-loop gap was
 concurrent modem/BLE/IMU qualification. Host CSV/ledger readback and preservation
 checks are still pending, as are reset and power-loss trials. Issue #11 remains
 open. The installed image remains the isolated `sd_logging` bench.
+
+
+## First writer host readback passed
+
+H1N_SD subsequently mounted on macOS as the external 15.9 GB FAT32 card.
+Read-only host verification found both 40-byte ledger records valid: expected
+magic/version, reserved namespace, matching counter/sequence and complements,
+zero reserved field and correct CRC. Slot counters were 1 and 0, matching the
+one committed allocation observed on serial. Neither slot was rewritten by
+the host verifier.
+
+The expected exclusively named CSV existed, decoded as ASCII, ended with LF
+and contained exactly four complete records. Version, session, firmware
+`sd_bench_v1` and provenance `bench_missing_gnss` matched the bench and private
+receipt. Session monotonic times were 1000, 2000, 3000 and 4000 ms. All rows
+reported valid monotonic time, missing GNSS/UTC, disabled modem/UART, blank
+coordinates and unavailable measurement fields. Queue snapshots were consistent
+with admission order and zero loss/rejection/drop; final totals remain the
+post-close serial evidence above.
+
+Both original non-ledger files matched their pre-write sizes and SHA-256
+checksums exactly. A private copy of the captured CSV and a verification receipt
+were retained outside the card. This verifies normal allocation/write/flush/close
+and host readback on this card; interrupted reset, power loss, full workload
+latency and concurrent peripheral qualification remain pending. Issue #11 stays open.
