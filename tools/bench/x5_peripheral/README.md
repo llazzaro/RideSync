@@ -266,13 +266,14 @@ claimed.
 ## Finite wake-only experiment
 
 The manufacturer value is sourced from the retained MIT M5 fork
-[`c76e140`, ble_handlers.h:323–353](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h#L323-L353)
+[`c76e140`, ble_handlers.h:299–325](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h#L299-L325)
 and independent MIT ESP32 example
-[`83d4748`, Insta_BLE.ino:141–162](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino#L141-L162).
+[`83d4748`, Insta_BLE.ino:129–149](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino#L129-L149),
+with its RS identifier example at [lines 229–235](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino#L229-L235).
 It is exactly 26 bytes: fixed `4c 00 02 15 09 4f 52 42 49 54 09 ff 0f 00`,
 six identifier bytes, fixed `00 00 00 00 e4 01`. M5 derives the identifier
 from the last six name characters (`camera.h:131–155`) and uses a three-second
-advertising interval (`commands.h:162–190`). These are documentary prototype
+advertising duration (`commands.h:175–183`). These are documentary prototype
 facts; the generic suffix rule is not independently confirmed for X5. This
 experiment does not close production wake/recovery support or #9.
 
