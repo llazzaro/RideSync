@@ -40,14 +40,16 @@ Both services are primary GATT services; the example calls the additional one
 "secondary." Integer read values are explicitly represented in ESP32 little
 endian byte order. The legacy advertisement carries general-discovery/no-BR-EDR
 flags and both service UUIDs (25 bytes). Scan response carries only the complete
-diagnostic name `RideSync CE80 Probe` (21 bytes). No manufacturer/wake bytes or
+source-example name `Insta360 GPS Remote` (21 bytes including the AD header). No manufacturer/wake bytes or
 camera identifier is used. Each field fits the 31-byte legacy limit.
 
 The [MIT M5 fork at c76e140](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h)
 uses the vendor remote name; its exact-name comment refers to Ace Pro 2 and is
 not evidence that X5 requires that name. It also uses a colon/timer heuristic,
-which this probe does not implement. Acceptance of our diagnostic name, the
-additional service and any handshake remains unresolved until capture. Sources
+which this probe does not implement. The next trial aligns the local name with
+both MIT examples, changing only the name from the prior `RideSync CE80 Probe`
+trial. Name filtering by X5 is a hypothesis, not an observed requirement. The
+additional service and any handshake remain unresolved until capture. Sources
 were inspected directly; implementation is independently authored from API and
 field facts. No example implementation, unlicensed direct-control or GPS codec
 is copied. Dependency notices remain in the installed pinned package.

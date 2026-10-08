@@ -69,9 +69,28 @@ The ESP32 community example reports a shutter button frame:
 `FC EF FE 86 00 03 01 02 00`. Treat it as a **toggle/button event**, not an
 idempotent recording-start command. Mode selection and current recording state
 matter. Do not transmit it repeatedly after a lost response: that can stop a
-successful recording. Explicit start/stop and notification decoding need captures
-before implementation. Unknown incoming messages should be logged with bounded
-hex dumps; malformed lengths must be rejected by a future codec.
+successful recording. `insta360::encodeShutterEvent()` now returns this exact
+nine-byte event as an owned fixed-size array. The independent literal fixture
+and pinned MIT source/license provenance are in
+[`test/fixtures/insta360/README.md`](../test/fixtures/insta360/README.md).
+This pure primitive has no BLE delivery or automatic repeat and is not an
+idempotent Start/Stop API. No receive parser, ACK, sequence field or recording
+observation is invented from these opaque bytes. Explicit Start/Stop and state
+decoding remain unsupported pending licensed source facts or annotated evidence.
+Issue #19 remains open: a primitive without a usable camera recording route
+does not complete it. Unknown incoming data stays unclassified; private bounded
+captures must not be promoted into state from a colon or a missing timer.
+
+The next useful X5 action is pairing, not another guessed command. The prior
+CE80 trial synchronized and advertised but received no camera events through
+its finite window, using the local name `RideSync CE80 Probe`. Both pinned MIT
+examples use `Insta360 GPS Remote`; the prepared next trial now uses that name
+with other probe behavior unchanged. Owner confirmation of X5 remote-search UI
+during A makes this a controlled name-only experiment. Name filtering is a
+hypothesis, not an established X5 requirement. Keep NVS refusal and capture-only
+behavior; require a real camera connection and CE82 subscription before an
+addressed shutter-event trial. No event from this encoder
+should be sent on the unrelated BE80 path.
 
 ## Wake and identification
 

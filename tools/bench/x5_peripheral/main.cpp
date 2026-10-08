@@ -24,7 +24,7 @@ extern "C" void ble_store_config_init(void);
 
 namespace {
 using namespace x5_probe;
-constexpr char kName[] = "RideSync CE80 Probe";
+constexpr char kName[] = "Insta360 GPS Remote";
 Capture capture;        // Boot lifetime, including stopped, blocked SDK and late callbacks.
 SdkControl sdk_control; // Sticky stop admission and retained submission/publication state.
 portMUX_TYPE capture_lock = portMUX_INITIALIZER_UNLOCKED;
