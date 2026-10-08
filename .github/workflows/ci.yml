@@ -20,6 +20,8 @@ jobs:
         run: python tools/bench/sd_logging/test_run.py -v
       - name: X5 peripheral capture policy checks
         run: python tools/bench/x5_peripheral/test_capture.py -v
+      - name: Production GNSS bench lifecycle checks
+        run: python tools/bench/gnss_driver/test_bench.py -v
       - name: Native camera and source configuration tests
         run: pio test -e native
       - name: C++ format check
@@ -41,3 +43,7 @@ jobs:
         run: |
           pio run -d tools/bench/x5_peripheral
           python tools/bench/x5_peripheral/inspect_link.py --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
+      - name: Build and audit isolated production GNSS diagnostic (compile only)
+        run: |
+          pio run -d tools/bench/gnss_driver
+          python tools/bench/gnss_driver/inspect_link.py --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
