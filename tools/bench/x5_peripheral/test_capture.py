@@ -13,7 +13,9 @@ class CapturePolicyTest(unittest.TestCase):
             binary = Path(directory) / 'capture'
             result = subprocess.run([
                 'c++', '-std=c++11', '-Wall', '-Wextra', '-Werror',
-                '-I', str(BENCH), str(BENCH / 'test_capture.cpp'), '-o', str(binary),
+                '-I', str(BENCH), '-I', str(BENCH.parents[2] / 'include'),
+                str(BENCH / 'test_capture.cpp'), str(BENCH / 'shutter_codec.cpp'),
+                '-o', str(binary),
             ], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)

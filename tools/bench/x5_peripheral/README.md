@@ -1,8 +1,10 @@
 # X5 CE80 peripheral capture probe
 
 This isolated diagnostic offers a documented community CE80 peripheral profile
-for the camera to discover. It is not a camera adapter: it sends no shutter,
-mode, wake or other vendor notifications and always reports recording UNKNOWN.
+for the camera to discover. It is not a production camera adapter. Idle/A remain capture-only; an explicit
+serial S can now submit one source-derived CE82 shutter event to the current
+subscribed peer. It always reports recording UNKNOWN and sends no automatic
+mode, wake or handshake commands.
 Connection, subscription or successful ATT access alone does not prove that
 the X5 has paired or supports this profile. A camera-side pairing indication,
 firmware version and separately annotated private capture are still required.
@@ -18,8 +20,8 @@ Arduino boot, preventing its weak false fallback from releasing all Bluetooth
 controller memory before A. The ELF audit requires that strong true-returning
 implementation. The initial physical startup returned `ESP_ERR_INVALID_STATE`
 before sync; its ELF had the weak false implementation and boot memory release.
-The corrected ELF is compile/audit evidence; startup and pairing still require
-a new physical trial.
+The corrected ELF is compile/audit evidence; observed startup/pairing results
+are recorded separately in the repository hardware results.
 
 ## Source-backed prototype profile
 
@@ -29,7 +31,7 @@ defines these documentary prototype facts, not X5 requirements:
 | Service | Characteristic | Property / read bytes |
 | --- | --- | --- |
 | CE80 | CE81 | Write |
-| CE80 | CE82 | Notify; automatic CCCD, never notified here |
+| CE80 | CE82 | Notify; automatic CCCD; explicit S only |
 | CE80 | CE83 | Read `01 02` |
 | 0000D0FF-3C17-D293-8E48-14FE2E4DA212 | FFD1, FFD8, FFF2 | Write |
 | same additional service | FFD2, FFD5, FFF1, FFE0 | Read empty |
@@ -46,10 +48,12 @@ camera identifier is used. Each field fits the 31-byte legacy limit.
 The [MIT M5 fork at c76e140](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h)
 uses the vendor remote name; its exact-name comment refers to Ace Pro 2 and is
 not evidence that X5 requires that name. It also uses a colon/timer heuristic,
-which this probe does not implement. The next trial aligns the local name with
+which this probe does not implement. The name-only trial aligned the local name with
 both MIT examples, changing only the name from the prior `RideSync CE80 Probe`
-trial. Name filtering by X5 is a hypothesis, not an observed requirement. The
-additional service and any handshake remain unresolved until capture. Sources
+trial. Root reported an actual X5 connection, CE82 subscription, CE81 writes and
+a human-observed paired/connected UI. This supports trying one addressed shutter
+event; it does not establish recording control or prove name filtering as the
+sole cause. The additional service and any handshake remain unresolved. Sources
 were inspected directly; implementation is independently authored from API and
 field facts. No example implementation, unlicensed direct-control or GPS codec
 is copied. Dependency notices remain in the installed pinned package.
@@ -66,8 +70,7 @@ python3 tools/bench/x5_peripheral/inspect_link.py \
   --objdump ~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump
 ```
 
-Compile/host checks are not physical results. Before any separately authorized
-upload, preserve the existing verified installed-firmware backup and factory
+Compile/host checks are not physical results. Before any upload, preserve the existing verified installed-firmware backup and factory
 NVS/partition state; follow the repository's board/bootloader procedure. Do not
 erase flash, initialize/recommission NVS, or replace factory bonds to make this
 trial pass. Safely remove the SD card with all board power disconnected before
@@ -87,6 +90,18 @@ Serial is 115200 baud. Default boot is idle with no advertising. Commands:
 - `X`: request stop of advertising and disconnection of the observed handle.
   X before A does not consume the attempt. After an attempt, reset is required
   for another A. Actual disconnection is a separate SDK event.
+- `S`: request exactly one CE82 shutter event. Admission requires the active
+  finite window, a current connected peer, its current CE82 notify subscription,
+  and an idle SDK owner with no pending shutter request/stop. One pending slot;
+  refused/busy requests are discarded. After preparing an SDK-owned mbuf the
+  owner revalidates current time, peer, subscription and stop at submission.
+  X, expiry, disconnect, loss of subscription or preparation failure discard
+  pending work. Once admitted to SDK it cannot be retroactively cancelled;
+  submission return is logged and never retried. No reconnect/reset replay.
+  Send a single S, observe the camera display/media result, and only then send
+  a separate S if a second toggle is wanted. Never send a burst or automatically
+  repeat S to obtain REC/STOP. The command is a mode/state-dependent shutter
+  button event, not explicit Start or Stop. Recording remains UNKNOWN.
 - `H`: explicit private opt-in to sensitive binary hex output (up to all 256
   copied bytes per event). Default output includes event IDs/lengths only.
   Treat H transcripts as private: incoming protocol fields may contain camera
@@ -101,7 +116,7 @@ subscription and incoming writes. Annotate manual REC/STOP/mode operations
 against camera display/saved media without interpreting packet bytes here.
 Send X or let the finite window expire. An absent connection or stalled UI
 is unresolved evidence, not an unsupported-camera verdict. Do not synthesize
-a handshake or transmit vendor commands to clear the UI. No physical test has
+a handshake or transmit guessed commands to clear the UI. No physical test has
 been performed as part of this source task.
 
 ## Bounds and evidence semantics
@@ -112,7 +127,7 @@ acknowledged at ATT level; they are not valid complete protocol fixtures.
 H prints the complete bounded copy and explicitly labels truncation. Queue
 overflow increments dropped counters and leaves sequence gaps; every callback
 event increments its per-kind count even if dropped. SDK notifications are
-never emitted. Callback contexts, service definitions, queue and SDK remain
+only emitted by an explicitly admitted S through the retained owner. Callback contexts, service definitions, queue and SDK remain
 alive through stop, deadline, failure and late callbacks; no deinit is attempted.
 
 Reports use actual `esp_timer_get_time` boot milliseconds and SDK connection/
@@ -127,7 +142,11 @@ Stop reason values: 0 none, 1 requested, 2 startup timeout, 3 window deadline,
 Event kind numbers: 0 sync, 1 connect, 2 disconnect, 3 MTU, 4 subscribe,
 5 read, 6 write, 7 security, 8 passkey action, 9 repeat pairing,
 10 advertising end/stop submission, 11 error/submission status, 12 stop request,
-13 GATT registration (`attr` is actual value handle, `value` is public 16-bit UUID).
+13 GATT registration (`attr` is actual value handle, `value` is public 16-bit UUID),
+14 shutter request (`value` 1 accepted pending, 0 refused), 15 shutter result
+(`value` raw SDK return, or -1 local cancellation before SDK submission).
+Allocation failure is reported as SDK ENOMEM without a notify attempt. Shutter
+logs contain only connection/attribute handles and status, never payload.
 Read events include the attempted static response bytes/length; write events
 contain bounded incoming bytes. Connect `attr` is peer address type; MTU `attr`
 is channel ID; subscribe `value` encodes notify bit0, indicate bit1 and SDK
@@ -151,12 +170,13 @@ stalls, control continues timestamps, serial commands, policy service and report
 the in-flight operation remains visible. `advertising` is the pinned SDK's
 nonblocking atomic state observation, not a cleanup barrier.
 
-Summary fields `sdk_stop`, `sdk_inflight`, `sdk_op`, `sdk_ops_admitted/returned`
-and `sdk_last_op/rc` describe owner admission/SDK return publication. Operation
+Summary fields `sdk_stop`, `sdk_inflight`, `sdk_op`, `sdk_ops_admitted/returned`,
+`sdk_last_op/rc` and `shutter_pending` describe owner admission/SDK return publication. Operation
 IDs are 0 none, 1 startup, 2 preparation, 3 advertising start, 4 advertising stop,
-5 terminate. Startup/preparation are grouped SDK work; counters do not count
+5 terminate, 6 shutter notification. Startup/preparation are grouped SDK work; counters do not count
 individual HCI commands. A zero return status is not camera acknowledgement or
-callback quiescence. Previously admitted work can enter/return from SDK after X
+callback quiescence. Shutter result zero does not prove camera delivery or a
+recording transition. Previously admitted work can enter/return from SDK after X
 or a deadline; a late advertising start is compensated by the owner's retained
 stop request when it can run. The policy rejects new stale admission after
 preparation, but does not claim a hard RF-off deadline or retroactive cancellation
@@ -195,3 +215,34 @@ bonded status, store-capacity failure or encryption failure stops the attempt
 as unresolved security. No keys/passkeys, auto-confirmation, bond eviction,
 persisted keys or factory-bond edits are permitted. A camera requirement for
 persistent bonds or an unknown application handshake needs a separate decision.
+
+## Shutter provenance and finite check
+
+The bench compiles the existing shared `encodeShutterEvent()` implementation via
+`shutter_codec.cpp`; it does not maintain another packet definition. Its fixed
+nine-byte event is documented in `docs/insta360_protocol.md` and the MIT pinned
+source fixtures. The pinned SDK `ble_gatts_notify_custom` consumes its supplied
+mbuf on every outcome with notification support enabled (compile-time asserted).
+Preparation/refusal frees the still-owned mbuf locally; accepted submission
+transfers ownership exactly once. No payload pointer is retained in policy.
+
+After pairing and CE82 subscription, set the camera's desired video mode and
+visually establish its current idle/recording state. Send one S, then observe
+actual camera UI and saved media before another S. A paired UI or SDK zero
+return alone does not satisfy #3's camera-observed REC/STOP requirement. X ends
+the attempt; another A requires a reset and fresh pairing/subscription. The
+fixed 120-second window remains unchanged. No shutter hardware trial is claimed
+by this implementation.
+
+October 9, 2026 source-task verification: focused host policy harness passed
+(0.701 s), including idle/no-peer/no-subscription/wrong-peer/busy refusal,
+X/expiry/disconnect/unsubscribe cancellation between request and submission,
+no retry after error/success and accepted-before-stop publication. The harness
+also links the shared encoder and compares its output with independent literal
+expected bytes. Pinned probe SDK build passed (13.54 s; RAM 45,380 bytes, flash
+573,157 bytes). Extended ELF audit passed: existing RAM-only store/core/PHY
+refusal boundaries and retained start/stop/terminate owner, shared encoder and
+owner-only application custom-notify caller. SDK-internal standard notification
+wrappers remain linked. Clang-format 18 and whitespace checks passed. These are
+software checks; no shutter/camera observation or production integration is
+claimed.

@@ -1,6 +1,7 @@
-// Isolated capture diagnostic. No production startup, GPIO or vendor commands.
+// Isolated capture diagnostic with explicit one-shot operator shutter event.
 #include "capture.h"
 #include "nvs_guard.h"
+#include "protocol/insta360_codec.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h> // Select the pinned dependency; never call its NVS init wrapper.
 #include <esp_bt.h>
@@ -18,7 +19,7 @@
 #include <nimble/porting/npl/freertos/include/nimble/nimble_port_freertos.h>
 
 static_assert(MYNEWT_VAL(BLE_STORE_CONFIG_PERSIST) == 0 && MYNEWT_VAL(BLE_SM_BONDING) == 0 &&
-                  MYNEWT_VAL(BLE_MAX_CONNECTIONS) == 1,
+                  MYNEWT_VAL(BLE_MAX_CONNECTIONS) == 1 && MYNEWT_VAL(BLE_GATT_NOTIFY) == 1,
               "Bench requires RAM-only nonbonding store and one peer");
 extern "C" void ble_store_config_init(void);
 
@@ -27,6 +28,7 @@ using namespace x5_probe;
 constexpr char kName[] = "Insta360 GPS Remote";
 Capture capture;        // Boot lifetime, including stopped, blocked SDK and late callbacks.
 SdkControl sdk_control; // Sticky stop admission and retained submission/publication state.
+ShutterControl shutter;
 portMUX_TYPE capture_lock = portMUX_INITIALIZER_UNLOCKED;
 uint16_t connection = BLE_HS_CONN_HANDLE_NONE;
 bool host_synced = false, private_hex = false;
@@ -49,6 +51,7 @@ void fail(int status, StopReason reason = StopReason::Error) {
   Lock lock;
   capture.stop(reason);
   sdk_control.requestStop();
+  shutter.cancel();
 }
 
 // Documentary prototype fields from the MIT ESP32 example pin in README;
@@ -125,6 +128,7 @@ int gap(ble_gap_event *event, void *) {
     {
       Lock lock;
       connection = conn;
+      shutter.connected(conn);
     }
     ble_gap_conn_desc info{};
     const int rc = ble_gap_conn_find(conn, &info);
@@ -137,13 +141,20 @@ int gap(ble_gap_event *event, void *) {
     {
       Lock lock;
       connection = BLE_HS_CONN_HANDLE_NONE;
+      shutter.disconnected();
       capture.stop(StopReason::Disconnected);
+      sdk_control.requestStop();
     }
     break;
   case BLE_GAP_EVENT_MTU:
     record(Kind::Mtu, event->mtu.conn_handle, event->mtu.channel_id, event->mtu.value);
     break;
   case BLE_GAP_EVENT_SUBSCRIBE:
+    if (event->subscribe.attr_handle == attributes[1].handle) {
+      Lock lock;
+      shutter.subscription(event->subscribe.conn_handle, event->subscribe.attr_handle,
+                           event->subscribe.cur_notify != 0);
+    }
     record(Kind::Subscribe, event->subscribe.conn_handle, event->subscribe.attr_handle,
            event->subscribe.cur_notify | (event->subscribe.cur_indicate << 1) |
                (event->subscribe.reason << 8));
@@ -241,6 +252,46 @@ void hostTask(void *) {
   nimble_port_run();
   // No deinit or object deletion beneath late callbacks. Boot lifetime always.
   vTaskDelete(nullptr);
+}
+void submitShutter() {
+  bool pending;
+  {
+    Lock lock;
+    pending = shutter.pending();
+  }
+  if (!pending)
+    return;
+  const auto bytes = ridesync::insta360::encodeShutterEvent();
+  // Preparation may stall: keep the single pending slot occupied, then recheck
+  // active time/current peer/subscription/stop immediately at SDK admission.
+  os_mbuf *payload = ble_hs_mbuf_from_flat(bytes.data(), bytes.size());
+  if (!payload) {
+    {
+      Lock lock;
+      shutter.cancel();
+    }
+    record(Kind::ShutterResult, BLE_HS_CONN_HANDLE_NONE, 0, BLE_HS_ENOMEM);
+    return;
+  }
+  uint16_t conn = BLE_HS_CONN_HANDLE_NONE, attr = 0;
+  bool admitted;
+  {
+    Lock lock;
+    admitted = shutter.admit(capture, sdk_control, uint32_t(nowMs()), conn, attr);
+  }
+  if (!admitted) {
+    os_mbuf_free_chain(payload);
+    record(Kind::ShutterResult, conn, attr, -1); // Local pre-submission cancellation, not SDK rc.
+    return;
+  }
+  // Pinned SDK consumes the mbuf on every return path. No lock is held; a stop
+  // after acceptance cannot retract the operation, and never causes a retry.
+  const int rc = ble_gatts_notify_custom(conn, attr, payload);
+  {
+    Lock lock;
+    sdk_control.complete(rc);
+  }
+  record(Kind::ShutterResult, conn, attr, rc); // Not delivery/recording proof.
 }
 int initializeSdk() {
   // Match the pinned NimBLE Arduino linkage anchor: pulling esp32-hal-bt.c
@@ -346,12 +397,15 @@ void ownerTask(void *) {
       else
         submitAdvertising(address_type);
     }
+    submitShutter();
     const uint32_t now = uint32_t(nowMs());
     {
       Lock lock;
       capture.tick(now);
-      if (!capture.active())
+      if (!capture.active()) {
         sdk_control.requestStop();
+        shutter.cancel();
+      }
       stop = sdk_control.snapshot().stop_requested;
       conn = connection;
     }
@@ -402,8 +456,9 @@ void setup() {
   Serial.setTxBufferSize(2048);
   Serial.begin(115200);
   esp_log_level_set("*", ESP_LOG_NONE); // No SDK peer addresses/credentials in output.
-  const char banner[] = "X5_PROBE: capture only; A once=advertise/capture120s X=stop H=private "
-                        "sensitive hex; no commands/state\n";
+  const char banner[] =
+      "X5_PROBE: A once=capture120s X=stop S=ONE shutter toggle after observation "
+      "H=private sensitive hex; recording UNKNOWN\n";
   emit(banner, sizeof(banner) - 1);
 }
 void loop() {
@@ -430,6 +485,12 @@ void loop() {
       capture.stop(StopReason::Requested);
       if (capture.used())
         sdk_control.requestStop();
+      shutter.cancel();
+    } else if (command == 'S') {
+      Lock lock;
+      const bool accepted = shutter.request(capture, sdk_control, uint32_t(nowMs()));
+      capture.push(Kind::ShutterRequest, nowMs(), connection, attributes[1].handle,
+                   accepted ? 1 : 0);
     } else if (command == 'H') {
       private_hex = true; // Explicit opt-in. Never print SM keys/passkeys.
     }
@@ -440,8 +501,10 @@ void loop() {
   {
     Lock lock;
     capture.tick(now);
-    if (capture.used() && !capture.active())
+    if (capture.used() && !capture.active()) {
       sdk_control.requestStop();
+      shutter.cancel();
+    }
     active = capture.active();
     used = capture.used();
     synced = host_synced;
@@ -475,11 +538,13 @@ void loop() {
     Stats stats;
     SdkPublication sdk;
     unsigned depth;
+    bool shutter_pending;
     {
       Lock lock;
       stats = capture.stats();
       depth = capture.queued();
       sdk = sdk_control.snapshot();
+      shutter_pending = shutter.pending();
     }
     const auto nvs = nvsRefusals();
     const int n = snprintf(
@@ -487,7 +552,7 @@ void loop() {
         "X5_PROBE: boot_ms=%lu used=%u active=%u synced=%u advertising=%u conn=%u stop=%u hex=%u "
         "seen=%lu reported=%lu queued=%u dropped=%lu truncated=%lu "
         "sdk_stop=%u sdk_inflight=%u sdk_op=%u sdk_ops_admitted/returned=%lu/%lu "
-        "sdk_last_op/rc=%u/%d "
+        "sdk_last_op/rc=%u/%d shutter_pending=%u "
         "nvs_refused_init/open/erase=%lu/%lu/%lu recording=UNKNOWN kind_counts=",
         static_cast<unsigned long>(now), used, active, synced,
         synced ? unsigned(ble_gap_adv_active()) : 0, conn, unsigned(reason), private_hex,
@@ -495,8 +560,9 @@ void loop() {
         static_cast<unsigned long>(stats.dropped), static_cast<unsigned long>(stats.truncated),
         sdk.stop_requested, sdk.in_flight, unsigned(sdk.action),
         static_cast<unsigned long>(sdk.accepted), static_cast<unsigned long>(sdk.returned),
-        unsigned(sdk.last_returned_action), sdk.last_status, static_cast<unsigned long>(nvs.init),
-        static_cast<unsigned long>(nvs.open), static_cast<unsigned long>(nvs.erase));
+        unsigned(sdk.last_returned_action), sdk.last_status, shutter_pending,
+        static_cast<unsigned long>(nvs.init), static_cast<unsigned long>(nvs.open),
+        static_cast<unsigned long>(nvs.erase));
     if (n > 0 && size_t(n) < sizeof(line)) {
       size_t length = size_t(n);
       for (unsigned i = 0; i < unsigned(Kind::Count); ++i) {

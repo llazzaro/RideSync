@@ -79,8 +79,18 @@ def inspect(nm, objdump):
         assert any('ownerTask' in owner for owner in observed), f'missing SDK owner: {target}'
         assert all('ownerTask' in owner or owner in sdk_internal for owner in observed), (
             f'SDK submission outside retained owner: {target}: {observed}')
+    notify_callers = callers.get('ble_gatts_notify_custom', set())
+    assert any('ownerTask' in owner for owner in notify_callers), 'missing owner shutter submission'
+    assert all('ownerTask' in owner or owner == 'ble_gatts_notify' for owner in notify_callers), (
+        f'custom notification outside retained owner/SDK wrapper: {notify_callers}')
+    # SDK CCCD notifications can use its standard wrapper; application code may
+    # only use the addressed custom submission audited above.
+    assert all('ble_gatts_' in owner for owner in callers.get('ble_gatts_notify', set())), (
+        'unexpected application call to generic notification wrapper')
+    assert 'ridesync::insta360::encodeShutterEvent()' in symbols, 'shared shutter encoder missing'
     print('PASS: RAM config store; empty persistent object; core/PHY refusal boundaries; no unexpected NVS callers')
     print('PASS: application advertising start/stop/terminate callers stay in retained SDK owner')
+    print('PASS: shared shutter encoder linked; custom notification application caller is retained owner')
     print('PASS: strong Arduino Bluetooth HAL retains controller memory before setup')
     print('PHY getters/setters remain linked but are behind open refusal; source error-branch review is still required.')
 

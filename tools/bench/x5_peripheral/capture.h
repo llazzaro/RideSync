@@ -20,6 +20,8 @@ enum class Kind : uint8_t {
   Error,
   Stop,
   Attribute,
+  ShutterRequest,
+  ShutterResult,
   Count
 };
 enum class StopReason : uint8_t {
@@ -123,7 +125,15 @@ private:
   bool used_ = false, active_ = false, ready_ = false;
   StopReason reason_ = StopReason::None;
 };
-enum class SdkAction : uint8_t { None, Startup, Prepare, Advertise, StopAdvertising, Terminate };
+enum class SdkAction : uint8_t {
+  None,
+  Startup,
+  Prepare,
+  Advertise,
+  StopAdvertising,
+  Terminate,
+  Shutter
+};
 struct SdkPublication {
   SdkAction action = SdkAction::None, last_returned_action = SdkAction::None;
   bool in_flight = false, stop_requested = false;
@@ -172,6 +182,55 @@ private:
     return capture.active() && !state_.stop_requested && !state_.in_flight;
   }
   SdkPublication state_;
+};
+// One boot-lifetime peer and one pending operator request. No command queue,
+// retry, recording state, retained payload or disconnect replay.
+class ShutterControl {
+public:
+  void connected(uint16_t connection) {
+    disconnected();
+    connection_ = connection;
+  }
+  void disconnected() {
+    cancel();
+    connection_ = 0xffff;
+    attribute_ = 0;
+  }
+  void subscription(uint16_t connection, uint16_t attribute, bool notify) {
+    if (connection != connection_)
+      return;
+    if (!notify || attribute != attribute_)
+      cancel();
+    attribute_ = notify ? attribute : 0;
+  }
+  bool request(Capture &capture, const SdkControl &sdk, uint32_t now) {
+    if (pending_ || !allowed(capture, sdk, now))
+      return false;
+    pending_ = true;
+    return true;
+  }
+  bool admit(Capture &capture, SdkControl &sdk, uint32_t now, uint16_t &connection,
+             uint16_t &attribute) {
+    const bool submit = pending_ && allowed(capture, sdk, now);
+    cancel(); // Consumed/refused exactly once, irrespective of SDK return.
+    if (!submit || !sdk.begin(SdkAction::Shutter))
+      return false;
+    connection = connection_;
+    attribute = attribute_;
+    return true;
+  }
+  void cancel() { pending_ = false; }
+  bool pending() const { return pending_; }
+
+private:
+  bool allowed(Capture &capture, const SdkControl &sdk, uint32_t now) {
+    capture.tick(now);
+    const auto state = sdk.snapshot();
+    return capture.active() && !state.stop_requested && !state.in_flight && connection_ != 0xffff &&
+           attribute_ != 0;
+  }
+  uint16_t connection_ = 0xffff, attribute_ = 0;
+  bool pending_ = false;
 };
 inline bool canReport(size_t length, size_t available) { return length && length <= available; }
 inline size_t formatEvent(const Event &event, bool private_hex, char *line, size_t capacity) {

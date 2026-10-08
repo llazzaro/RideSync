@@ -1,9 +1,85 @@
 #include "capture.h"
+#include "protocol/insta360_codec.h"
 #include <cassert>
 #include <cstring>
 
 using namespace x5_probe;
 int main() {
+  const uint8_t expected[] = {0xfc, 0xef, 0xfe, 0x86, 0x00, 0x03, 0x01, 0x02, 0x00};
+  const auto shutter_bytes = ridesync::insta360::encodeShutterEvent();
+  assert(shutter_bytes.size() == sizeof(expected));
+  assert(std::memcmp(shutter_bytes.data(), expected, sizeof(expected)) == 0);
+  {
+    Capture capture;
+    SdkControl sdk;
+    ShutterControl shutter;
+    assert(!shutter.request(capture, sdk, 0)); // Idle is capture-only.
+    assert(capture.begin(0));
+    capture.ready();
+    assert(!shutter.request(capture, sdk, 1)); // No peer.
+    shutter.connected(7);
+    assert(!shutter.request(capture, sdk, 2)); // No CE82 notify subscription.
+    shutter.subscription(8, 18, true);         // Wrong peer cannot grant admission.
+    assert(!shutter.request(capture, sdk, 3));
+    shutter.subscription(7, 18, true);
+    assert(shutter.request(capture, sdk, 4));
+    assert(!shutter.request(capture, sdk, 5)); // One bounded pending slot.
+    uint16_t conn = 0xffff, attr = 0;
+    assert(shutter.admit(capture, sdk, 6, conn, attr));
+    assert(conn == 7 && attr == 18 && sdk.snapshot().action == SdkAction::Shutter);
+    assert(!shutter.request(capture, sdk, 7)); // SDK attempt still in flight.
+    sdk.complete(19);                          // Ambiguous/error return never queues a retry.
+    assert(!shutter.admit(capture, sdk, 8, conn, attr));
+    assert(sdk.snapshot().accepted == 1 && sdk.snapshot().returned == 1);
+    assert(shutter.request(capture, sdk, 9)); // Only a fresh explicit S may try again.
+    assert(shutter.admit(capture, sdk, 10, conn, attr));
+    sdk.complete(0);
+    assert(!shutter.admit(capture, sdk, 11, conn, attr));
+  }
+  for (unsigned scenario = 0; scenario < 4; ++scenario) {
+    Capture capture;
+    SdkControl sdk;
+    ShutterControl shutter;
+    assert(capture.begin(0));
+    capture.ready();
+    shutter.connected(7);
+    shutter.subscription(7, 18, true);
+    assert(shutter.request(capture, sdk, 1));
+    uint32_t submission = 2;
+    if (scenario == 0) {
+      capture.stop(StopReason::Requested);
+      sdk.requestStop();
+    } else if (scenario == 1)
+      submission = Capture::kWindowMs;
+    else if (scenario == 2)
+      shutter.disconnected();
+    else
+      shutter.subscription(7, 18, false);
+    uint16_t conn = 0xffff, attr = 0;
+    assert(!shutter.admit(capture, sdk, submission, conn, attr));
+    assert(!shutter.pending() && sdk.snapshot().accepted == 0);
+    assert(!shutter.admit(capture, sdk, submission, conn, attr));
+  }
+  {
+    Capture capture;
+    SdkControl sdk;
+    ShutterControl shutter;
+    assert(capture.begin(0));
+    capture.ready();
+    shutter.connected(7);
+    shutter.subscription(7, 18, true);
+    assert(shutter.request(capture, sdk, 1));
+    shutter.cancel(); // Allocation failure or synchronous X cannot replay later.
+    uint16_t conn, attr;
+    assert(!shutter.admit(capture, sdk, 2, conn, attr));
+    assert(shutter.request(capture, sdk, 3));
+    assert(shutter.admit(capture, sdk, 4, conn, attr));
+    capture.stop(StopReason::Requested);
+    sdk.requestStop();
+    assert(sdk.snapshot().in_flight && sdk.snapshot().stop_requested);
+    sdk.complete(0); // Accepted-before-stop work remains honest, not retro-cancelled.
+    assert(!shutter.request(capture, sdk, 5));
+  }
   {
     // A cancelled/late sync may not even begin preparation; no stop is lost
     // behind a startup operation whose return publication arrives afterwards.
