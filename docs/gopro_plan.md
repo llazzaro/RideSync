@@ -84,6 +84,11 @@ Initial pairing also needs Camera Management GP-0090, write GP-0091 and response
 GP-0092, with subscribed response before pairing-finish. Bonding alone does not
 clear the pairing screen. Setup then claims external control on Command; neither
 acknowledgment observes recording state.
+The native fake host also tests a resource-unavailable external-control claim:
+setup stops before identity/status discovery, keeps capabilities and recording state
+unknown, retires the link and does not replay intent. This synthetic result
+does not prove the cause of a real camera refusal; qualify competing-client
+ownership with physical capture.
 
 [Control](https://gopro.github.io/OpenGoPro/docs/ble/control/) defines Set
 Shutter 0/1 and recommends Keep Alive every three seconds. Establish video

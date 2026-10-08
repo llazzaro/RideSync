@@ -91,7 +91,13 @@ manager, codec and shared central using a deterministic fake host. It covers
 synthetic pairing/control/identity/status setup, missing Management/CCCD,
 Busy gating, Encoding confirmation, dropped shutter ACK, fragmentation,
 oversized notifications and fragment expiry. It also rejects empty or wrong
-status elements in all three successful Register replies.
+status elements in all three successful Register replies. A synthetic
+resource-unavailable external-control claim refusal closes the link before
+Hardware Info/API/status or shutter work, with no manager Backoff replay under
+a three-attempt policy.
+This exercises the refusal path; the fixture does not establish that another
+physical client caused the refusal.
+
 The fake packets are authored from published protocol structure and are not
 HERO12 captures. `pio run -e hero12_adapter_compile` links the opt-in ESP32
 composition against the pinned real backend without starting BLE. It proves

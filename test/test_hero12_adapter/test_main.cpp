@@ -65,7 +65,8 @@ struct ScriptHost : SilentHost {
   bool busy = false, ready = true, ignore_shutter_effect = false, drop_shutter_ack = false;
   unsigned hardware_not_ready = 0;
   uint8_t hardware_model = 62, api_major = 1;
-  bool reject_pair = false, wrong_pair_route = false, wrong_query_status = false;
+  bool reject_pair = false, reject_claim = false, wrong_pair_route = false,
+       wrong_query_status = false;
   bool fragment_hardware = false;
   uint8_t empty_register_target = 0, wrong_register_target = 0;
   BleBondAdmission bond;
@@ -230,7 +231,7 @@ struct Rig {
       } else if (c.handle == 3) {
         notify_handle = 6;
         if (payload[0] == 0xf1)
-          reply = {0xf1, 0xe9, 8, 1};
+          reply = {0xf1, 0xe9, 8, static_cast<uint8_t>(host.reject_claim ? 6 : 1)};
         else if (payload[0] == 0x3c && host.hardware_not_ready) {
           --host.hardware_not_ready;
           reply = {0x3c, 1};
@@ -497,6 +498,39 @@ void pairing_rejection_is_distinct_from_classic_ack() {
   TEST_ASSERT_EQUAL_INT((int)Hero12Fault::SetupRejected, (int)r.adapter.fault(0));
   TEST_ASSERT_EQUAL_INT((int)CapabilityState::Unknown, (int)r.manager.state(0)->capabilities.start);
 }
+void external_control_refusal_retires_before_identity_or_intent() {
+  RetryPolicy policy = Hero12Adapter::managerPolicy();
+  policy.max_attempts = 3;
+  Rig r(policy);
+  r.host.reject_claim = true; // Resource unavailable is not proof of another client's ownership.
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  unsigned pair = 0, claim = 0;
+  for (const auto &c : r.host.commands) {
+    if (c.phase != BlePhase::Write)
+      continue;
+    const uint8_t id = c.bytes[2];
+    if (c.handle == 43 && id == 3)
+      ++pair;
+    else if (c.handle == 3 && id == 0xf1)
+      ++claim;
+    else
+      TEST_FAIL_MESSAGE("identity, API, status, shutter or other write followed claim refusal");
+  }
+  TEST_ASSERT_EQUAL_UINT(1, pair);
+  TEST_ASSERT_EQUAL_UINT(1, claim);
+  TEST_ASSERT_EQUAL_INT((int)Hero12Fault::SetupRejected, (int)r.adapter.fault(0));
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Idle, (int)r.manager.state(0)->lifecycle);
+  TEST_ASSERT_EQUAL_INT((int)CapabilityState::Unknown, (int)r.manager.state(0)->capabilities.start);
+  TEST_ASSERT_EQUAL_INT((int)RecordingState::Unknown, (int)r.manager.state(0)->observed);
+  TEST_ASSERT_EQUAL_INT((int)BlePhase::Closed, (int)r.adapter.central().phase(0));
+  TEST_ASSERT_TRUE(r.adapter.canDestroy());
+  const size_t sent = r.host.commands.size();
+  r.clock.value += 120001;
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Idle, (int)r.manager.state(0)->lifecycle);
+  TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size()); // No Backoff replay with three attempts.
+}
 void returned_model_and_api_must_match_independent_qualification() {
   {
     Rig r;
@@ -656,6 +690,7 @@ int main() {
   RUN_TEST(initial_hardware_readiness_polls_before_identity_qualification);
   RUN_TEST(fragmented_hardware_identity_completes_only_after_second_packet);
   RUN_TEST(pairing_rejection_is_distinct_from_classic_ack);
+  RUN_TEST(external_control_refusal_retires_before_identity_or_intent);
   RUN_TEST(returned_model_and_api_must_match_independent_qualification);
   RUN_TEST(missing_source_qualification_refuses_transport_admission);
   RUN_TEST(fifth_registry_peer_is_explicitly_refused_by_four_slot_transport);
