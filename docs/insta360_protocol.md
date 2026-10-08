@@ -77,18 +77,25 @@ This pure primitive has no BLE delivery or automatic repeat and is not an
 idempotent Start/Stop API. No receive parser, ACK, sequence field or recording
 observation is invented from these opaque bytes. Explicit Start/Stop and state
 decoding remain unsupported pending licensed source facts or annotated evidence.
-Issue #19 remains open: a primitive without a usable camera recording route
-does not complete it. Unknown incoming data stays unclassified; private bounded
-captures must not be promoted into state from a colon or a missing timer.
+Issue #19 remains open: the shutter primitive and bench submission do not
+establish successful recording or authoritative state. Unknown incoming data
+stays unclassified; private bounded captures must not be promoted into state
+from a colon or a missing timer.
 
 The [October 9 name-aligned trial](hardware-results/2026-10-09-x5-pairing.md)
 established a real CE80 connection, CE82 subscription and CE81 writes; the owner
 confirmed the remote connected on the X5 display. Compared with the preceding
 zero-connection trial, only the name changed to the pinned MIT examples'
 `Insta360 GPS Remote`. This supports using that name on this bench, without
-establishing a universal name-filter requirement. No shutter event was sent;
-the next step is a single explicitly requested, addressed CE82 shutter event
-with camera-observed results and no automatic replay. Keep NVS refusal guards;
+establishing a universal name-filter requirement. That pairing trial sent no
+shutter event. The [separate one-shot trial](hardware-results/2026-10-09-x5-pairing.md#separate-one-shot-shutter-trial)
+submitted exactly one explicitly requested, addressed CE82 shutter event and
+returned SDK status 0, without replay. SDK status 0 does not prove camera delivery.
+The owner answered yes about an indicator/timer but also reported that the X5
+had no SD card and could not record. Recording
+remains unclassified; no completed recording or saved media was established.
+The next REC/STOP test needs a card in the camera, recorded firmware and
+camera-observed results. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Wake and identification
@@ -114,15 +121,18 @@ original and fork are one lineage, not independent camera confirmation.
 These licensed source facts can specify software expectations without requiring
 raw captures for every byte. Manufacturer contents are distinct from the full
 serialized advertisement, which must account for AD lengths, flags, services,
-name placement and the legacy payload limit in the pinned SDK. No RideSync
-wake transmission, actual X5 identifier or successful wake has been observed.
+name placement and the legacy payload limit in the pinned SDK. The
+[October 9 wake-only bench trial](hardware-results/2026-10-09-x5-wake.md)
+transmitted a manufacturer value derived from the observed X5 name; a passive
+Mac scan matched the exact expected value. Camera wake is not yet confirmed.
 #9 still needs its actual bounded shared advertising/reconnect route; #22 owns
 physical per-model wake confirmation. Do not add wake data to normal pairing
 or infer recording state from a wake or connection response.
 
 Multi-camera wake is a hypothesis to test by rotating identifiers with deadlines
 while preserving existing connections. Advertising support under multiple links
-must be measured on the selected ESP32 stack. No wake implementation exists.
+must be measured on the selected ESP32 stack. The isolated wake-only diagnostic
+is available; no production wake implementation exists.
 
 ## Model differences and evidence labels
 
@@ -135,8 +145,10 @@ now includes a limited RideSync Observed result: [X5-associated BE80 discovery
 and unclassified notification capture](hardware-results/2026-10-08-x5-discovery.md).
 That BE80 observation does not establish remote pairing or recording control.
 The later [CE80 pairing trial](hardware-results/2026-10-09-x5-pairing.md) includes
-subscription and owner-confirmed connection. No Confirmed-by-testing control
-result exists; X5 firmware is unrecorded and GO 3S target/protocol remain unresolved.
+subscription and owner-confirmed connection. The separate one-shot trial records
+one shutter submission with SDK status 0 and an unresolved camera recording result.
+No Confirmed-by-testing control result exists; X5 firmware is unrecorded and
+GO 3S target/protocol remain unresolved.
 
 ## Implementation prerequisites from pinned sources
 
