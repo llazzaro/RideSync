@@ -26,7 +26,7 @@ from the ESP32 T-A7670 definitions in the [LILYGO example source](https://github
 | Modem/peripheral power enable | 12 | Example's `BOARD_POWERON_PIN`; GPIO12 is a strapping pin, so boot level and attached circuitry matter. |
 | SD SPI SCK / MISO / MOSI / CS | 14 / 2 / 15 / 13 | Example definitions. GPIO2 and GPIO15 are strapping pins and the SD socket shares these signals. |
 | Default I2C SDA / SCL | 21 / 22 | Example defaults; verify no fitted-device or header conflict. |
-| GNSS antenna | Not a GPIO | Confirm the fitted modem option, connector/antenna and RF path physically; no antenna connection or sky-view test is in evidence. |
+| GNSS antenna | Not a GPIO | Confirm the fitted modem option, connector/antenna and RF path physically; the owner reports an antenna connected, but no position fix has been observed. |
 
 This is a conflict checklist, not an approved wiring map. [Espressif identifies
 GPIO0, GPIO2, GPIO5, GPIO12 and GPIO15 as ESP32 strapping
@@ -37,8 +37,9 @@ Identify the board marking and compare the matching schematic to the unit,
 then check continuity, boot straps, header labels and antenna connector before
 assigning any accessory GPIO. Do not substitute T-Call or S3 board definitions.
 
-Bring-up: attach USB, enumerate the serial port, build/upload, open 115200-baud
-monitor and record the startup message. This unit's factory AT firmware restarted
+Bring-up: attach USB, enumerate the serial port, build/upload and follow the
+[macOS serial connection procedure](device_connection.md) before opening a
+115200-baud monitor. Record any startup message. This unit's factory AT firmware restarted
 on serial open; wait for its startup output to settle and require `AT` → `OK`
 before issuing other commands. The baseline contains no elapsed-time measurement,
 so a numeric command-ready deadline is still unqualified and must be measured
@@ -87,6 +88,9 @@ readiness. After a verified factory backup, vendor diagnostic installation and
 a further USB connection change, two sessions reproduced modem command readiness
 and a bounded GNSS probe reproduced READY with no position fix. The connection
 change's electrical effect was not measured. These are vendor-diagnostic results;
+A later connection that skipped pySerial DTR/RTS updates and cleared HUPCL
+received AT responses without an observed ESP32 reset banner. See the
+[connection procedure](device_connection.md) and dated report for limits.
 RideSync drivers and worst-case startup/recovery remain unqualified.
 
 ## Button software and qualification (#8)

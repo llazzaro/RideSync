@@ -154,3 +154,42 @@ voltage sag, reset state and other changed conditions were not measured. Two
 startup observations do not qualify a worst-case startup deadline. RideSync
 drivers, actual GPS position, camera control and SD/IMU operation remain untested
 on the device. Issue #1 remains open.
+
+## Antenna-connected trials and serial-open reset investigation
+
+The owner subsequently confirmed the GNSS antenna was connected, with a red
+modem LED on and the antenna indoors/by a window. A continuous session reached
+GNSS READY and returned twelve `AT+CGPSINFO` responses parsed by the actual
+RideSync host-built parser as `NoFix`, ending at approximately 143.31 seconds.
+No coordinates were observed. This was still vendor firmware on the ESP32,
+not on-device RideSync driver qualification.
+
+Startup remained intermittent. A later run with USB-A to USB-C completed all
+13 baud probes without modem response, printing failure at approximately
+153.7 seconds. The owner reported modem LEDs off. After unplug/replug the LEDs
+were reported on, but during another ordinary serial-open trial they went off.
+That trial showed a fresh ESP32 startup and the diagnostic's modem reset/PWRKEY
+sequence; it was deliberately stopped after approximately 89.8 seconds with
+no host AT success. It did not complete the baud sweep. These observations do
+not distinguish a driver control-line transient, modem reset/PWRKEY timing or
+supply behavior; no electrical waveform or supply measurement was taken.
+
+After another owner unplug/replug with red LEDs on, a connection was opened
+without pySerial's explicit DTR/RTS state updates and with HUPCL cleared through
+termios. This trial received a host `AT` → `OK` without an observed ESP32 reset
+banner. `AT+CGNSSPWR?` returned 0; enabling GNSS received `OK`, followed by
+`+CGNSSPWR: READY!`. This supports investigating serial-open/startup behavior;
+a single trial does not establish a reliable fix or prove which control signal
+caused the earlier failure. No firmware was written during these trials.
+
+The reproducible connection setup and its platform/version limitations are in
+[Connecting this device](../device_connection.md). Raw logs remain private and
+ignored by Git; no IMEI, serial number, coordinates or flash contents are added
+to this report.
+
+The passive-open session ended normally after approximately 199.9 seconds:
+18 `AT+CGPSINFO` responses were parsed as `NoFix`, with no observed ESP32 reset
+banner. The owner confirmed the antenna remained indoors next to a window and
+could not perform an outdoor test today. Clear-sky position acquisition is
+therefore deferred; the no-fix result does not establish a receiver/antenna
+fault. The host serial descriptor was closed after the bounded test.
