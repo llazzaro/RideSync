@@ -319,3 +319,26 @@ counters zero. No `W` command was sent. This confirms the installed sketch is
 waiting; it does not establish allocation, writing, flushing or reset recovery.
 The board now runs `sd_logging`, superseding the earlier installed-image notes.
 Private upload and serial logs retain provenance without publishing identifiers.
+
+
+## First production worker write result (host readback pending)
+
+After the owner confirmed reinserting the card with power removed and
+reconnecting, H1N_SD was absent from the host and the board serial port was
+present. A passive serial connection observed `WAIT_W` before sending one `W`.
+The actual production allocator reported committed status, counter 1 and zero
+identity error. Four rows were admitted at session monotonic times 1000, 2000,
+3000 and 4000 ms. The final reports were:
+
+```text
+SD_LOGGING: DONE reason=none worker_finished=1 io=0
+SD_LOGGING: DONE gap_ms=1 max_gap_ms=2 a=4 d=0 r=0 w=4 f=4 l=0 p=3203 t=0 s=1 gen=3204 outcome=0 io=0 finished=1
+```
+
+This is physical evidence of successful allocation and the production SD
+worker's write/flush/close path for four diagnostic missing-GNSS rows on this
+card. No reset banner was observed. The observed maximum control-loop gap was
+2 ms for this short isolated run; it is not a worst-case latency guarantee or
+concurrent modem/BLE/IMU qualification. Host CSV/ledger readback and preservation
+checks are still pending, as are reset and power-loss trials. Issue #11 remains
+open. The installed image remains the isolated `sd_logging` bench.

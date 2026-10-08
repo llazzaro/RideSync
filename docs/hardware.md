@@ -99,8 +99,9 @@ and CRC using GPIO12 power enable and SPI pins 14/2/15/13. See the dated report
 for the exact transcript. This qualifies one functional mount/read observation,
 not production logging, electrical margins or reset/power-loss durability. The
 board subsequently received the [production storage writer bench](../tools/bench/sd_logging/README.md).
-Its upload hashes and idle `WAIT_W` state were verified; no write command has
-been sent yet. It does not start the modem.
+Its upload hashes were verified, and one physical four-row run completed with
+all rows written/flushed, zero IO/loss errors and worker cleanup finished. Host
+readback and reset/power-loss qualification remain pending. It does not start the modem.
 
 
 ## Button software and qualification (#8)
