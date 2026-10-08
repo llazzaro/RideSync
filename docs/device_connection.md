@@ -7,8 +7,8 @@ not the RideSync application. Later on the same day, the board was switched to
 the [SD read-only diagnostic](../tools/bench/sd_readonly/README.md) for card
 qualification, then to the [SD writer bench](../tools/bench/sd_logging/README.md).
 The writer is now installed and completed one four-row write/flush/close test;
-host CSV/ledger readback and original-file checksums passed. Reset/power-loss
-tests remain pending. Neither SD sketch exposes the AT bridge or starts the modem; restore
+host CSV/ledger readback and original-file checksums passed. One interrupted EN reset recovered to a fresh session on serial; its host
+readback and power-loss tests remain pending. Neither SD sketch exposes the AT bridge or starts the modem; restore
 ATdebug before repeating this guide's modem commands. The original full flash has been backed up and
 verified privately; the SIMCom modem firmware has not been changed.
 

@@ -367,3 +367,27 @@ checksums exactly. A private copy of the captured CSV and a verification receipt
 were retained outside the card. This verifies normal allocation/write/flush/close
 and host readback on this card; interrupted reset, power loss, full workload
 latency and concurrent peripheral qualification remain pending. Issue #11 stays open.
+
+
+## Interrupted reset and recovery serial result
+
+After the owner returned the card to the powered-off board and reconnected,
+a passive connection observed `WAIT_W`. One `W` committed counter 2. After
+`ROW accepted=2 monotonic_ms=2000`, before any observed DONE, the host explicitly
+pulsed the ESP32 EN reset through RTS using the pinned esptool hard-reset
+sequence: DTR deasserted, RTS asserted for 100 ms, then deasserted. This was
+a deliberate reset, not the passive monitor's ordinary open/close behavior.
+
+The capture contains a reset banner, the bench startup message and fresh
+`WAIT_W` counters. A second `W` then committed counter 3 and admitted four rows
+at 1000/2000/3000/4000 ms. It finished with `DONE reason=none worker_finished=1
+io=0`, accepted/written/flushed=4, dropped/rejected/lost=0 and stopped=1.
+The recovery run's observed maximum loop gap was 2 ms.
+
+A periodic health line from the interrupted run was cut off by the reset; it
+is not a complete final accounting record. The interruption proves neither
+the number of durable rows in that file nor an arbitrary IO/ledger interruption
+window. Host verification of the interrupted file, completed recovery file,
+previous successful CSV and expected ledger advancement is pending. This EN
+reset trial does not remove SD supply and is not a power-loss test. Issue #11
+remains open, as do concurrent-load, fault-latency and broader durability checks.
