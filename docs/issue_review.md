@@ -58,7 +58,7 @@ pure HERO12 pairing/control setup codecs from #4, separately from transport #35
 and adapter lifecycle. Official published model-specific data supports HERO12
 classic queries; newer-model capability/two-byte operations are outside its scope.
 Full initial pairing remains in #4, with no paired-only fallback or invented
-camera evidence. The plan now has 33 work packages plus maintenance #32/#33.
+camera evidence. At that stage the plan had 33 work packages plus maintenance #32/#33.
 
 2026-10-08 follow-up: [#37](https://github.com/llazzaro/RideSync/issues/37) extracts
 camera-event records/admission and actual ACK/observation hooks from #22.
@@ -68,3 +68,13 @@ single-producer storage ownership; #22 now depends on it and retains the full
 mixed-brand capacity, timing and disconnect/logging continuity bench matrix.
 This adds the 34th planned work package, plus maintenance #32/#33. No physical
 acceptance or unsupported camera protocol is replaced with synthetic success.
+
+2026-10-08 runtime audit follow-up: #38–#42 add five focused packages for the
+original unattended application workflow: configuration handoff, durable session
+identities, independent local telemetry, handlebar control/status, and actual
+worker supervision. The final #37 API audit prevents duplicate camera dispatch
+and storage producers; #40 resolves the SD worker/session ownership seam and
+camera-free logging. #41 retires delayed REC before STOP. #39 retains durable
+namespace/power-loss requirements. There are now 39 planned packages plus
+maintenance #32/#33. Source-only contracts do not close physical gates; #22
+and #31 retain their complete mixed-brand/soak/ride acceptance.

@@ -104,7 +104,7 @@ button-to-camera wiring remain open.
 ## Implementation plan
 
 The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
-contains 34 focused work packages plus maintenance fixes, dependencies and
+contains 39 focused work packages plus maintenance fixes, dependencies and
 acceptance criteria, tracked in [roadmap #16](https://github.com/llazzaro/RideSync/issues/16). See the
 [issue review](docs/issue_review.md) for scope splits:
 
