@@ -12,6 +12,8 @@ struct CameraConfig {
   CameraModel model = CameraModel::Unknown;
   std::string identifier;
   AddressType address_type = AddressType::Unknown;
+  // Empty, legacy MAC-shaped data, or six printable ASCII bytes for Insta360.
+  // Syntax acceptance neither qualifies wake support nor derives an ID from a MAC.
   std::string wake_identifier;
   bool enabled = true;
   bool gps_telemetry = false;

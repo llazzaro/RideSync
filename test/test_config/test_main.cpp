@@ -97,8 +97,36 @@ void malformed_enum_and_source_bounds() {
   c.cameras[0].address_type = static_cast<AddressType>(999);
   TEST_ASSERT_EQUAL((int)ConfigError::InvalidAddressType, (int)validate(c).error);
 }
+void wake_identifiers_keep_legacy_values_and_accept_insta360_ascii_suffixes() {
+  SourceConfig c;
+  c.count = 1;
+  c.cameras[0] = camera();
+  for (auto model : {CameraModel::X5, CameraModel::GO3S, CameraModel::ONE_RS}) {
+    c.cameras[0].model = model;
+    for (const auto &value : {std::string(), std::string("01:23:45:67:89:ab"),
+                              std::string("ABC123"), std::string(" !~09Z")}) {
+      c.cameras[0].wake_identifier = value;
+      TEST_ASSERT_TRUE(validate(c).ok());
+    }
+  }
+  for (const auto &value : {std::string("12345"), std::string("1234567"), std::string("12345\n"),
+                            std::string("12345\0", 6), std::string("12345\x7f", 6),
+                            std::string("12345\x80", 6), std::string("01:23:45:67:89:ZZ")}) {
+    c.cameras[0].wake_identifier = value;
+    TEST_ASSERT_EQUAL((int)ConfigError::InvalidWakeIdentifier, (int)validate(c).error);
+  }
+  c.cameras[0].family = CameraFamily::GoPro;
+  c.cameras[0].model = CameraModel::HERO12_BLACK;
+  c.cameras[0].wake_identifier = "ABC123";
+  TEST_ASSERT_EQUAL((int)ConfigError::InvalidWakeIdentifier, (int)validate(c).error);
+  c.cameras[0].wake_identifier = "01:23:45:67:89:ab";
+  TEST_ASSERT_TRUE(validate(c).ok());
+  c.cameras[0].wake_identifier.clear();
+  TEST_ASSERT_TRUE(validate(c).ok());
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(wake_identifiers_keep_legacy_values_and_accept_insta360_ascii_suffixes);
   RUN_TEST(malformed_enum_and_source_bounds);
   RUN_TEST(counts_and_capacity);
   RUN_TEST(invalid_entries_are_actionable);

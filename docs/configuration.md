@@ -45,6 +45,21 @@ reboot and power-failure acceptance remain physical gates in #22/#31.
 
 ## Settings formats and storage ownership
 
+`CameraConfig::wake_identifier` accepts empty values and preserves legacy
+six-octet, colon-separated hexadecimal strings for existing settings. For
+Insta360 only, it also accepts exactly six printable ASCII bytes (`0x20` through
+`0x7E`), retaining their case and order. Controls, NUL, non-ASCII bytes and other
+lengths are rejected. The six-byte form is not accepted for GoPro.
+The pinned MIT [M5 source's identifier derivation](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/camera.h#L128-L141)
+copies the advertised camera name's final six characters as bytes in forward
+order and stores the BLE address separately. It does not establish a canonical
+serial or model compatibility. `name` is a user-facing label and is not used to
+derive this field. Legacy MAC-shaped values are preserved data, not qualified
+wake identifiers; never derive a wake suffix from a MAC. Validation and storage
+roundtrip grant no wake capability and enable no transmission. The existing
+settings schema and field bounds are unchanged; actual wake/recovery remains #9,
+with per-model physical qualification in #22.
+
 `ConfigPersistence` owns application settings, not credentials. Its `ConfigStore`
 port has bounded reads and set-plus-commit writes. The ESP32 `NvsConfigStore`
 uses the pinned SDK's direct `nvs_open/get_blob/set_blob/commit/close` APIs in
@@ -287,7 +302,7 @@ automatic default save, migration save, retry/reset command or erase.
 `CameraPeers` is separately provisioned once, copied and frozen for the owner
 lifetime. It must match every configured slot/model exactly and supply unique
 nonzero opaque IDs. No ID is derived from name/MAC/serial, and no persistence
-field is added. A later model/slot/count, typed BLE address or wake-address change invalidates
+field is added. A later model/slot/count, typed BLE address or wake-identifier change invalidates
 that fixed mapping permanently for this owner, even if settings change back.
 These comparisons enforce stability and never derive the opaque ID. Restoring
 admission requires a new explicitly provisioned, qualified session/owner after

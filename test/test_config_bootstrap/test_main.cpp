@@ -98,6 +98,20 @@ void bounded_copy_ignores_unused_strings_and_rejects_partial_changes() {
   TEST_ASSERT_FALSE(expandSettings(s, out));
   TEST_ASSERT_EQUAL_STRING("sentinel", out.cameras[0].name.c_str());
 }
+void insta360_wake_identifiers_survive_fixed_settings_handoff() {
+  auto c = camera();
+  c.cameras[0].family = CameraFamily::Insta360;
+  c.cameras[0].model = CameraModel::X5;
+  for (const char *value : {"ABC123", "01:23:45:67:89:ab"}) {
+    c.cameras[0].wake_identifier = value;
+    Settings settings;
+    TEST_ASSERT_TRUE(copySettings(c, settings));
+    TEST_ASSERT_EQUAL_STRING(value, settings.cameras[0].wake_identifier);
+    SourceConfig expanded;
+    TEST_ASSERT_TRUE(expandSettings(settings, expanded));
+    TEST_ASSERT_EQUAL_STRING(value, expanded.cameras[0].wake_identifier.c_str());
+  }
+}
 void mailbox_preserves_owned_copy_and_rejects_pressure() {
   SettingsRequests m;
   SettingsSave in, out;
@@ -449,6 +463,7 @@ void consumer_generation_limit_cannot_wrap_or_accept_zero_epoch() {
 }
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(insta360_wake_identifiers_survive_fixed_settings_handoff);
   RUN_TEST(peer_mapping_cannot_rebind_to_changed_address_or_be_restored_in_session);
   RUN_TEST(consumer_generation_limit_cannot_wrap_or_accept_zero_epoch);
   RUN_TEST(unavailable_read_during_save_revokes_settings_without_rewrite);

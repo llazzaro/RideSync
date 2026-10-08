@@ -20,6 +20,14 @@ bool sameMac(const std::string &a, const std::string &b) {
       return false;
   return true;
 }
+bool validInsta360WakeSuffix(const std::string &s) {
+  if (s.size() != 6)
+    return false;
+  for (unsigned char byte : s)
+    if (byte < 0x20 || byte > 0x7e)
+      return false;
+  return true;
+}
 } // namespace
 ConfigResult validate(const SourceConfig &c) {
   if (c.capacity == 0 || c.capacity > kMaxCameras)
@@ -54,9 +62,11 @@ ConfigResult validate(const SourceConfig &c) {
          p.address_type != AddressType::Random) ||
         ((p.enabled || !p.identifier.empty()) && p.address_type == AddressType::Unknown))
       return {ConfigError::InvalidAddressType, i, "set public or random BLE address type"};
-    if (!p.wake_identifier.empty() && !validMac(p.wake_identifier))
+    if (!p.wake_identifier.empty() && !validMac(p.wake_identifier) &&
+        !(p.family == CameraFamily::Insta360 && validInsta360WakeSuffix(p.wake_identifier)))
       return {ConfigError::InvalidWakeIdentifier, i,
-              "wake identifier must be a BLE address or empty"};
+              "wake identifier must be empty, legacy MAC syntax, or six printable ASCII bytes for "
+              "Insta360"};
     for (size_t j = 0; j < i; ++j)
       if (!p.identifier.empty() && sameMac(p.identifier, c.cameras[j].identifier))
         return {ConfigError::DuplicateIdentifier, i, "BLE address is already configured"};

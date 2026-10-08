@@ -53,6 +53,20 @@ void defaults_are_read_only() {
   p.service(90000);
   TEST_ASSERT_EQUAL(0, m.writes);
 }
+void wake_identifiers_roundtrip_without_schema_change() {
+  for (const char *value : {"ABC123", "01:23:45:67:89:ab"}) {
+    auto c = camera();
+    c.cameras[0].wake_identifier = value;
+    ConfigRecord record;
+    TEST_ASSERT_EQUAL((int)PersistStatus::Encoded, (int)encodeConfig(c, 7, record).status);
+    SourceConfig out;
+    uint64_t generation = 0;
+    TEST_ASSERT_EQUAL((int)PersistStatus::Loaded,
+                      (int)decodeConfig(record, out, generation).status);
+    TEST_ASSERT_EQUAL(7, generation);
+    TEST_ASSERT_EQUAL_STRING(value, out.cameras[0].wake_identifier.c_str());
+  }
+}
 void codec_bounds_and_roundtrip() {
   auto c = camera();
   c.cameras[7].name = std::string(100000, 'x');
@@ -381,6 +395,7 @@ void refusal_during_write_must_discard_pending() {
 
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(wake_identifiers_roundtrip_without_schema_change);
   RUN_TEST(refusal_during_write_must_discard_pending);
   RUN_TEST(refusal_during_request_must_discard_earlier_mailbox);
   RUN_TEST(golden_migration_requires_explicit_save);
