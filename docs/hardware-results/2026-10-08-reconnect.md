@@ -208,3 +208,40 @@ cold-start deadline/power-cycle qualification. The earlier ordinary-open
 failure remains in the evidence; no further potentially disruptive comparison
 was made. Issue #1 remains open for its exact manual and electrical/startup
 qualification criteria.
+
+## microSD host preparation
+
+The owner identified the host-mounted test card as `H1N_SD`. macOS reported an
+external writable FAT32 volume of 15,923,183,616 bytes, with approximately
+14.16 GB free. The volume already contained user files; their names and contents
+are not published. Neither RideSync ledger slot existed. A host open-file check
+reported no open descriptors on the volume at preparation time; this is not a
+continuous exclusive-access guarantee.
+
+A fresh nonzero 32-bit namespace was reserved before card writes in an external
+Mac-side registry under `Documents/RideSync-backups/sd-namespace-reservations`.
+The reservation is permanent even on failure and is scoped to this controlled
+RideSync deployment; random selection alone is not a global uniqueness proof.
+Using the existing offline commissioner, both root ledger slots were created
+exclusively, synced and read back. Each was 40 bytes and its namespace and CRC
+verified. Existing user files were not intentionally modified; the card was not
+formatted. The two commissioning tests also passed, including consumption by
+the real C++ session allocator. These results establish host preparation only,
+not ESP32 SD reads/writes, filesystem durability or power-loss behavior.
+
+The separate [SD read-only bench diagnostic](../../tools/bench/sd_readonly/README.md)
+builds with the pinned ESP32 toolchain. Its file operations are limited to
+reading the two fresh baseline slots at 1 MHz, with automatic formatting
+disabled. It awaits an explicit serial `S` command and does not operate modem
+reset/PWRKEY. Production storage/logger acceptance (#11) remains open.
+
+
+The read-only diagnostic was subsequently uploaded at 115200 baud; all four
+written-region hashes verified. The private factory-backup SHA-256 was checked
+again before the write. The ESP32 now runs `sd_readonly`, replacing ATdebug;
+SIMCom firmware was not changed and no whole-chip erase was requested. With the
+prepared card still host-mounted, serial `S` produced the expected `mount FAILED`
+result for the empty board socket. This is a negative-path check, not a
+successful physical card test. The prepared host card was then safely ejected
+for insertion with all board power removed. Actual card/ledger reading on the
+ESP32 is the next pending bench step.
