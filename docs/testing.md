@@ -294,3 +294,37 @@ failed-init admission. Record recovery writes separately from logical last-valid
 record outcomes. Do not perform this on production data. See
 [configuration.md](configuration.md) for deinitialized-handle, partial recovery,
 raw-flash and physical preservation limits.
+
+## Bounded BLE central software checks (#35)
+
+`pio test -e native` includes the real bounded owner against a fake async host:
+immediate/delayed callbacks, four-peer/global initiating fairness, multiple
+services and handle routing, missing properties/CCCD, subscription ATT/readback,
+copy bounds, queue overflow priority, stop/final detachment, deadline rollover
+and deadline-at-completion, failed termination, cancellation losing to connect,
+late generation on reused handle and restoration/capacity/security admission.
+
+`python -m unittest discover -s test -v` executes the actual ESP32 adapter against
+explicit SDK/NVS/crypto boundary stand-ins with ASan+UBSan. These exercise startup
+failures, irreversible sync timeout, actual store-status delegate refusal without
+deleting bonds, per-peer refusal, malformed mbuf copying, current-boot self-proof
+absence, NVS-vs-stack security/CCCD mismatch and final access after freeing a
+retired context. A bounded terminal-barrier regression checks zero wait ticks,
+full-queue fault sealing and absence of fabricated quiescence. An overlapping
+terminal/barrier during mbuf parsing must still refuse final context release. The crypto stand-in is not SHA256 verification. Actual pinned
+headers, SDK symbols and real crypto are checked by the target compile below.
+
+The exact upstream restore-function fixture is also compiled under sanitizers.
+Unmodified empty/OUR-only/PEER-only fixtures must report index -1 via UBSan; the
+two-line patch must pass those, nonempty bond ordering and original restore error
+cases. This reproduces an upstream source defect, not physical NVS behavior.
+
+Run `pio run -e lilygo_t_a7670e_r2` and `pio run -e ble_central_compile`. The latter
+retains the complete backend vtable and all raw API references even though default
+main does not invoke them. The pre-build patch must verify both freshly installed
+and cached sources, fail on drift and run before vendor object compilation. The
+source SHA pair and public APIs are documented in [sources.md](sources.md).
+Neither build activates BLE, flashes firmware, proves pairing/restore/capacity
+or measures SDK lock/NVS/init/teardown latency. Physical #17/#18/#4/#22 acceptance
+remains OPEN; qualification procedure and lifetime limits are in
+[ble_transport.md](ble_transport.md).

@@ -1,0 +1,812 @@
+#include "ble_esp32.h"
+#if defined(ARDUINO_ARCH_ESP32)
+#include "nvs_boot_guard.h"
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <esp_bt.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
+#if CONFIG_BT_LE_CONTROLLER_NPL_OS_PORTING_SUPPORT
+#error "RideSync bounded barrier requires the pinned exposed FreeRTOS NPL queue ABI"
+#endif
+#include <mbedtls/sha256.h>
+#include <nimble/esp_port/esp-hci/include/esp_nimble_hci.h>
+#include <nimble/nimble/host/include/host/ble_hs.h>
+#include <nimble/nimble/host/include/host/ble_store.h>
+#include <nimble/nimble/host/src/ble_hs_resolv_priv.h>
+#include <nimble/nimble/host/store/config/include/store/config/ble_store_config.h>
+#include <nimble/porting/nimble/include/nimble/nimble_port.h>
+#include <nimble/porting/nimble/include/os/os_mbuf.h>
+#include <nvs.h>
+
+extern "C" void ble_store_config_init(void);
+namespace ridesync {
+namespace {
+constexpr unsigned kStoreKeys = 80;
+struct CallbackAccess {
+  std::atomic<unsigned> &count;
+  explicit CallbackAccess(std::atomic<unsigned> &counter) : count(counter) {
+    count.fetch_add(1, std::memory_order_acq_rel);
+  }
+  ~CallbackAccess() { count.fetch_sub(1, std::memory_order_release); }
+};
+const char *prefixes[] = {"our_sec_",   "peer_sec_", "cccd_sec_", "csfc_sec_",
+                          "local_irk_", "rpa_rec_",  "p_dev_rec_"};
+const int types[] = {BLE_STORE_OBJ_TYPE_OUR_SEC,     BLE_STORE_OBJ_TYPE_PEER_SEC,
+                     BLE_STORE_OBJ_TYPE_CCCD,        BLE_STORE_OBJ_TYPE_CSFC,
+                     BLE_STORE_OBJ_TYPE_LOCAL_IRK,   BLE_STORE_OBJ_TYPE_PEER_ADDR,
+                     BLE_STORE_OBJ_TYPE_PEER_DEV_REC};
+const size_t sizes[] = {sizeof(ble_store_value_sec),       sizeof(ble_store_value_sec),
+                        sizeof(ble_store_value_cccd),      sizeof(ble_store_value_csfc),
+                        sizeof(ble_store_value_local_irk), sizeof(ble_store_value_rpa_rec),
+                        sizeof(ble_hs_dev_records)};
+BleUuid uuid(const ble_uuid_any_t &source) {
+  BleUuid out;
+  out.size = source.u.type == BLE_UUID_TYPE_16 ? 2 : source.u.type == BLE_UUID_TYPE_128 ? 16 : 0;
+  if (out.size == 2) {
+    out.bytes[0] = source.u16.value & 0xff;
+    out.bytes[1] = source.u16.value >> 8;
+  } else if (out.size == 16) {
+    std::memcpy(out.bytes.data(), source.u128.value, 16);
+  }
+  return out;
+}
+ble_uuid_any_t uuid(const BleUuid &source) {
+  ble_uuid_any_t out{};
+  if (source.size == 2) {
+    out.u16.u.type = BLE_UUID_TYPE_16;
+    out.u16.value = source.bytes[0] | uint16_t(source.bytes[1]) << 8;
+  } else {
+    out.u128.u.type = BLE_UUID_TYPE_128;
+    std::memcpy(out.u128.value, source.bytes.data(), 16);
+  }
+  return out;
+}
+ble_addr_t address(const BondIdentity &source) {
+  ble_addr_t out{};
+  out.type = source.type == IdentityType::Public ? BLE_ADDR_PUBLIC : BLE_ADDR_RANDOM;
+  std::memcpy(out.val, source.address.data(), 6);
+  return out;
+}
+BondIdentity identity(const ble_addr_t &source) {
+  BondIdentity out;
+  out.type = source.type == BLE_ADDR_PUBLIC ? IdentityType::Public
+             : source.type == BLE_ADDR_RANDOM && (source.val[5] & 0xc0) == 0xc0
+                 ? IdentityType::RandomStatic
+                 : IdentityType::UnresolvedPrivate;
+  std::memcpy(out.address.data(), source.val, 6);
+  // Caller supplies the provenance; observations never claim verification alone.
+  return out;
+}
+bool copyValue(os_mbuf *mbuf, BleEvent &out) {
+  if (!mbuf)
+    return false;
+  const auto length = os_mbuf_len(mbuf);
+  if (length > kBlePayload)
+    return false;
+  out.size = length;
+  return os_mbuf_copydata(mbuf, 0, length, out.bytes.data()) == 0;
+}
+int guardedRead(int type, const ble_store_key *key, ble_store_value *value) {
+  auto &host = Esp32BleHost::instance();
+  if (!nvsBootStatus().persistenceAllowed()) {
+    host.onStoreStatus(nullptr, nullptr);
+    return BLE_HS_ESTORE_FAIL;
+  }
+  return ble_store_config_read(type, key, value);
+}
+int guardedWrite(int type, const ble_store_value *value) {
+  auto &host = Esp32BleHost::instance();
+  if (!nvsBootStatus().persistenceAllowed()) {
+    host.onStoreStatus(nullptr, nullptr);
+    return BLE_HS_ESTORE_FAIL;
+  }
+  const int rc = ble_store_config_write(type, value);
+  if (rc && rc != BLE_HS_ESTORE_CAP)
+    host.onStoreStatus(nullptr, nullptr);
+  return rc;
+}
+int guardedDelete(int type, const ble_store_key *key) {
+  if (!nvsBootStatus().persistenceAllowed()) {
+    Esp32BleHost::instance().onStoreStatus(nullptr, nullptr);
+    return BLE_HS_ESTORE_FAIL;
+  }
+  return ble_store_config_delete(type, key);
+}
+bool stackMatches(unsigned schema, const void *blob) {
+  ble_store_key key{};
+  ble_store_value value{};
+  const void *result = nullptr;
+  int rc = BLE_HS_ENOTSUP;
+  switch (schema) {
+  case 0:
+  case 1: {
+    const auto &sec = *static_cast<const ble_store_value_sec *>(blob);
+    key.sec.peer_addr = sec.peer_addr;
+    rc = schema == 0 ? ble_store_read_our_sec(&key.sec, &value.sec)
+                     : ble_store_read_peer_sec(&key.sec, &value.sec);
+    result = &value.sec;
+    break;
+  }
+  case 2: {
+    const auto &cccd = *static_cast<const ble_store_value_cccd *>(blob);
+    key.cccd.peer_addr = cccd.peer_addr;
+    key.cccd.chr_val_handle = cccd.chr_val_handle;
+    rc = ble_store_read_cccd(&key.cccd, &value.cccd);
+    result = &value.cccd;
+    break;
+  }
+  case 3:
+    key.csfc.peer_addr = static_cast<const ble_store_value_csfc *>(blob)->peer_addr;
+    rc = ble_store_read_csfc(&key.csfc, &value.csfc);
+    result = &value.csfc;
+    break;
+  case 4:
+    key.local_irk.addr = static_cast<const ble_store_value_local_irk *>(blob)->addr;
+    rc = ble_store_read_local_irk(&key.local_irk, &value.local_irk);
+    result = &value.local_irk;
+    break;
+  case 5:
+    key.rpa_rec.peer_rpa_addr = static_cast<const ble_store_value_rpa_rec *>(blob)->peer_rpa_addr;
+    rc = ble_store_read_rpa_rec(&key.rpa_rec, &value.rpa_rec);
+    result = &value.rpa_rec;
+    break;
+  case 6: {
+    const auto &record = *static_cast<const ble_hs_dev_records *>(blob);
+    const auto *records = ble_rpa_get_peer_dev_records();
+    const int count = ble_rpa_get_num_peer_dev_records();
+    if (count < 0 || count > CONFIG_BT_NIMBLE_MAX_BONDS + 1)
+      return false;
+    for (int i = 0; i < count; ++i)
+      if (std::memcmp(&records[i], &record, sizeof record) == 0)
+        return true;
+    return false;
+  }
+  }
+  return rc == 0 && result && std::memcmp(blob, result, sizes[schema]) == 0;
+}
+} // namespace
+Esp32BleHost &Esp32BleHost::instance() {
+  static Esp32BleHost host;
+  return host;
+}
+void Esp32BleHost::fail(BleFault f, int error) {
+  error_.store(error);
+  fault_.store(f);
+  state_.store(BleHostState::Failed);
+}
+bool Esp32BleHost::configureRestore(const BleStoreProof &proof) {
+  if (leased_ || proof.qualification_record == 0)
+    return false;
+  expected_ = proof;
+  return true;
+}
+BleStoreObservation Esp32BleHost::inspectStore(bool compare_stack) {
+  BleStoreObservation out;
+  if (host_started_ || !nvsBootStatus().persistenceAllowed()) {
+    out.error = BLE_HS_ESTORE_FAIL;
+    return out;
+  }
+  nvs_handle_t handle = 0;
+  const auto rc = nvs_open("nimble_bond", NVS_READONLY, &handle);
+  if (rc != ESP_OK && rc != ESP_ERR_NVS_NOT_FOUND) {
+    out.error = rc;
+    return out;
+  }
+  std::array<std::array<char, 16>, kStoreKeys> names{};
+  unsigned count = 0;
+  bool valid = true;
+  if (rc == ESP_OK) {
+    auto iterator = nvs_entry_find("nvs", "nimble_bond", NVS_TYPE_ANY);
+    while (iterator) {
+      nvs_entry_info_t info{};
+      nvs_entry_info(iterator, &info);
+      if (count == names.size() || info.type != NVS_TYPE_BLOB) {
+        valid = false;
+        break;
+      }
+      std::memcpy(names[count++].data(), info.key, 16);
+      iterator = nvs_entry_next(iterator);
+    }
+    if (iterator)
+      nvs_release_iterator(iterator);
+  }
+  std::sort(names.begin(), names.begin() + count,
+            [](const std::array<char, 16> &a, const std::array<char, 16> &b) {
+              return std::strncmp(a.data(), b.data(), 16) < 0;
+            });
+  mbedtls_sha256_context hash;
+  mbedtls_sha256_init(&hash);
+  valid &= mbedtls_sha256_starts_ret(&hash, 0) == 0;
+  // Version binds names/bytes/ABI to this exact source. Empty is SHA256(version).
+  const uint8_t version[] = {1, 2, 3, 6};
+  valid &= mbedtls_sha256_update_ret(&hash, version, sizeof version) == 0;
+  for (unsigned n = 0; n < count && valid; ++n) {
+    const auto *name = names[n].data();
+    unsigned schema = 7;
+    unsigned index = 0;
+    for (unsigned t = 0; t < 7; ++t) {
+      const auto prefix_size = std::strlen(prefixes[t]);
+      if (std::strncmp(name, prefixes[t], prefix_size) == 0) {
+        const char *digit = name + prefix_size;
+        if (!*digit)
+          break;
+        bool digits = true;
+        for (; *digit; ++digit) {
+          if (*digit < '0' || *digit > '9') {
+            digits = false;
+            break;
+          }
+          index = index * 10 + *digit - '0';
+          if (index >= kStoreKeys) {
+            digits = false;
+            break;
+          }
+        }
+        if (digits)
+          schema = t;
+        break;
+      }
+    }
+    if (schema == 7 ||
+        index >= (schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
+                              : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0))) {
+      valid = false;
+      break;
+    }
+    union Scratch {
+      ble_store_value value;
+      ble_hs_dev_records record;
+      uint8_t bytes[512];
+    } scratch{};
+    auto &bytes = scratch.bytes;
+    static_assert(sizeof(ble_store_value) <= 512, "Store scratch bound");
+    size_t length = sizeof bytes;
+    if (!nvsBootStatus().persistenceAllowed() ||
+        nvs_get_blob(handle, name, bytes, &length) != ESP_OK || length != sizes[schema]) {
+      valid = false;
+      break;
+    }
+    if (compare_stack && !stackMatches(schema, bytes)) {
+      valid = false;
+      break;
+    }
+    ++out.snapshot.counts[schema];
+    const uint8_t name_length = std::strlen(name);
+    const uint8_t blob_length[] = {uint8_t(length), uint8_t(length >> 8)};
+    valid &= mbedtls_sha256_update_ret(&hash, &name_length, 1) == 0;
+    valid &=
+        mbedtls_sha256_update_ret(&hash, reinterpret_cast<const uint8_t *>(name), name_length) == 0;
+    valid &= mbedtls_sha256_update_ret(&hash, blob_length, 2) == 0;
+    valid &= mbedtls_sha256_update_ret(&hash, bytes, length) == 0;
+  }
+  if (compare_stack && valid) {
+    for (unsigned schema = 0; schema < 6; ++schema) {
+      int actual_count = -1;
+      if (ble_store_util_count(types[schema], &actual_count) != 0 || actual_count < 0 ||
+          unsigned(actual_count) != out.snapshot.counts[schema]) {
+        valid = false;
+        break;
+      }
+    }
+    valid &= unsigned(ble_rpa_get_num_peer_dev_records()) == out.snapshot.counts[6];
+  }
+  valid &= mbedtls_sha256_finish_ret(&hash, out.snapshot.digest.data()) == 0;
+  mbedtls_sha256_free(&hash);
+  if (rc == ESP_OK)
+    nvs_close(handle);
+  out.complete = valid && nvsBootStatus().persistenceAllowed();
+  out.error = out.complete ? 0 : BLE_HS_ESTORE_FAIL;
+  return out;
+}
+BleHostState Esp32BleHost::start(bool enabled, bool qualified) {
+  if (!enabled || !qualified)
+    return BleHostState::Disabled;
+  if (leased_)
+    return state();
+  leased_ = true; // Irreversible boot lease even on partial init failure.
+  if (!nvsBootStatus().persistenceAllowed() || NimBLEDevice::isInitialized() ||
+      esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE ||
+      expected_.qualification_record == 0) {
+    fail(BleFault::Admission, BLE_HS_EDISABLED);
+    return state();
+  }
+  const auto before = inspectStore(false);
+  if (!before.complete || before.snapshot.digest != expected_.digest ||
+      before.snapshot.counts != expected_.counts) {
+    fail(BleFault::Store, before.error ? before.error : BLE_HS_ESTORE_FAIL);
+    return state();
+  }
+  state_.store(BleHostState::Starting);
+  esp_bt_controller_config_t config = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+  config.mode = ESP_BT_MODE_BLE;
+  config.ble_max_conn = CONFIG_BT_NIMBLE_MAX_CONNECTIONS;
+  int rc = esp_bt_controller_init(&config);
+  if (rc == ESP_OK)
+    rc = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+  if (rc == ESP_OK)
+    rc = esp_nimble_hci_init();
+  if (rc == ESP_OK)
+    rc = nimble_port_init();
+  if (rc != ESP_OK) {
+    fail(BleFault::Host, rc);
+    return state();
+  }
+  // The wrapper's indefinite init sync loop is intentionally never entered.
+  NimBLEDevice::setDeviceCallbacks(this);
+  ble_hs_cfg.reset_cb = [](int reason) { instance().fail(BleFault::Host, reason); };
+  ble_hs_cfg.sync_cb = [] {
+    auto &host = instance();
+    if (host.state_.load() != BleHostState::Starting)
+      return;
+    const int result = ble_hs_id_infer_auto(0, &host.own_address_type_);
+    if (result)
+      host.fail(BleFault::Host, result);
+    else
+      host.state_.store(BleHostState::Ready);
+  };
+  ble_hs_cfg.store_status_cb = [](ble_store_status_event *event, void *arg) {
+    return instance().onStoreStatus(event, arg);
+  };
+  refusal_installed_ = true;
+  ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
+  ble_hs_cfg.sm_bonding = 1;
+  ble_hs_cfg.sm_mitm = 0; // Explicit Just Works, never claim authenticated MITM.
+  ble_hs_cfg.sm_sc = 1;
+  ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+  ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+  if (!nvsBootStatus().persistenceAllowed()) {
+    fail(BleFault::Store, BLE_HS_ESTORE_FAIL);
+    return state();
+  }
+  // Default stack-owned store, with exact-pin zero-count compatibility patch.
+  ble_store_config_init();
+  ble_hs_cfg.store_read_cb = guardedRead;
+  ble_hs_cfg.store_write_cb = guardedWrite;
+  ble_hs_cfg.store_delete_cb = guardedDelete;
+  const auto after = inspectStore(true);
+  restore_verified_ = after.complete && after.snapshot.digest == expected_.digest &&
+                      after.snapshot.counts == expected_.counts;
+  if (!restore_verified_) {
+    fail(BleFault::Store, after.error ? after.error : BLE_HS_ESTORE_FAIL);
+    return state();
+  }
+  TaskHandle_t task = nullptr;
+  host_started_ = true;
+  if (xTaskCreatePinnedToCore(hostTask, "ridesync_nimble", 4096, nullptr, 5, &task, 0) != pdPASS) {
+    fail(BleFault::Host, BLE_HS_ENOMEM);
+    return state();
+  }
+  return state();
+}
+void Esp32BleHost::hostTask(void *) {
+  nimble_port_run();
+  // There is no runtime host stop/delete. A return is an unrecoverable fault;
+  // boot-lifetime owner/contexts remain allocated. Never spawn replacements.
+  instance().fail(BleFault::Host, BLE_HS_EDISABLED);
+  vTaskSuspend(nullptr);
+}
+void Esp32BleHost::sealStartup() { fail(BleFault::Timeout, BLE_HS_ETIMEOUT); }
+BleHostState Esp32BleHost::state() const { return state_.load(); }
+BleFault Esp32BleHost::fault() const {
+  return nvsBootStatus().persistenceAllowed() ? fault_.load() : BleFault::Store;
+}
+int Esp32BleHost::onStoreStatus(ble_store_status_event *event, void *) {
+  // Refuse FULL/OVERFLOW without deleting another peer. Where the SDK supplies
+  // a peer, seal only that peer; unknown store/NVS corruption seals the host.
+  error_.store(BLE_HS_ESTORE_CAP);
+  if (routing_lock_.test_and_set(std::memory_order_acquire)) {
+    fail(BleFault::Store, BLE_HS_ESTORE_CAP);
+    return BLE_HS_ESTORE_CAP;
+  }
+  bool routed = false;
+  for (size_t i = 0; event && i < kBlePeers; ++i) {
+    auto &entry = slots_[i];
+    if (!entry.context)
+      continue;
+    bool matches = event->event_code == BLE_STORE_EVENT_FULL &&
+                   event->full.conn_handle == entry.context->connection.load();
+    if (event->event_code == BLE_STORE_EVENT_OVERFLOW && event->overflow.value &&
+        (event->overflow.obj_type == BLE_STORE_OBJ_TYPE_OUR_SEC ||
+         event->overflow.obj_type == BLE_STORE_OBJ_TYPE_PEER_SEC)) {
+      const auto peer = address(entry.identity);
+      const auto &stored = event->overflow.value->sec.peer_addr;
+      matches = peer.type == stored.type && std::memcmp(peer.val, stored.val, 6) == 0;
+    }
+    if (matches) {
+      entry.context->sealed.store(true);
+      entry.context->terminal_status.store(BLE_HS_ESTORE_CAP);
+      entry.context->fault.store(BleFault::Store);
+      routed = true;
+    }
+  }
+  routing_lock_.clear(std::memory_order_release);
+  if (!routed)
+    fail(BleFault::Store, BLE_HS_ESTORE_CAP);
+  return BLE_HS_ESTORE_CAP;
+}
+BleBondAdmission Esp32BleHost::bondAdmission(const BondIdentity &id) {
+  BleBondAdmission out;
+  out.stack_ready = state() == BleHostState::Ready && fault() == BleFault::None;
+  out.restore_verified = restore_verified_;
+  out.refusal_installed = refusal_installed_;
+  out.persistence_allowed = nvsBootStatus().persistenceAllowed();
+  out.capacity = CONFIG_BT_NIMBLE_MAX_BONDS;
+  out.identity_matches =
+      id.verified && (id.type == IdentityType::Public ||
+                      (id.type == IdentityType::RandomStatic && (id.address[5] & 0xc0) == 0xc0));
+  int ours = -1, peers = -1;
+  if (!out.stack_ready || !out.persistence_allowed ||
+      ble_store_util_count(BLE_STORE_OBJ_TYPE_OUR_SEC, &ours) != 0 ||
+      ble_store_util_count(BLE_STORE_OBJ_TYPE_PEER_SEC, &peers) != 0 || ours < 0 || peers < 0)
+    return out;
+  out.used = std::max(ours, peers);
+  ble_store_key_sec key{};
+  key.peer_addr = address(id);
+  ble_store_value_sec value{};
+  const int peer_result = ble_store_read_peer_sec(&key, &value);
+  bool record_present = peer_result == 0;
+  bool known = peer_result == 0 && value.ltk_present && value.key_size >= 7 && value.key_size <= 16;
+  if (peer_result == 0 && value.ltk_present && !known) {
+    out.identity_matches = false;
+    return out;
+  }
+  if (!known) {
+    const int our_result = ble_store_read_our_sec(&key, &value);
+    record_present = record_present || our_result == 0;
+    known = our_result == 0 && value.ltk_present && value.key_size >= 7 && value.key_size <= 16;
+    if ((peer_result != 0 && peer_result != BLE_HS_ENOENT) ||
+        (our_result != 0 && our_result != BLE_HS_ENOENT) || (record_present && !known)) {
+      // A partial/invalid existing record is not a new peer. Refuse re-pairing
+      // rather than overwrite its security or invent a verified identity.
+      out.identity_matches = false;
+      return out;
+    }
+  }
+  out.existing_verified_identity = known && value.peer_addr.type == key.peer_addr.type &&
+                                   std::memcmp(value.peer_addr.val, key.peer_addr.val, 6) == 0;
+  return out;
+}
+Esp32BleHost::Slot &Esp32BleHost::slot(BleContext &ctx) {
+  const size_t index = ctx.phase == BlePhase::Scan      ? kBlePeers * 2
+                       : ctx.phase == BlePhase::Connect ? ctx.peer
+                                                        : kBlePeers + ctx.peer;
+  auto &entry = slots_[index];
+  if (!entry.initialized) {
+    ble_npl_event_init(&entry.barrier, barrier, &entry);
+    entry.initialized = true;
+  }
+  entry.context = &ctx;
+  return entry;
+}
+void Esp32BleHost::barrier(ble_npl_event *event) {
+  auto &entry = *static_cast<Slot *>(ble_npl_event_get_arg(event));
+  entry.quiet.store(true, std::memory_order_release);
+  // Last access: synchronize the next enqueue with NPL clearing event->queued.
+  entry.barrier_queued.store(false, std::memory_order_release);
+}
+void Esp32BleHost::terminal(Slot &entry) {
+  entry.quiet.store(false, std::memory_order_release);
+  entry.context->terminal.store(true, std::memory_order_release);
+  // The pinned public NPL helper uses portMAX_DELAY. Preserve its queued
+  // flag/event-pointer representation but refuse a full queue without waiting.
+  // The default host task consumes and clears queued before running the barrier.
+  auto *event = &entry.barrier;
+  if (entry.barrier_queued.exchange(true, std::memory_order_acq_rel))
+    return;
+  event->queued = true;
+  if (xQueueSendToBack(nimble_port_get_dflt_eventq()->q, &event, 0) != pdPASS) {
+    event->queued = false;
+    entry.context->sealed.store(true, std::memory_order_release);
+    entry.context->fault.store(BleFault::Host, std::memory_order_release);
+    instance().fail(BleFault::Host, BLE_HS_ENOMEM);
+    entry.barrier_queued.store(false, std::memory_order_release);
+    // quiet stays false: refusal does not prove final callback access.
+  }
+}
+void Esp32BleHost::deliver(Slot &entry, BleEvent event, bool final) {
+  auto &ctx = *entry.context;
+  if (ctx.receiver)
+    ctx.receiver->copied(ctx, event);
+  if (final)
+    terminal(entry);
+}
+bool Esp32BleHost::quiescent(const BleContext &ctx) const {
+  for (const auto &entry : slots_)
+    if (entry.context == &ctx)
+      return ctx.terminal.load() && !entry.barrier_queued.load(std::memory_order_acquire) &&
+             entry.quiet.load(std::memory_order_acquire) &&
+             entry.callbacks.load(std::memory_order_acquire) == 0;
+  return ctx.terminal.load();
+}
+bool Esp32BleHost::releaseContext(BleContext &ctx) {
+  if (!quiescent(ctx) || routing_lock_.test_and_set(std::memory_order_acquire))
+    return false;
+  // Another callback can schedule a fresh barrier before this lock is acquired.
+  if (!quiescent(ctx)) {
+    routing_lock_.clear(std::memory_order_release);
+    return false;
+  }
+  for (auto &entry : slots_)
+    if (entry.context == &ctx)
+      entry.context = nullptr;
+  routing_lock_.clear(std::memory_order_release);
+  return true;
+}
+uint16_t Esp32BleHost::mtu(uint16_t connection) const { return ble_att_mtu(connection); }
+int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
+  if (state() != BleHostState::Ready || fault() != BleFault::None || ctx.sealed.load()) {
+    if (cmd.phase != BlePhase::Security)
+      ctx.terminal.store(true);
+    return BLE_HS_EDISABLED;
+  }
+  if (cmd.phase == BlePhase::Security)
+    return ble_gap_security_initiate(cmd.connection);
+  if (routing_lock_.test_and_set(std::memory_order_acquire)) {
+    ctx.terminal.store(true);
+    return BLE_HS_EBUSY;
+  }
+  auto &entry = slot(ctx);
+  if (cmd.phase == BlePhase::Connect)
+    entry.identity = cmd.identity;
+  entry.quiet.store(false);
+  routing_lock_.clear(std::memory_order_release);
+  int rc = BLE_HS_ENOTSUP;
+  switch (cmd.phase) {
+  case BlePhase::Scan: {
+    ble_gap_disc_params parameters{};
+    parameters.passive = 1;
+    parameters.filter_duplicates = 1;
+    rc = ble_gap_disc(own_address_type_, cmd.duration_ms, &parameters, gap, &entry);
+    break;
+  }
+  case BlePhase::Connect: {
+    const auto peer = address(cmd.identity);
+    rc = ble_gap_connect(own_address_type_, &peer, cmd.duration_ms, nullptr, gap, &entry);
+    break;
+  }
+  case BlePhase::Services: {
+    const auto service_uuid = uuid(cmd.uuid);
+    rc = ble_gattc_disc_svc_by_uuid(cmd.connection, &service_uuid.u, service, &entry);
+    break;
+  }
+  case BlePhase::Characteristics:
+    rc = ble_gattc_disc_all_chrs(cmd.connection, cmd.start, cmd.end, characteristic, &entry);
+    break;
+  case BlePhase::Descriptors:
+    rc = ble_gattc_disc_all_dscs(cmd.connection, cmd.start, cmd.end, descriptor, &entry);
+    break;
+  case BlePhase::Read:
+  case BlePhase::VerifySubscription:
+    rc = ble_gattc_read(cmd.connection, cmd.handle, attribute, &entry);
+    break;
+  case BlePhase::Write:
+  case BlePhase::Subscribe:
+    rc = ble_gattc_write_flat(cmd.connection, cmd.handle, cmd.bytes.data(), cmd.size, attribute,
+                              &entry);
+    break;
+  default:
+    break;
+  }
+  if (rc)
+    terminal(entry); // Failed submission owns no SDK procedure; still drain a barrier.
+  return rc;
+}
+int Esp32BleHost::retire(BleContext &ctx) {
+  return ctx.connection.load() == kBleNoHandle
+             ? ble_gap_conn_cancel()
+             : ble_gap_terminate(ctx.connection.load(), BLE_ERR_REM_USER_CONN_TERM);
+}
+int Esp32BleHost::cancelScan(BleContext &ctx) {
+  const int rc = ble_gap_disc_cancel();
+  // Pinned cancel resets scan state without emitting DISC_COMPLETE. Success is
+  // documented fully aborted; queue barrier also accounts for an in-flight copy.
+  if (rc == 0)
+    for (auto &entry : slots_)
+      if (entry.context == &ctx)
+        terminal(entry);
+  return rc;
+}
+int Esp32BleHost::gap(ble_gap_event *event, void *argument) {
+  auto &entry = *static_cast<Slot *>(argument);
+  CallbackAccess access(entry.callbacks);
+  BleEvent out;
+  bool final = false;
+  switch (event->type) {
+  case BLE_GAP_EVENT_DISC:
+    out.kind = BleEventKind::Advertisement;
+    out.identity = identity(event->disc.addr);
+    if (event->disc.length_data > kBlePayload || (event->disc.length_data && !event->disc.data)) {
+      entry.context->sealed.store(true);
+      entry.context->fault.store(BleFault::Malformed);
+      return 0;
+    }
+    out.size = event->disc.length_data;
+    std::memcpy(out.bytes.data(), event->disc.data, out.size);
+    break;
+  case BLE_GAP_EVENT_DISC_COMPLETE:
+    out.kind = BleEventKind::ScanComplete;
+    out.status = event->disc_complete.reason;
+    final = true;
+    break;
+  case BLE_GAP_EVENT_CONNECT:
+    out.kind = BleEventKind::Connected;
+    out.status = event->connect.status;
+    out.connection = event->connect.conn_handle;
+    if (!out.status)
+      entry.context->connection.store(out.connection);
+    final = out.status != 0;
+    break;
+  case BLE_GAP_EVENT_DISCONNECT: {
+    out.kind = BleEventKind::Disconnected;
+    out.connection = event->disconnect.conn.conn_handle;
+    out.status = event->disconnect.reason;
+    if (out.connection != entry.context->connection.load()) {
+      entry.context->sealed.store(true);
+      entry.context->fault.store(BleFault::Malformed);
+      return 0;
+    }
+    // Pinned GAP dispatch occurs after all connection GATT procedures are
+    // removed. Even a malformed/missing GATT terminal cannot leave a live SDK
+    // reference after this normal terminal; retain storage through a new barrier.
+    auto &host = instance();
+    if (host.routing_lock_.test_and_set(std::memory_order_acquire)) {
+      entry.context->sealed.store(true);
+      entry.context->fault.store(BleFault::Host);
+      host.fail(BleFault::Host, BLE_HS_EBUSY);
+      // Uninspected procedure contexts remain quarantined.
+      final = true;
+      break;
+    }
+    for (size_t index = kBlePeers; index < kBlePeers * 2; ++index) {
+      auto &procedure = instance().slots_[index];
+      if (procedure.context && procedure.context->generation == entry.context->generation &&
+          procedure.context->peer == entry.context->peer &&
+          procedure.context->connection.load() == out.connection)
+        terminal(procedure);
+    }
+    host.routing_lock_.clear(std::memory_order_release);
+    final = true;
+    break;
+  }
+  case BLE_GAP_EVENT_ENC_CHANGE: {
+    out.kind = BleEventKind::Security;
+    out.status = event->enc_change.status;
+    out.connection = event->enc_change.conn_handle;
+    ble_gap_conn_desc description{};
+    const int rc = ble_gap_conn_find(out.connection, &description);
+    if (rc)
+      out.status = rc;
+    else {
+      out.identity = identity(description.peer_id_addr);
+      out.encrypted = description.sec_state.encrypted;
+      out.authenticated = description.sec_state.authenticated;
+      out.bonded = description.sec_state.bonded;
+    }
+    break;
+  }
+  case BLE_GAP_EVENT_NOTIFY_RX:
+    out.kind = BleEventKind::Notification;
+    out.connection = event->notify_rx.conn_handle;
+    out.handle = event->notify_rx.attr_handle;
+    if (!copyValue(event->notify_rx.om, out)) {
+      entry.context->sealed.store(true);
+      entry.context->fault.store(BleFault::Malformed);
+      return 0;
+    }
+    break;
+  case BLE_GAP_EVENT_PASSKEY_ACTION:
+    entry.context->sealed.store(true);
+    entry.context->fault.store(BleFault::Identity); // No unknown/passkey auto acceptance.
+    return 0;
+  case BLE_GAP_EVENT_REPEAT_PAIRING:
+    entry.context->sealed.store(true);
+    entry.context->fault.store(BleFault::Identity);
+    return BLE_GAP_REPEAT_PAIRING_IGNORE; // No automatic removal of an existing bond.
+  default:
+    return 0;
+  }
+  deliver(entry, out, final);
+  return 0;
+}
+int Esp32BleHost::service(uint16_t connection, const ble_gatt_error *error,
+                          const ble_gatt_svc *service, void *argument) {
+  auto &entry = *static_cast<Slot *>(argument);
+  CallbackAccess access(entry.callbacks);
+  BleEvent out;
+  out.connection = connection;
+  const bool final = error && error->status != 0;
+  if (!error || (error->status == 0 && !service)) {
+    entry.context->sealed.store(true);
+    entry.context->fault.store(BleFault::Malformed);
+  } else if (final) {
+    out.kind = BleEventKind::Complete;
+    out.status = error->status == BLE_HS_EDONE ? 0 : error->status;
+  } else {
+    out.kind = BleEventKind::Service;
+    out.uuid = uuid(service->uuid);
+    out.start = service->start_handle;
+    out.end = service->end_handle;
+  }
+  deliver(entry, out, final);
+  return 0;
+}
+int Esp32BleHost::characteristic(uint16_t connection, const ble_gatt_error *error,
+                                 const ble_gatt_chr *chr, void *argument) {
+  auto &entry = *static_cast<Slot *>(argument);
+  CallbackAccess access(entry.callbacks);
+  BleEvent out;
+  out.connection = connection;
+  const bool final = error && error->status != 0;
+  if (!error || (error->status == 0 && !chr)) {
+    entry.context->sealed.store(true);
+    entry.context->fault.store(BleFault::Malformed);
+  } else if (final) {
+    out.kind = BleEventKind::Complete;
+    out.status = error->status == BLE_HS_EDONE ? 0 : error->status;
+  } else {
+    out.kind = BleEventKind::Characteristic;
+    out.uuid = uuid(chr->uuid);
+    out.start = chr->def_handle;
+    out.handle = chr->val_handle;
+    out.properties = chr->properties;
+  }
+  deliver(entry, out, final);
+  return 0;
+}
+int Esp32BleHost::descriptor(uint16_t connection, const ble_gatt_error *error,
+                             uint16_t value_handle, const ble_gatt_dsc *descriptor,
+                             void *argument) {
+  (void)value_handle;
+  auto &entry = *static_cast<Slot *>(argument);
+  CallbackAccess access(entry.callbacks);
+  BleEvent out;
+  out.connection = connection;
+  const bool final = error && error->status != 0;
+  if (!error || (error->status == 0 && !descriptor)) {
+    entry.context->sealed.store(true);
+    entry.context->fault.store(BleFault::Malformed);
+  } else if (final) {
+    out.kind = BleEventKind::Complete;
+    out.status = error->status == BLE_HS_EDONE ? 0 : error->status;
+  } else {
+    out.kind = BleEventKind::Descriptor;
+    out.uuid = uuid(descriptor->uuid);
+    out.handle = descriptor->handle;
+  }
+  deliver(entry, out, final);
+  return 0;
+}
+int Esp32BleHost::attribute(uint16_t connection, const ble_gatt_error *error,
+                            ble_gatt_attr *attribute, void *argument) {
+  auto &entry = *static_cast<Slot *>(argument);
+  CallbackAccess access(entry.callbacks);
+  BleEvent out;
+  out.kind = BleEventKind::Complete;
+  out.connection = connection;
+  out.status = error ? error->status : BLE_HS_EINVAL;
+  if (out.status == 0 && attribute) {
+    out.handle = attribute->handle;
+    if ((entry.context->phase == BlePhase::Read ||
+         entry.context->phase == BlePhase::VerifySubscription) &&
+        !copyValue(attribute->om, out)) {
+      entry.context->sealed.store(true);
+      entry.context->fault.store(BleFault::Malformed);
+    }
+  } else if (out.status == 0) {
+    entry.context->sealed.store(true);
+    entry.context->fault.store(BleFault::Malformed);
+  }
+  deliver(entry, out, error != nullptr);
+  return 0;
+}
+} // namespace ridesync
+#endif
+#if defined(ARDUINO_ARCH_ESP32)
+// The dedicated compile environment retains the real vtable and every raw SDK
+// operation. Default main does not call this accessor or activate a BLE host.
+extern "C" ridesync::BleHost *ridesync_ble_qualification_backend() {
+  return &ridesync::Esp32BleHost::instance();
+}
+#endif

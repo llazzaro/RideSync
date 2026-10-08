@@ -234,3 +234,14 @@ no group queue or heap allocation. A missing peer cannot abort another peer's
 transport or confirmation. Local GPS logging remains independent. Native fake
 transports validate policy, not camera support, physical wake or mixed radio
 capacity; these remain hardware acceptance gaps.
+
+## Bounded asynchronous BLE central transport (#35)
+
+The opt-in central backend now owns one pinned raw NimBLE host, fixed copied
+callback routing and whole-link retirement. It accepts profile-supplied multiple
+services/characteristics, verifies properties plus actual CCCD write/read ATT
+completion, and integrates NVS/verified bond admission plus no-eviction refusal.
+Default bring-up does not start it. Future peripheral profiles share this host
+and store; camera setup/Ready/ACK/recording policy is separate. See
+[ble_transport.md](ble_transport.md) for concrete opt-in usage, lifetime, restore
+proof workflow, bounds, SDK latency limits and remaining physical gates.

@@ -2,7 +2,8 @@
 
 Inspected 2026-10-07. Commit links below freeze the research baseline. The three Insta360 MIT license files were read at the pinned revisions below.
 Other license labels are metadata unless the audit notes explicitly say otherwise.
-No third-party implementation or protocol documentation has been vendored.
+The attributed NimBLE restore-function test fixture below is the only vendored
+third-party implementation; no protocol documentation has been vendored.
 RideSync's MIT license does not relicense any referenced project.
 
 Official Insta360 GO 3S support pages were consulted on 2026-10-07. They describe
@@ -92,8 +93,8 @@ The following immutable links support ADR-001:
   [device implementation](https://github.com/h2zero/NimBLE-Arduino/blob/dfb4ac561a06797081be9e752902a6582e7f029e/src/NimBLEDevice.cpp):
   client creation, host task and controller connection configuration.
   [Apache-2.0 LICENSE](https://github.com/h2zero/NimBLE-Arduino/blob/dfb4ac561a06797081be9e752902a6582e7f029e/LICENSE)
-  read; individual source headers retain their own notices. Library is proposed,
-  not yet a project dependency; redistribution must retain applicable notices.
+  read; individual source headers retain their own notices. The dependency is now pinned for the opt-in #35 raw central backend;
+  redistribution must retain applicable notices.
 
 Official Open GoPro documentation was rechecked on 2026-10-07:
 [compatibility](https://gopro.github.io/OpenGoPro/docs/) (HERO12 minimum
@@ -109,3 +110,39 @@ providing a blanket grant. Repository inspected at
 `0f963572611c4410a15678531e9681a6ff874edb`; reference only, no SDK code reused.
 Unlicensed insta360ctl/GPS-spec sources remain research references only; no
 implementation was copied or used by the stack probe.
+
+## Actual asynchronous central backend (#35)
+
+NimBLE-Arduino 2.3.6 is pinned at `dfb4ac561a06797081be9e752902a6582e7f029e`.
+The implementation uses these bundled source APIs, inspected at that exact pin:
+
+| Operation | Public API/source path under the pinned repository |
+| --- | --- |
+| Raw startup | `src/nimble/porting/nimble/include/nimble/nimble_port.h` / `src/nimble/porting/nimble/src/nimble_port.c`: `nimble_port_init` returns SDK status without the wrapper sync loop; raw ESP32 controller/HCI startup precedes it. |
+| Scan/connect | `src/nimble/nimble/host/include/host/ble_gap.h`: `ble_gap_disc`, `ble_gap_disc_cancel`, `ble_gap_connect`, `ble_gap_conn_cancel`. Scan cancel returns fully aborted without emitting DISC_COMPLETE; a queued host barrier closes its callback lifetime. |
+| Security/identity | Same header: `ble_gap_security_initiate`, ENC_CHANGE and `ble_gap_conn_find`; stored peer identity and encrypted/authenticated/bonded fields remain distinct. |
+| Discovery | `src/nimble/nimble/host/include/host/ble_gatt.h`: `ble_gattc_disc_svc_by_uuid`, `ble_gattc_disc_all_chrs`, `ble_gattc_disc_all_dscs`; status 0 item / BLE_HS_EDONE terminal. |
+| CCCD/read/write | Same header: `ble_gattc_write_flat`, `ble_gattc_read`; explicit properties and 0x2902 discovery, async ATT completion and readback. `ble_att_mtu` limits short writes. |
+| Notification/retire | GAP NOTIFY_RX mbuf stays stack-owned; `ble_gap_terminate` submits cleanup. `src/nimble/nimble/host/src/ble_gap.c:1582–1624` calls GATT connection-broken cleanup before GAP DISCONNECT; `ble_gattc.c:5368–5388` fails/frees pending GATT procedures. |
+| Final-access barriers | `src/nimble/porting/npl/freertos/include/nimble/nimble_npl_os.h:414–422` exposes the selected event/queue representation; `src/nimble/porting/npl/freertos/src/npl_os_freertos.c:98–151` clears `queued` before execution but the public put helper uses `portMAX_DELAY`. The owned adapter preserves these semantics with a zero-tick FreeRTOS queue send, atomic duplicate/reuse admission, and refusal quarantine; the opaque alternate representation is compile-time rejected. |
+| Store refusal | `src/NimBLEDevice.h` actual `NimBLEDeviceCallbacks::onStoreStatus` override is delegated through raw `ble_hs_cfg.store_status_cb`; `ble_store.h` specifies nonzero abort. `ble_store_util.c` default oldest-peer eviction is never called. |
+| Restore/readback | `src/nimble/nimble/host/store/config/src/ble_store_config.c` / `ble_store_nvs.c`: stack-owned config initialization, public store read/count APIs plus read-only pinned `ble_hs_resolv_priv.h` privacy getters; actual guarded NVS blobs are compared before host-task startup. |
+
+[NimBLE source pin](https://github.com/h2zero/NimBLE-Arduino/tree/dfb4ac561a06797081be9e752902a6582e7f029e)
+and [Apache-2.0 LICENSE](https://github.com/h2zero/NimBLE-Arduino/blob/dfb4ac561a06797081be9e752902a6582e7f029e/LICENSE)
+retain upstream dependency notices. Repository implementation is independently
+authored; only the explicitly attributed restore-function test fixture reproduces
+upstream code under retained LICENSE/NOTICE.
+
+The installed dependency has one narrowly identified modification: in
+`src/nimble/nimble/host/store/config/src/ble_store_nvs.c`, the OUR_SEC/PEER_SEC last
+bond-count reads become zero when their restored count is zero. The original
+initializer otherwise remains intact, including stack store ownership. UBSan
+reproduces upstream index -1 for normal empty/one-sided stores.
+`scripts/patch_nimble_store.py` runs before compilation, validates the whole source
+and exact unique two-line pattern, is idempotent and rejects drift. Original file
+SHA256 `e4d61d3b6403e263d40f2f498c4d6ac64ee1727ccd3fd6f040ba0e1908c26144`;
+modified SHA256 `04c3363f08b532867c70d0c55b742745a88b1fb1aa954eafeb71028f7ce1c8c8`.
+No persistent store bytes are modified by the build patch. Other initializer
+restore errors can be logged/ignored upstream, so actual persisted-vs-stack
+readback and independent restoration proof remain mandatory.

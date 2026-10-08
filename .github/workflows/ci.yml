@@ -22,3 +22,5 @@ jobs:
         run: python scripts/check_format.py
       - name: Build ESP32 firmware
         run: pio run -e lilygo_t_a7670e_r2
+      - name: Link all opt-in BLE central SDK operations (activation disabled)
+        run: pio run -e ble_central_compile
