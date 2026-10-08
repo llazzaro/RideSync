@@ -275,3 +275,28 @@ production storage worker, session allocation/write, post-reset persistence or
 power-loss durability qualification. The user card remains in the board; no
 post-test host readback has yet been performed. #1 and #11 remain open. The
 installed firmware remains the SD diagnostic, not ATdebug or the production app.
+
+## Production SD writer bench prepared (physical writes pending)
+
+The separate [writer bench](../../tools/bench/sd_logging/README.md) now links the
+actual production `ArduinoSdStorage`, session allocator, `SessionClock` and
+`Storage` rather than a substitute filesystem writer. It requires a reserved
+namespace and explicit bench write opt-in at build time and accepts one serial
+`W` per boot. It creates a new log exclusively, admits four diagnostic rows with
+real monotonic timestamps and explicit missing GNSS/disabled modem, then drains,
+flushes and closes through the SD worker. It never formats/deletes/recommissions
+or changes production activation. A bench-local linker wrapper bypasses Arduino
+NVS initialization; the final ELF contains the wrapper and no original NVS
+init/erase/deinit routines. The currently installed board image is still the
+read-only diagnostic; the writer has not yet been uploaded or run physically.
+
+Independent review passed. Relevant production native tests passed 32/32;
+production storage SDK tests passed 2/2; the full existing Python suite passed
+29/29. New bench host checks passed one-shot, timing, refusal, IO/close failure
+and worker lifetime cases. Both a compile-only dummy namespace build and a
+subsequent build with the actual privately reserved namespace passed. The latter
+uses 29,208 bytes RAM and 349,405 bytes flash. Provenance hashes remain private.
+Formatting and local documentation-link checks passed. CI now includes bench
+host checks and compile-only builds of both SD diagnostics; these CI builds are
+never uploaded. No physical write/reset/power-loss outcome is inferred from
+these software checks.
