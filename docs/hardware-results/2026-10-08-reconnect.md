@@ -61,3 +61,63 @@ changing firmware or pin assignments.
 
 Issue #1 remains open. These results establish USB communication and ESP32 boot,
 not modem recovery, a GNSS position fix, or RideSync firmware qualification.
+
+## Photographic identification and diagnostic preparation
+
+The user's subsequent photographs show a V1.4 PCB marking, an ESP32-WROVER-E
+module, an A7670E modem label, an empty 18650 holder and a 16 GB microSD card.
+A blue LED is illuminated; still photographs cannot establish blinking behavior
+or prove modem readiness. The GNSS antenna connector appears unconnected.
+Device identifiers visible in the photographs are not reproduced here, and the
+original photographs are not included in the public repository.
+
+The user then reported completing removal of the microSD and reconnection via
+USB-A to USB-C. The vendor's [board instructions](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/blob/e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00/docs/en/esp32/a7670-esp32/README.MD)
+recommend that cable arrangement, require adequate peak USB power, and warn that
+an inserted card can interfere with uploading. Supply voltage/current remains
+unmeasured.
+
+The ESP32 bootloader subsequently detected revision v3.1 and 4 MB flash. An
+initial read-only full-flash backup attempt at 460800 baud failed with an invalid
+packet header; this is evidence of a failed serial transfer, not a diagnosis of
+its cause. No flash was written or erased by that attempt.
+
+An isolated build of the vendor's pinned ATdebug source, with unchanged source
+files and `LILYGO_T_A7670` selected, succeeded using RideSync's pinned
+Arduino/ESP32 toolchain. Its selected modem UART TX/RX 26/27, reset 5, PWRKEY 4
+and DTR 25 agree with the vendor V1.4 schematic reference. This documentary
+comparison does not replace electrical measurements. The diagnostic source
+drives power enable 12 high, sequences reset/PWRKEY, holds DTR low and probes
+baud rates. It is a vendor diagnostic, not RideSync application firmware.
+
+## Verified factory backup and vendor diagnostic run
+
+The retry at 115200 baud read the complete 4,194,304-byte ESP32 flash in
+379.2 seconds. A separate device-side digest comparison of the entire address
+range passed before any firmware write. The backup SHA-256 is
+`1c0be69a89e205be67c1df57f1a21ffc75ce95d18526f58ec3b3bc7100b6f18f`.
+Two private local copies were retained, including one outside the repository.
+The binary, NVS contents and device identifiers are not published.
+
+After verification, the pinned vendor ATdebug diagnostic was uploaded at
+115200 baud. The bootloader, partition table, boot selection data and diagnostic
+application regions were written; all four write checksums passed. There was
+no whole-chip erase and no SIMCom modem-firmware update. **The board now runs
+the vendor diagnostic instead of its original factory ESP32 application.**
+The full-flash backup preserves the original image for restoration.
+
+One subsequent continuous capture reported the selected ESP32 T-A7670 profile
+and these software stages: UART RX27/TX26 and power enable GPIO12 high at
+approximately 5.66 seconds, reset GPIO5, DTR GPIO25 low and PWRKEY GPIO4 at
+approximately 8.36 seconds. These prints are not voltage measurements.
+
+The diagnostic probed 13 UART rates: 115200, 9600, 57600, 38400, 19200, 74400,
+74880, 230400, 460800, 2400, 4800, 14400 and 28800. It found no `OK` response
+and printed its terminal failure at approximately 153.70 seconds. The host sent
+no additional identity/GNSS queries because readiness was never established.
+The capture ended and the serial port was closed.
+
+This failure persists with the vendor startup sequence and baud probes; it does
+not establish defective hardware, a firmware cause, actual GPIO voltage levels,
+or adequate supply current. The next evidence needed is modem LED behavior and
+qualified power/reset/UART electrical measurements. Issue #1 remains open.

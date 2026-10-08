@@ -11,10 +11,11 @@ PlatformIO setup with PSRAM flags. LILYGO currently specifies 4 MB flash and
 flash and 4 MB *usable* PSRAM. Neither the diagnostic nor the current guide
 independently identifies the fitted module or physical PSRAM capacity.
 
-The unit's physical PCB revision and its matching schematic have not been
-verified. LILYGO's current R2 guide links a schematic titled T-A7670X V1.4;
-that filename is not evidence that this unit is V1.4 or that the drawing matches
-the PCB in hand. The following are **vendor-example candidates only**, taken
+The user's October 8 photographs show a **V1.4** PCB marking and an
+ESP32-WROVER-E module. LILYGO's T-A7670X V1.4 schematic is therefore the
+revision reference for further checks; component population and physical
+continuity have not been verified against the drawing. The following remain
+**vendor-example candidates only**, taken
 from the ESP32 T-A7670 definitions in the [LILYGO example source](https://github.com/Xinyuan-LILYGO/LilyGo-Modem-Series/blob/e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00/examples/S3_StandardSeries_External_GPS_Shield/utilities.h):
 
 | Function | Candidate ESP32 GPIO | Qualification |
