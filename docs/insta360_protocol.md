@@ -81,16 +81,15 @@ Issue #19 remains open: a primitive without a usable camera recording route
 does not complete it. Unknown incoming data stays unclassified; private bounded
 captures must not be promoted into state from a colon or a missing timer.
 
-The next useful X5 action is pairing, not another guessed command. The prior
-CE80 trial synchronized and advertised but received no camera events through
-its finite window, using the local name `RideSync CE80 Probe`. Both pinned MIT
-examples use `Insta360 GPS Remote`; the prepared next trial now uses that name
-with other probe behavior unchanged. Owner confirmation of X5 remote-search UI
-during A makes this a controlled name-only experiment. Name filtering is a
-hypothesis, not an established X5 requirement. Keep NVS refusal and capture-only
-behavior; require a real camera connection and CE82 subscription before an
-addressed shutter-event trial. No event from this encoder
-should be sent on the unrelated BE80 path.
+The [October 9 name-aligned trial](hardware-results/2026-10-09-x5-pairing.md)
+established a real CE80 connection, CE82 subscription and CE81 writes; the owner
+confirmed the remote connected on the X5 display. Compared with the preceding
+zero-connection trial, only the name changed to the pinned MIT examples'
+`Insta360 GPS Remote`. This supports using that name on this bench, without
+establishing a universal name-filter requirement. No shutter event was sent;
+the next step is a single explicitly requested, addressed CE82 shutter event
+with camera-observed results and no automatic replay. Keep NVS refusal guards;
+no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Wake and identification
 
@@ -134,8 +133,10 @@ externally), Hypothesis (proposed), Observed (captured locally), and Confirmed
 by testing (repeatable result with model/firmware recorded). This document
 now includes a limited RideSync Observed result: [X5-associated BE80 discovery
 and unclassified notification capture](hardware-results/2026-10-08-x5-discovery.md).
-That observation does not establish remote pairing or recording control. No
-Confirmed-by-testing control result exists; GO 3S target/protocol remain unresolved.
+That BE80 observation does not establish remote pairing or recording control.
+The later [CE80 pairing trial](hardware-results/2026-10-09-x5-pairing.md) includes
+subscription and owner-confirmed connection. No Confirmed-by-testing control
+result exists; X5 firmware is unrecorded and GO 3S target/protocol remain unresolved.
 
 ## Implementation prerequisites from pinned sources
 
@@ -167,8 +168,8 @@ saved media. Preserve raw evidence and annotations separately. Do not promote a
 name match, accepted BLE write or timer heuristic into confirmed recording.
 Repeat qualification for ONE RS and GO 3S; neither inherits X5 results. Wake
 advertisements need their own serial/timing tests. The first X5-associated BE80
-discovery/notification observation is linked above; CE80 pairing and annotated
-recording-state captures are still missing.
+discovery/notification observation and subsequent CE80 pairing are linked above;
+annotated recording-state captures are still missing.
 
 Use the pinned NimBLE transport/routing and queue ownership in
 [ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
