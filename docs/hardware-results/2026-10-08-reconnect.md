@@ -300,3 +300,22 @@ Formatting and local documentation-link checks passed. CI now includes bench
 host checks and compile-only builds of both SD diagnostics; these CI builds are
 never uploaded. No physical write/reset/power-loss outcome is inferred from
 these software checks.
+
+
+## Writer uploaded; card reinsertion pending
+
+After the owner confirmed moving the card to the Mac, H1N_SD was mounted and
+the board serial port was present. Both 40-byte ledger files still matched the
+original commissioning baseline exactly, including CRC and the externally
+reserved namespace. The private factory backup hash was reverified. A private
+SHA-256 preservation manifest recorded the four existing non-system files
+(8,272 bytes total) before any writer test. No ledger was reset or recommissioned.
+
+The writer was rebuilt with the actual reserved namespace and explicit write
+opt-in, then uploaded with the board SD slot empty at 115200 baud. All four
+written-region hashes verified. A subsequent seven-second passive serial capture
+observed repeated `SD_LOGGING: WAIT_W` reports with all admission/write/flush/loss
+counters zero. No `W` command was sent. This confirms the installed sketch is
+waiting; it does not establish allocation, writing, flushing or reset recovery.
+The board now runs `sd_logging`, superseding the earlier installed-image notes.
+Private upload and serial logs retain provenance without publishing identifiers.

@@ -98,7 +98,9 @@ card at 1 MHz and validated both freshly commissioned ledger slots by readback
 and CRC using GPIO12 power enable and SPI pins 14/2/15/13. See the dated report
 for the exact transcript. This qualifies one functional mount/read observation,
 not production logging, electrical margins or reset/power-loss durability. The
-board currently runs that diagnostic; it does not start the modem.
+board subsequently received the [production storage writer bench](../tools/bench/sd_logging/README.md).
+Its upload hashes and idle `WAIT_W` state were verified; no write command has
+been sent yet. It does not start the modem.
 
 
 ## Button software and qualification (#8)
