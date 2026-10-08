@@ -91,9 +91,10 @@ compatibility are unresolved; absence of evidence does not mean unsupported.
 Use: Official (vendor documentation of product behavior), Community (reported
 externally), Hypothesis (proposed), Observed (captured locally), and Confirmed
 by testing (repeatable result with model/firmware recorded). This document
-contains Official, Community and Hypothesis evidence, but no RideSync Observed
-or Confirmed-by-testing result; the GO 3S BLE control target and protocol remain
-unresolved.
+now includes a limited RideSync Observed result: [X5-associated BE80 discovery
+and unclassified notification capture](hardware-results/2026-10-08-x5-discovery.md).
+That observation does not establish remote pairing or recording control. No
+Confirmed-by-testing control result exists; GO 3S target/protocol remain unresolved.
 
 ## Implementation prerequisites from pinned sources
 
@@ -124,7 +125,9 @@ connection and rejected requests; correlate packets with camera display and
 saved media. Preserve raw evidence and annotations separately. Do not promote a
 name match, accepted BLE write or timer heuristic into confirmed recording.
 Repeat qualification for ONE RS and GO 3S; neither inherits X5 results. Wake
-advertisements need their own serial/timing tests. No such captures exist yet.
+advertisements need their own serial/timing tests. The first X5-associated BE80
+discovery/notification observation is linked above; CE80 pairing and annotated
+recording-state captures are still missing.
 
 Use the pinned NimBLE transport/routing and queue ownership in
 [ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
