@@ -257,7 +257,9 @@ and raw IMU/configuration/health/control rows through the **same** storage worke
 and admission owner, plus `camera` rows. GPS v1 and mixed v2 stay separate format
 selections; their headers and row bytes are unchanged. The parser rejects a
 camera row in v2, an unknown version, a missing v3 layout marker, malformed field
-counts or an incomplete trailing row. V3 is never inferred from an old file.
+counts or an incomplete trailing row. V3 checks session duration, anchor
+presence/association, boolean flags and exact transport attempt error/admission
+pairs. V3 is never inferred from an old file.
 
 A camera row begins with `camera,` and the 12 common session/anchor columns above.
 The remaining columns are, in order:
@@ -289,7 +291,12 @@ notifications have no intent or operation generation; command observations are
 scoped to the active operation. Repeated fresh unsolicited same-value
 notifications remain separate observations. A duplicate matching transaction
 reply cannot create a second wire ACK. `ManagerCompleted` is internal operation
-completion and must never be read as a camera ACK or recording observation.
+completion and must never be read as a camera ACK or recording observation. A
+timely command observation may confirm after manager completion; the group
+retires that operation-scoped token when its Confirm deadline is reached. The
+manager also bounds that completed token to 1,000 ms from `Completed`, independent
+of the original attempt deadline; a new attempt or cancellation retires it.
+Fresh connection-scoped unsolicited observations remain admissible afterward.
 
 `ack_domain` is 0 None, 1 classic HERO response, 2 Generic Protobuf setup
 result. The corresponding `ack_action` values are 0 None, 1 Pair, 2 Claim,
@@ -298,6 +305,8 @@ result. The corresponding `ack_action` values are 0 None, 1 Pair, 2 Claim,
 14 ConfirmEncoding, 15 QueryEncoding. Setup actions require domain 2; all other
 actions require domain 1. Only a validated expected route, ID, result and
 required status element for the current active attempt can generate a wire ACK.
+The profile and manager reject responses at or after their own deadlines,
+including when a queued callback is delivered before the normal timeout pass.
 An ATT write-complete callback or a successful shutter ACK without a fresh
 Encoding observation does not establish recording.
 
@@ -331,3 +340,5 @@ the camera owner finishes after its last callback and publication; the telemetry
 owner waits for both camera and IMU producers to finish, drains both inboxes,
 then requests the worker's final flush/close. Sink failure leaves final loss
 authoritative in runtime health, since a failed card cannot reliably log itself.
+If activation never succeeded, the session drains and closes only its telemetry;
+it does not service, stop or wait for an independently owned adapter.

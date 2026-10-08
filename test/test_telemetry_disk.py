@@ -248,7 +248,10 @@ int main() {
         self.assertEqual('4',rows[2]['intent_id'])
         self.assertEqual('10',rows[3]['error'])
         camera_columns = ['kind'] + COMMON + CAMERA
-        for field, invalid in [('peer_slot','8'), ('peer_id','0'), ('peer_id','4294967296'),
+        for field, invalid in [('session_id','18446744073709551616'),
+                               ('monotonic_ms','-1'), ('monotonic_ms','31536000001'),
+                               ('has_utc_estimate','2'), ('uncertainty_known','2'),
+                               ('peer_slot','8'), ('peer_id','0'), ('peer_id','4294967296'),
                                ('ack_domain','2'), ('ack_action','0'),
                                ('time_domain','radio_receipt'),
                                ('radio_receipt_known','1'), ('event_receipt_known','0'),
@@ -261,6 +264,41 @@ int main() {
                 values[camera_columns.index(field)] = invalid
                 lines[index] = ','.join(values)
                 with self.assertRaises(ValueError): parse('\n'.join(lines) + '\n')
+        for changes in [
+            {'anchor_quality':'0', 'anchor_sequence':'1', 'anchor_receipt_ms':'0',
+             'anchor_utc_ms':'946684800000', 'anchor_age_ms':'12'},
+            {'anchor_quality':'1', 'anchor_sequence':'0', 'anchor_receipt_ms':'0',
+             'anchor_utc_ms':'946684800000', 'anchor_age_ms':'12'},
+            {'anchor_quality':'1', 'anchor_sequence':'1', 'anchor_receipt_ms':'0',
+             'anchor_utc_ms':'946684800000', 'anchor_age_ms':'12',
+             'uncertainty_known':'2'},
+            {'event_kind':'3', 'error':'9', 'ack_domain':'0', 'ack_action':'0',
+             'delivery_admitted':'0'},
+        ]:
+            with self.subTest(changes=changes):
+                lines = data.splitlines()
+                index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
+                values = next(csv.reader([lines[index]]))
+                for field, invalid in changes.items():
+                    values[camera_columns.index(field)] = invalid
+                lines[index] = ','.join(values)
+                with self.assertRaises(ValueError): parse('\n'.join(lines) + '\n')
+        for changes in [
+            {'anchor_quality':'1', 'anchor_sequence':'1', 'anchor_receipt_ms':'10',
+             'anchor_utc_ms':'1767225600000', 'anchor_age_ms':'2',
+             'uncertainty_known':'1', 'uncertainty_ms':'0',
+             'has_utc_estimate':'1', 'utc_estimate_ms':'1767225600002'},
+            {'event_kind':'3', 'error':'8', 'ack_domain':'0', 'ack_action':'0',
+             'delivery_admitted':'0'},
+        ]:
+            with self.subTest(valid_changes=changes):
+                lines = data.splitlines()
+                index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
+                values = next(csv.reader([lines[index]]))
+                for field, value in changes.items():
+                    values[camera_columns.index(field)] = value
+                lines[index] = ','.join(values)
+                self.assertEqual(4, len(parse('\n'.join(lines) + '\n')))
         with self.assertRaises(ValueError): parse(data.replace('#ridesync_telemetry,3',
                                                                   '#ridesync_telemetry,4'))
         with self.assertRaises(ValueError): parse(data[:-1])

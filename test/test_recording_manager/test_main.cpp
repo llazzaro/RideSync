@@ -329,12 +329,16 @@ void confirmation_at_or_after_deadline_is_timeout_without_prior_tick() {
       auto call = f.transport.last(0);
       f.group.event(complete(call));
       f.clock.time = time;
-      observe(f.group, command ? call : subscription, RecordingState::Recording, command);
+      Event observed{0, (command ? call : subscription).token,
+                     command ? EventKind::CommandRecordingObserved : EventKind::RecordingObserved};
+      observed.recording = RecordingState::Recording;
+      TEST_ASSERT_EQUAL(!command, f.group.event(observed));
       auto s = f.group.status();
       TEST_ASSERT_EQUAL(0, s.pending);
       TEST_ASSERT_EQUAL(1, s.errors);
       TEST_ASSERT_EQUAL((int)CameraError::Timeout, (int)s.peers[0].error);
-      TEST_ASSERT_EQUAL(1, s.recording);
+      TEST_ASSERT_EQUAL(command ? 0 : 1, s.recording);
+      TEST_ASSERT_EQUAL(command ? 1 : 0, s.stopped);
     }
 }
 void late_resync_observation_does_not_launch_policy_without_prior_tick() {
@@ -346,13 +350,16 @@ void late_resync_observation_does_not_launch_policy_without_prior_tick() {
     f.group.event(complete(query));
     const auto calls = f.transport.calls.size();
     f.clock.time = time;
-    observe(f.group, query, RecordingState::Stopped, true);
+    Event late{0, query.token, EventKind::CommandRecordingObserved};
+    late.recording = RecordingState::Stopped;
+    TEST_ASSERT_FALSE(f.group.event(late));
     auto s = f.group.status();
     TEST_ASSERT_EQUAL((int)GroupError::UnknownState, (int)s.error);
     TEST_ASSERT_EQUAL((int)CameraError::Timeout, (int)s.peers[0].error);
     TEST_ASSERT_EQUAL((int)RecordingState::Unknown, (int)s.intent);
     TEST_ASSERT_EQUAL(0, s.pending);
-    TEST_ASSERT_EQUAL(1, s.stopped);
+    TEST_ASSERT_EQUAL(0, s.stopped);
+    TEST_ASSERT_EQUAL(1, s.unknown);
     TEST_ASSERT_EQUAL(calls, f.transport.calls.size());
   }
 }

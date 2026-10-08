@@ -263,6 +263,156 @@ void group_confirm_observation_after_completion_keeps_original_intent() {
       correlated = row[17] == "2" && row[19] == std::to_string(start.operation);
   TEST_ASSERT_TRUE(correlated);
 }
+void expired_confirm_token_cannot_mutate_or_log_command_observation() {
+  for (bool tick_first : {false, true}) {
+    FakeClock raw;
+    FakeTransport transport;
+    CameraManager manager(raw, transport);
+    SourceConfig config;
+    config.count = 1;
+    config.cameras[0].name = "hero";
+    config.cameras[0].family = CameraFamily::GoPro;
+    config.cameras[0].model = CameraModel::HERO12_BLACK;
+    config.cameras[0].identifier = "01:02:03:04:05:06";
+    config.cameras[0].address_type = AddressType::Public;
+    TEST_ASSERT_TRUE(manager.configure(config).ok());
+    RecordingManager group(manager, raw);
+    CameraInbox camera;
+    CameraEventLogger logger(camera, raw, 42, group);
+    TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+    TEST_ASSERT_TRUE(manager.attachAudit(logger));
+    MemorySink sink;
+    Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+    SessionClock clock(raw, 42, 1000);
+    ImuInbox imu;
+    TelemetryAdmission admission(clock, storage, imu, &camera);
+    TEST_ASSERT_EQUAL_INT(CameraError::None, manager.request(0, Operation::Connect));
+    Event ready(0, manager.state(0)->token, EventKind::Completed);
+    ready.capabilities.start = CapabilityState::Supported;
+    TEST_ASSERT_TRUE(group.event(ready));
+    Event initial(0, manager.state(0)->token.connection, EventKind::RecordingObserved);
+    initial.recording = RecordingState::Stopped;
+    TEST_ASSERT_TRUE(group.event(initial));
+    TEST_ASSERT_EQUAL_INT(GroupError::None, group.request(RecordingState::Recording));
+    const Token start = manager.state(0)->token;
+    TEST_ASSERT_TRUE(group.event(Event(0, start, EventKind::Completed)));
+    raw.value = 1001;
+    if (tick_first)
+      group.tick();
+    Event late(0, start, EventKind::CommandRecordingObserved);
+    late.recording = RecordingState::Recording;
+    TEST_ASSERT_FALSE(group.event(late));
+    TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, manager.state(0)->observed);
+    TEST_ASSERT_TRUE(group.status().peers[0].terminal_failure);
+    for (unsigned i = 0; i < 500; ++i) {
+      admission.tick();
+      storage.workerStep();
+    }
+    for (const auto &row : cameraRows(sink.bytes))
+      TEST_ASSERT_FALSE(row[20] == "5" && row[23] == "2" &&
+                        row[19] == std::to_string(start.operation));
+  }
+}
+void confirm_boundary_and_wrap_keep_only_timely_command_observation() {
+  for (uint32_t origin : {uint32_t(100), uint32_t(UINT32_MAX - 500)}) {
+    for (uint32_t delay : {uint32_t(999), uint32_t(1000), uint32_t(1001)}) {
+      FakeClock raw;
+      raw.value = origin;
+      FakeTransport transport;
+      CameraManager manager(raw, transport);
+      SourceConfig config;
+      config.count = 1;
+      config.cameras[0].name = "hero";
+      config.cameras[0].family = CameraFamily::GoPro;
+      config.cameras[0].model = CameraModel::HERO12_BLACK;
+      config.cameras[0].identifier = "01:02:03:04:05:06";
+      config.cameras[0].address_type = AddressType::Public;
+      TEST_ASSERT_TRUE(manager.configure(config).ok());
+      RecordingManager group(manager, raw);
+      TEST_ASSERT_EQUAL_INT(CameraError::None, manager.request(0, Operation::Connect));
+      Event ready(0, manager.state(0)->token, EventKind::Completed);
+      ready.capabilities.start = CapabilityState::Supported;
+      TEST_ASSERT_TRUE(group.event(ready));
+      Event initial(0, manager.state(0)->token.connection, EventKind::RecordingObserved);
+      initial.recording = RecordingState::Stopped;
+      TEST_ASSERT_TRUE(group.event(initial));
+      TEST_ASSERT_EQUAL_INT(GroupError::None, group.request(RecordingState::Recording));
+      const Token start = manager.state(0)->token;
+      TEST_ASSERT_TRUE(group.event(Event(0, start, EventKind::Completed)));
+      raw.value = origin + delay;
+      Event observation(0, start, EventKind::CommandRecordingObserved);
+      observation.recording = RecordingState::Recording;
+      TEST_ASSERT_EQUAL(delay < 1000, group.event(observation));
+      TEST_ASSERT_EQUAL_INT(delay < 1000 ? RecordingState::Recording : RecordingState::Stopped,
+                            manager.state(0)->observed);
+    }
+  }
+}
+void completed_manager_token_has_bounded_observation_lifetime() {
+  for (uint32_t origin : {uint32_t(100), uint32_t(UINT32_MAX - 500)}) {
+    FakeClock raw;
+    raw.value = origin;
+    FakeTransport transport;
+    CameraManager manager(raw, transport);
+    SourceConfig config;
+    config.count = 1;
+    config.cameras[0].name = "hero";
+    config.cameras[0].family = CameraFamily::GoPro;
+    config.cameras[0].model = CameraModel::HERO12_BLACK;
+    config.cameras[0].identifier = "01:02:03:04:05:06";
+    config.cameras[0].address_type = AddressType::Public;
+    TEST_ASSERT_TRUE(manager.configure(config).ok());
+    TEST_ASSERT_EQUAL_INT(CameraError::None, manager.request(0, Operation::Connect));
+    Event ready(0, manager.state(0)->token, EventKind::Completed);
+    ready.capabilities.start = CapabilityState::Supported;
+    TEST_ASSERT_TRUE(manager.event(ready));
+    TEST_ASSERT_EQUAL_INT(CameraError::None, manager.request(0, Operation::Start));
+    const Token start = manager.state(0)->token;
+    TEST_ASSERT_TRUE(manager.event(Event(0, start, EventKind::Completed)));
+    Event observed(0, start, EventKind::CommandRecordingObserved);
+    observed.recording = RecordingState::Recording;
+    raw.value = origin + 999;
+    TEST_ASSERT_TRUE(manager.event(observed));
+    observed.recording = RecordingState::Stopped;
+    raw.value = origin + 1000;
+    TEST_ASSERT_FALSE(manager.event(observed));
+    TEST_ASSERT_EQUAL_INT(RecordingState::Recording, manager.state(0)->observed);
+  }
+}
+void completion_near_attempt_deadline_gets_its_own_confirm_window() {
+  FakeClock raw;
+  FakeTransport transport;
+  CameraManager manager(raw, transport);
+  SourceConfig config;
+  config.count = 1;
+  config.cameras[0].name = "hero";
+  config.cameras[0].family = CameraFamily::GoPro;
+  config.cameras[0].model = CameraModel::HERO12_BLACK;
+  config.cameras[0].identifier = "01:02:03:04:05:06";
+  config.cameras[0].address_type = AddressType::Public;
+  TEST_ASSERT_TRUE(manager.configure(config).ok());
+  RecordingManager group(manager, raw);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, manager.request(0, Operation::Connect));
+  Event ready(0, manager.state(0)->token, EventKind::Completed);
+  ready.capabilities.start = CapabilityState::Supported;
+  TEST_ASSERT_TRUE(group.event(ready));
+  Event initial(0, manager.state(0)->token.connection, EventKind::RecordingObserved);
+  initial.recording = RecordingState::Stopped;
+  TEST_ASSERT_TRUE(group.event(initial));
+  TEST_ASSERT_EQUAL_INT(GroupError::None, group.request(RecordingState::Recording));
+  const Token start = manager.state(0)->token;
+  raw.value = 999; // One millisecond before the manager's attempt deadline.
+  TEST_ASSERT_TRUE(group.event(Event(0, start, EventKind::Completed)));
+  Event observed(0, start, EventKind::CommandRecordingObserved);
+  observed.recording = RecordingState::Recording;
+  raw.value = 1998; // 999 ms after completion, long after the attempt deadline.
+  TEST_ASSERT_TRUE(group.event(observed));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, manager.state(0)->observed);
+  observed.recording = RecordingState::Stopped;
+  raw.value = 1999; // Exact completed-token deadline.
+  TEST_ASSERT_FALSE(group.event(observed));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, manager.state(0)->observed);
+}
 void camera_rows_reject_unqualified_identity_and_mismatched_ack_domain() {
   MemorySink sink;
   Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
@@ -410,6 +560,10 @@ int main() {
   RUN_TEST(camera_final_publication_after_empty_owner_pass_is_drained);
   RUN_TEST(cancelled_operation_rejects_late_command_observation);
   RUN_TEST(group_confirm_observation_after_completion_keeps_original_intent);
+  RUN_TEST(expired_confirm_token_cannot_mutate_or_log_command_observation);
+  RUN_TEST(confirm_boundary_and_wrap_keep_only_timely_command_observation);
+  RUN_TEST(completed_manager_token_has_bounded_observation_lifetime);
+  RUN_TEST(completion_near_attempt_deadline_gets_its_own_confirm_window);
   RUN_TEST(camera_rows_reject_unqualified_identity_and_mismatched_ack_domain);
   RUN_TEST(audit_receipt_is_distinct_from_owner_admission_and_wraps);
   RUN_TEST(stale_audit_receipt_remains_explicitly_unknown);

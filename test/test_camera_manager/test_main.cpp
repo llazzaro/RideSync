@@ -141,6 +141,26 @@ void rollover_deadline_and_backoff() {
   m.tick();
   TEST_ASSERT_EQUAL(2, m.state(0)->attempts);
 }
+void wire_ack_rejects_expired_attempt_at_and_after_deadline() {
+  for (uint32_t start : {uint32_t(100), uint32_t(UINT32_MAX - 4)}) {
+    FakeClock c;
+    c.time = start;
+    FakeTransport t;
+    RetryPolicy policy;
+    policy.timeout_ms = 10;
+    CameraManager m(c, t, policy);
+    TEST_ASSERT_TRUE(m.configure(config()).ok());
+    connect(m, 0);
+    TEST_ASSERT_EQUAL_INT(CameraError::None, m.request(0, Operation::Query));
+    const Token token = m.state(0)->token;
+    c.time = start + 9;
+    TEST_ASSERT_TRUE(m.wireAck(0, token, CameraAckDomain::Classic, CameraAckAction::QueryEncoding));
+    c.time = start + 10;
+    TEST_ASSERT_FALSE(m.wireAck(0, token, CameraAckDomain::Classic, CameraAckAction::ShutterOn));
+    c.time = start + 11;
+    TEST_ASSERT_FALSE(m.wireAck(0, token, CameraAckDomain::Classic, CameraAckAction::ShutterOff));
+  }
+}
 void generations_cancel_reset_and_queue() {
   FakeClock c;
   FakeTransport t;
@@ -499,6 +519,7 @@ int main() {
   RUN_TEST(requests_do_not_imply_observation);
   RUN_TEST(deadlines_backoff_and_peer_isolation);
   RUN_TEST(rollover_deadline_and_backoff);
+  RUN_TEST(wire_ack_rejects_expired_attempt_at_and_after_deadline);
   RUN_TEST(generations_cancel_reset_and_queue);
   RUN_TEST(stale_retry_and_serialized_operations);
   RUN_TEST(failure_disconnect_and_invalid_configuration);

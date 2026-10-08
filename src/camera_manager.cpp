@@ -3,6 +3,7 @@
 #include <utility>
 namespace ridesync {
 namespace {
+constexpr uint32_t kCompletedObservationMs = 1000;
 // Valid when tick() runs at least once per 2^31 milliseconds.
 bool reached(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL; }
 bool connected(Lifecycle l) {
@@ -109,6 +110,7 @@ void CameraManager::attempt(size_t i) {
   auto &p = peers_[i];
   ++p.state.attempts;
   p.ack_mask = 0;
+  p.completed_observation_open = false;
   Token::advance(p.state.token.operation);
   if (p.current == Operation::Connect) {
     Token::advance(p.state.token.connection);
@@ -127,6 +129,7 @@ void CameraManager::attempt(size_t i) {
 }
 void CameraManager::fail(size_t i, CameraError error) {
   auto &p = peers_[i];
+  p.completed_observation_open = false;
   if (audit_)
     audit_->failure(i, p.current, p.state.token, p.active_intent_id, error);
   transport_.cancel(i, p.state.token);
@@ -172,6 +175,7 @@ CameraError CameraManager::cancel(size_t i) {
     transport_.close(i, p.state.token);
   Token::advance(p.state.token.operation);
   p.active = false;
+  p.completed_observation_open = false;
   p.queued = 0;
   p.state.error = CameraError::Cancelled;
   p.state.observed = RecordingState::Unknown;
@@ -231,6 +235,9 @@ bool CameraManager::event(const Event &e) {
     fail(e.peer, CameraError::Timeout);
     return false;
   }
+  if (e.kind == EventKind::CommandRecordingObserved && !p.active &&
+      (!p.completed_observation_open || reached(clock_.now(), p.completed_observation_deadline_ms)))
+    return false;
   // A command observation may legitimately arrive during the group's Confirm
   // phase after Completed retired the active operation. Its unchanged token
   // still belongs to that completed intent until a new attempt or cancellation.
@@ -244,6 +251,8 @@ bool CameraManager::event(const Event &e) {
       return false;
     if (p.current == Operation::Connect)
       p.state.capabilities = e.capabilities;
+    p.completed_observation_open = p.current != Operation::Connect;
+    p.completed_observation_deadline_ms = clock_.now() + kCompletedObservationMs;
     p.active = false;
     p.state.lifecycle = Lifecycle::Ready;
     p.state.error = CameraError::None;
@@ -261,6 +270,7 @@ bool CameraManager::event(const Event &e) {
     Token::advance(p.state.token.connection);
     Token::advance(p.state.token.operation);
     p.active = false;
+    p.completed_observation_open = false;
     p.queued = 0;
     p.state.lifecycle = Lifecycle::Idle;
     p.state.error = CameraError::Transport;
@@ -288,7 +298,8 @@ bool CameraManager::wireAck(size_t i, Token token, CameraAckDomain domain, Camer
   auto &p = peers_[i];
   if (!p.active || !p.state.token.valid() || p.state.token.connection != token.connection ||
       p.state.token.operation != token.operation ||
-      (p.state.lifecycle != Lifecycle::Connecting && p.state.lifecycle != Lifecycle::Operating))
+      (p.state.lifecycle != Lifecycle::Connecting && p.state.lifecycle != Lifecycle::Operating) ||
+      reached(clock_.now(), p.state.deadline_ms))
     return false;
   const uint32_t bit = uint32_t(1) << static_cast<unsigned>(action);
   if (p.ack_mask & bit)

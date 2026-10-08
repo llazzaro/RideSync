@@ -22,6 +22,46 @@ CAMERA = ('peer_slot peer_id model group_generation intent_id connection_generat
           'accepted dropped rejected lost written flushed').split()
 
 
+def _v3_timestamp(row):
+    def unsigned(field, lower, upper):
+        value = row[field]
+        if not value or not value.isascii() or not value.isdigit():
+            raise ValueError(f'invalid {field}')
+        number = int(value)
+        if not lower <= number <= upper:
+            raise ValueError(f'out-of-range {field}')
+        return number
+
+    unsigned('session_id', 1, 0xffffffffffffffff)
+    monotonic = unsigned('monotonic_ms', 0, 31536000000)
+    if row['monotonic_quality'] != '0' or row['anchor_quality'] not in ('0', '1', '2') or \
+            row['uncertainty_known'] not in ('0', '1') or \
+            row['has_utc_estimate'] not in ('0', '1'):
+        raise ValueError('invalid V3 timestamp flags')
+    if row['anchor_quality'] == '0':
+        if any(row[field] for field in ('anchor_sequence', 'anchor_receipt_ms',
+                                        'anchor_utc_ms', 'uncertainty_ms', 'anchor_age_ms',
+                                        'utc_estimate_ms')) or row['uncertainty_known'] != '0' or \
+                row['has_utc_estimate'] != '0':
+            raise ValueError('unexpected anchor fields')
+        return
+    unsigned('anchor_sequence', 1, 0xffffffff)
+    receipt = unsigned('anchor_receipt_ms', 0, monotonic)
+    utc = unsigned('anchor_utc_ms', 946684800000, 4102444799999)
+    if unsigned('anchor_age_ms', 0, 31536000000) != monotonic - receipt:
+        raise ValueError('anchor age')
+    if row['uncertainty_known'] == '1':
+        unsigned('uncertainty_ms', 0, 0xffffffff)
+    elif row['uncertainty_ms']:
+        raise ValueError('unexpected uncertainty')
+    if row['has_utc_estimate'] == '1':
+        if row['anchor_quality'] != '1' or unsigned('utc_estimate_ms', 0, 0x7fffffffffffffff) != \
+                utc + monotonic - receipt:
+            raise ValueError('invalid UTC estimate')
+    elif row['utc_estimate_ms']:
+        raise ValueError('unexpected UTC estimate')
+
+
 def parse(data):
     version = data.split('\n', 1)[0]
     if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3'):
@@ -132,12 +172,14 @@ def parse(data):
             if kind == 3 and (int(row['intent_id']) == 0 or
                               int(row['connection_generation']) == 0 or
                               int(row['operation_generation']) == 0 or
-                              (row['error'] != '0') == (row['delivery_admitted'] == '1')):
+                              (row['error'] != ('0' if row['delivery_admitted'] == '1' else '8'))):
                 raise ValueError('invalid transport attempt')
             if kind != 3 and row['delivery_admitted'] != '0':
                 raise ValueError('unexpected delivery admission')
         else:
             raise ValueError('unsupported record kind')
+        if version == '#ridesync_telemetry,3':
+            _v3_timestamp(row)
         if row['monotonic_quality'] != '0' or int(row['session_id']) <= 0:
             raise ValueError('invalid timestamp')
         if row['anchor_quality'] != '0':

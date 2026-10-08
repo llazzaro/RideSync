@@ -44,6 +44,7 @@ private:
     bool acknowledged = false;
     bool fresh = false;
     uint32_t deadline = 0;
+    Token confirm;
     Token retired;
     bool hasRetired = false;
   };
@@ -56,5 +57,6 @@ private:
   void command(size_t peer);
   void advance();
   void notify();
+  void expireConfirm(size_t peer);
 };
 } // namespace ridesync

@@ -159,6 +159,8 @@ private:
     Operation current = Operation::Connect;
     uint32_t next_intent_id = 0, active_intent_id = 0;
     uint32_t ack_mask = 0;
+    uint32_t completed_observation_deadline_ms = 0;
+    bool completed_observation_open = false;
   };
   Clock &clock_;
   CameraTransport &transport_;

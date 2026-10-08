@@ -29,8 +29,12 @@ bool CameraEventSession::binds(const Hero12Adapter &adapter, const CameraManager
   return &adapter_ == &adapter && &manager_ == &manager && &group_ == &group;
 }
 void CameraEventSession::service() {
-  if (!active_)
+  if (!active_) {
+    // This session never owned the adapter; only drain its own telemetry on stop.
+    if (stopping_)
+      admission_.tick();
     return;
+  }
   adapter_.service();
   if (stopping_ && !camera_finished_ && adapter_.canDestroy()) {
     manager_.detachAudit(&logger_);
@@ -55,6 +59,6 @@ void CameraEventSession::requestStop() {
 void CameraEventSession::finishImu() { imu_.finish(); }
 bool CameraEventSession::stopped() const {
   return stopping_ && camera_finished_ && admission_.stopped() && storage_.health().stopped &&
-         adapter_.canDestroy();
+         (!active_ || adapter_.canDestroy());
 }
 } // namespace ridesync

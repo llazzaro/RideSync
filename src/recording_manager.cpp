@@ -108,6 +108,13 @@ void RecordingManager::command(size_t i) {
     p.error = e;
   }
 }
+void RecordingManager::expireConfirm(size_t i) {
+  auto &p = peers_[i];
+  p.retired = p.confirm;
+  p.hasRetired = true;
+  p.stage = Stage::Error;
+  p.error = CameraError::Timeout;
+}
 GroupError RecordingManager::request(RecordingState intent) {
   if (intent == RecordingState::Unknown)
     return GroupError::InvalidIntent;
@@ -161,8 +168,7 @@ void RecordingManager::advance() {
       command(i);
     else if (p.stage == Stage::Confirm) {
       if (reached(clock_.now(), p.deadline)) {
-        p.stage = Stage::Error;
-        p.error = CameraError::Timeout;
+        expireConfirm(i);
       } else if (p.fresh && c.has_observation && c.observed != RecordingState::Unknown &&
                  (syncing_ || c.observed == intent_))
         p.stage = Stage::Done;
@@ -192,6 +198,9 @@ void RecordingManager::advance() {
       command(i);
 }
 bool RecordingManager::event(const Event &e) {
+  if (e.peer < cameras_.size() && peers_[e.peer].stage == Stage::Confirm &&
+      reached(clock_.now(), peers_[e.peer].deadline))
+    expireConfirm(e.peer);
   const bool connectionEvent =
       e.kind == EventKind::RecordingObserved || e.kind == EventKind::Disconnected;
   const bool retiredResponse = e.peer < cameras_.size() && !connectionEvent &&
@@ -212,6 +221,7 @@ bool RecordingManager::event(const Event &e) {
   if (p.stage == Stage::Command && e.kind == EventKind::Completed) {
     p.acknowledged = true;
     p.stage = Stage::Confirm;
+    p.confirm = e.token;
     p.deadline = clock_.now() + 1000;
   }
   advance();

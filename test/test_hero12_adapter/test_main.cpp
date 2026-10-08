@@ -394,6 +394,42 @@ void duplicate_matching_response_records_one_wire_ack() {
       ++query_ack;
   TEST_ASSERT_EQUAL_UINT(1, query_ack);
 }
+void profile_reply_at_or_after_deadline_cannot_publish_ack() {
+  for (uint32_t start : {uint32_t(100), uint32_t(UINT32_MAX - 100)}) {
+    for (uint32_t delay : {uint32_t(1999), uint32_t(2000), uint32_t(2001)}) {
+      Rig r;
+      TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+      r.pump();
+      RecordingManager group(r.manager, r.clock);
+      r.adapter.attachGroup(group);
+      CameraInbox camera;
+      CameraEventLogger logger(camera, r.clock, 42, group);
+      TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+      TEST_ASSERT_TRUE(r.manager.attachAudit(logger));
+      CameraLogSink sink;
+      Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+      SessionClock clock(r.clock, 42, 1000);
+      ImuInbox imu;
+      TelemetryAdmission admission(clock, storage, imu, &camera);
+      r.clock.value = start;
+      r.auto_camera = false;
+      TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Query));
+      r.pump(1);
+      r.clock.value = start + delay;
+      r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 0});
+      r.adapter.service();
+      for (unsigned i = 0; i < 500; ++i) {
+        admission.tick();
+        storage.workerStep();
+      }
+      unsigned acknowledgements = 0;
+      for (const auto &row : cameraRows(sink.bytes))
+        if (row[20] == "4" && row[25] == "15")
+          ++acknowledgements;
+      TEST_ASSERT_EQUAL_UINT(delay < 2000 ? 1 : 0, acknowledgements);
+    }
+  }
+}
 void group_route_keeps_shutter_ack_distinct_from_recording() {
   Rig r;
   RecordingManager group(r.manager, r.clock);
@@ -492,6 +528,28 @@ void composed_session_finishes_camera_after_final_owner_access() {
   TEST_ASSERT_TRUE(session.stopped());
   TEST_ASSERT_TRUE(session.storage().health().stopped);
   TEST_ASSERT_TRUE(session.cameraInbox().stopRequested());
+}
+void inactive_or_refused_session_closes_storage_without_servicing_independent_adapter() {
+  for (bool refused : {false, true}) {
+    Rig r;
+    RecordingManager group(r.manager, r.clock);
+    CameraLogSink sink;
+    CameraEventSession session(r.clock, sink, r.adapter, r.manager, group, 42, "fw", "synthetic");
+    if (refused)
+      TEST_ASSERT_FALSE(session.activate()); // No configured opaque peer identity.
+    TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+    const size_t commands = r.host.commands.size();
+    session.requestStop();
+    session.finishImu();
+    for (unsigned i = 0; i < 500 && !session.stopped(); ++i) {
+      session.service();
+      session.storage().workerStep();
+    }
+    TEST_ASSERT_TRUE(session.stopped());
+    TEST_ASSERT_TRUE(session.storage().health().stopped);
+    TEST_ASSERT_EQUAL_UINT(commands, r.host.commands.size());
+    TEST_ASSERT_EQUAL_INT(Lifecycle::Connecting, r.manager.state(0)->lifecycle);
+  }
 }
 void missing_management_service_refuses_pairing() {
   Rig r;
@@ -1111,9 +1169,11 @@ int main() {
   RUN_TEST(required_management_and_classic_routes_are_declared);
   RUN_TEST(full_pairing_observes_state_and_shutter_requires_encoding_query);
   RUN_TEST(duplicate_matching_response_records_one_wire_ack);
+  RUN_TEST(profile_reply_at_or_after_deadline_cannot_publish_ack);
   RUN_TEST(group_route_keeps_shutter_ack_distinct_from_recording);
   RUN_TEST(identical_unsolicited_encoding_observations_are_each_preserved);
   RUN_TEST(composed_session_finishes_camera_after_final_owner_access);
+  RUN_TEST(inactive_or_refused_session_closes_storage_without_servicing_independent_adapter);
   RUN_TEST(missing_management_service_refuses_pairing);
   RUN_TEST(missing_cccd_refuses_pairing_without_capabilities);
   RUN_TEST(busy_camera_never_receives_video_or_shutter);

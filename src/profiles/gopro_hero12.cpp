@@ -413,6 +413,12 @@ void Hero12Adapter::observe(uint8_t i, bool value, bool command) {
 }
 void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::Message &message) {
   auto &p = peers_[i];
+  // Central dispatches queued notifications before service() checks deadlines.
+  // Retire the expired transaction before any status mutation or wire-ACK hook.
+  if (p.step != Step::None && reached(clock_.now(), p.deadline)) {
+    retire(i, Hero12Fault::Timeout);
+    return;
+  }
   if (route == gopro::Channel::Query && message.size >= 2 && message.bytes[0] == 0x93) {
     const auto r = gopro::decode(route, message);
     if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
