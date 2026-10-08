@@ -37,6 +37,30 @@ observations or a proven handshake. Raw payloads remain private pending field
 classification and anonymization. No shutter command has been sent by RideSync.
 Firmware remains unrecorded. Issues #3/#17/#19 stay open.
 
+## ESP32 peripheral trial
+
+The reviewed CE80 peripheral probe at commit `547a755` was built, audited and
+uploaded successfully; esptool verified the written regions. Before upload,
+the actual 20 KiB NVS partition at offset `0x9000` matched the preserved factory
+backup byte for byte. This is a pre-trial baseline, not a post-trial result.
+
+Passive serial observation confirmed idle startup with no advertising. The
+first explicit `HA` attempt returned SDK initialization error 259
+(`ESP_ERR_INVALID_STATE`), with host synchronization and advertising both zero.
+The attempt stopped with the error reason, no connection and no GATT events.
+NVS refusal counters were init/open/erase `1/0/0`. This failure occurred before
+camera pairing could be tested; it is not evidence of X5 incompatibility.
+The private transcript is retained locally. A subsequent read-only esptool
+capture of the same NVS region matched the pre-trial bytes exactly.
+
+The failed firmware's ELF resolved Arduino's weak `btInUse()` to false, causing
+boot to release Bluetooth controller memory before the probe's setup. The
+pinned NimBLE wrapper retains the Bluetooth HAL through a `btStarted()` status
+query; raw startup omitted that linkage anchor. The correction adds the same
+anchor and an ELF regression check for the strong true-returning `btInUse()`.
+Build and source evidence establish this defect; a new physical attempt must
+establish corrected startup. No camera control success is claimed.
+
 ## Reproduction and limits
 
 Close competing camera apps, keep the owner-selected camera available, perform

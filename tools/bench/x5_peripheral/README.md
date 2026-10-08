@@ -11,6 +11,16 @@ No modem/SD/IMU GPIO, filesystem, production startup or persistent bond storage
 is linked. Pinned ESP32/Arduino packages match the root project; NimBLE-Arduino
 is pinned at `dfb4ac561a06797081be9e752902a6582e7f029e` (2.3.6).
 
+Raw startup retains the pinned Arduino Bluetooth HAL via `btStarted()`, matching
+the linkage anchor in `NimBLEDevice::init` without calling that NVS-initializing
+wrapper. This status query makes the HAL's strong `btInUse()` available during
+Arduino boot, preventing its weak false fallback from releasing all Bluetooth
+controller memory before A. The ELF audit requires that strong true-returning
+implementation. The initial physical startup returned `ESP_ERR_INVALID_STATE`
+before sync; its ELF had the weak false implementation and boot memory release.
+The corrected ELF is compile/audit evidence; startup and pairing still require
+a new physical trial.
+
 ## Source-backed prototype profile
 
 The [MIT ESP32 example at 83d4748](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino)

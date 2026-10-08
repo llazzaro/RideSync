@@ -243,6 +243,11 @@ void hostTask(void *) {
   vTaskDelete(nullptr);
 }
 int initializeSdk() {
+  // Match the pinned NimBLE Arduino linkage anchor: pulling esp32-hal-bt.c
+  // supplies strong btInUse() before initArduino runs. Otherwise its weak
+  // false fallback releases all BTDM memory at boot, before this owner starts.
+  // btStarted only queries status; it neither starts BLE nor accesses NVS.
+  (void)btStarted();
   esp_bt_controller_config_t config = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
   config.mode = ESP_BT_MODE_BLE;
   config.ble_max_conn = 1;

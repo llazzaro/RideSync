@@ -20,7 +20,12 @@ def run(tool, *args):
 def inspect(nm, objdump):
     elf = BUILD / 'firmware.elf'
     symbols = run(nm, '-C', elf)
+    assert re.search(r'^\S+ T btInUse$', symbols, re.MULTILINE), (
+        'Bluetooth HAL missing: weak core btInUse releases BLE memory before setup')
+    assert re.search(r'^\S+ T btStarted$', symbols, re.MULTILINE), (
+        'missing pinned Arduino Bluetooth HAL linkage anchor')
     names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
+    assert 'btStart' not in names, 'unexpected Arduino controller startup linked'
     guarded = {
         'nvs_flash_init', 'nvs_flash_erase', 'nvs_open',
         'nvs_open_from_partition', 'esp_partition_erase_range',
@@ -39,6 +44,9 @@ def inspect(nm, objdump):
     nvs_object = objects[0].with_name('ble_store_nvs.c.o')
     assert not run(nm, nvs_object).strip(), 'persistent store object is not empty'
     disassembly = run(objdump, '-d', elf)
+    bt_in_use = re.search(r'<btInUse>:\n(.*?)(?=\n\S+ <|\Z)', disassembly, re.DOTALL)
+    assert bt_in_use and re.search(r'\bmovi(?:\.n)?\s+a2,\s*1\b', bt_in_use.group(1)), (
+        'pinned ESP32 Bluetooth HAL must return true from btInUse')
     callers = {}
     owner = None
     for line in disassembly.splitlines():
@@ -49,6 +57,9 @@ def inspect(nm, objdump):
         if call:
             callers.setdefault(call.group(1), set()).add(owner)
     phy = {'esp_phy_load_cal_data_from_nvs', 'esp_phy_store_cal_data_to_nvs'}
+    hal_queries = {target for target, owners in callers.items() if 'btStarted' in owners}
+    assert hal_queries == {'esp_bt_controller_get_status'}, (
+        f'Bluetooth HAL anchor must only query controller status: {hal_queries}')
     for name in names:
         if name.startswith('nvs_') and name != 'nvs_find_ns_handle':
             observed = callers.get(name, set())
@@ -70,6 +81,7 @@ def inspect(nm, objdump):
             f'SDK submission outside retained owner: {target}: {observed}')
     print('PASS: RAM config store; empty persistent object; core/PHY refusal boundaries; no unexpected NVS callers')
     print('PASS: application advertising start/stop/terminate callers stay in retained SDK owner')
+    print('PASS: strong Arduino Bluetooth HAL retains controller memory before setup')
     print('PHY getters/setters remain linked but are behind open refusal; source error-branch review is still required.')
 
 
