@@ -22,6 +22,9 @@ struct WorkerPolicy {
 class HealthProgress {
 public:
   void completed(DeviceHealth outcome = DeviceHealth::Ok);
+  // Admission failed: no worker and no completed work was fabricated.
+  void refused() { refused_.store(true, std::memory_order_release); }
+  bool isRefused() const { return refused_.load(std::memory_order_acquire); }
   void observe(uint32_t completed_generation, DeviceHealth outcome);
   // Irreversible worker lifetime completion, only AFTER all cleanup returns.
   // Never use a device terminal/error flag alone; no further work may be admitted.
@@ -32,12 +35,12 @@ public:
 
 private:
   std::atomic<uint32_t> generation_{0};
-  std::atomic<bool> finished_{false};
+  std::atomic<bool> finished_{false}, refused_{false};
   std::atomic<DeviceHealth> outcome_{DeviceHealth::Ok};
 };
 struct HealthDecision {
   bool valid = false, feed = false, execution_healthy = false, stable_candidate = false;
-  uint8_t stalled = 0;
+  uint8_t stalled = 0, refused = 0;
 };
 class HealthSupervisor {
 public:

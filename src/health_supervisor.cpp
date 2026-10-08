@@ -40,8 +40,19 @@ HealthDecision HealthSupervisor::evaluate(uint32_t now) {
     const auto &p = policy_[i];
     if (!p.enabled)
       continue;
-    if (progress_[i].isFinished())
-      continue; // Declared completed lifetime, not an unexecuted deadline check.
+    if (progress_[i].isRefused()) {
+      d.refused |= static_cast<uint8_t>(1U << i);
+      if (p.required) {
+        all_started = false;
+        fresh = false;
+      }
+      continue;
+    }
+    if (progress_[i].isFinished()) {
+      if (p.required && !started_[i] && !progress_[i].generation())
+        all_started = false;
+      continue;
+    }
     const uint32_t generation = progress_[i].generation();
     // Accept forward movement across wrap, reject repeats and backward generations.
     const uint32_t delta = generation - seen_[i];
@@ -63,7 +74,7 @@ HealthDecision HealthSupervisor::evaluate(uint32_t now) {
   for (size_t i = 0; i < policy_.size(); ++i)
     if (policy_[i].required)
       required_mask |= static_cast<uint8_t>(1U << i);
-  d.execution_healthy = (d.stalled & required_mask) == 0;
+  d.execution_healthy = ((d.stalled | d.refused) & required_mask) == 0;
   d.feed = d.execution_healthy && fresh;
   d.stable_candidate = d.execution_healthy && all_started;
   if (d.feed)

@@ -406,8 +406,31 @@ void actual_camera_retry_exhaustion_is_terminal_device_state_not_execution_stall
   TEST_ASSERT_EQUAL(2, transport.calls.size());
   TEST_ASSERT_EQUAL((int)Lifecycle::Failed, (int)cameras.state(0)->lifecycle);
 }
+void refused_admission_is_not_completed_work_or_a_stall() {
+  HealthSupervisor h;
+  TEST_ASSERT_TRUE(h.begin(required(), 0));
+  h.progress(Worker::At).refused();
+  auto d = h.evaluate(100);
+  TEST_ASSERT_EQUAL_UINT8(1, d.refused);
+  TEST_ASSERT_EQUAL_UINT8(0, d.stalled);
+  TEST_ASSERT_EQUAL_UINT32(0, h.progress(Worker::At).generation());
+  TEST_ASSERT_FALSE(d.feed);
+  TEST_ASSERT_FALSE(d.execution_healthy);
+  TEST_ASSERT_FALSE(d.stable_candidate);
+  TEST_ASSERT_FALSE(h.begin({}, 200));
+}
+void early_cancelled_required_lifetime_cannot_prove_stable_boot() {
+  HealthSupervisor h;
+  TEST_ASSERT_TRUE(h.begin(required(), 0));
+  h.progress(Worker::At).finished();
+  const auto d = h.evaluate(100000);
+  TEST_ASSERT_EQUAL_UINT8(0, d.stalled);
+  TEST_ASSERT_FALSE(d.stable_candidate);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(refused_admission_is_not_completed_work_or_a_stall);
+  RUN_TEST(early_cancelled_required_lifetime_cannot_prove_stable_boot);
   RUN_TEST(stalled_required_worker_withholds_feed_even_while_control_runs);
   RUN_TEST(absent_devices_storms_and_exhaustion_keep_execution_live);
   RUN_TEST(grace_deadline_and_generation_rollover_are_bounded);

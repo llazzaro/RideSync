@@ -187,13 +187,16 @@ creation/registration/feed failure, uninitialized TWDT, existing subscription,
 retained safe mode, cold-record invalidation and the explicit serial clear
 mailbox. Stand-ins verify application calls and ownership, not hardware resets,
 SDK implementation behavior, stack use, scheduling or RTC retention.
+The actual-main SDK harness now also exercises the configuration barrier and
+commissioned worker route; see the #42 checks below.
 
 Default firmware starts one independent priority-2 task on core 1 with a fixed
 4096-byte stack and a 100 ms `vTaskDelayUntil` cadence. AT/BLE/SD/IMU slots default
 to disabled, and no GPIO or physical driver starts. Safe mode inhibits optional
-startup/command admission; current serial-only composition has none to admit.
-Future composition must check safe mode before enabling any optional driver or
-producer. The Arduino loop only prints changed status and posts operator input;
+startup/command admission. An explicitly supplied commissioning provider may
+admit the composed workers after config and supervisor barriers. The default
+provider is null. The Arduino loop serializes application/control service and
+posts operator input;
 it cannot feed the supervisor. Supervisor passes do no peripheral IO, allocation,
 manager mutations or worker waits. Worker priority/yield behavior and stack
 high-water marks still need measurement with the intended composition.
@@ -393,7 +396,7 @@ on the same private worker, exclusive route admission, early refusal status and
 blocked final close without control waits. Full native/Python/format and all
 three pinned ESP32 environments remain the integration gates. See
 [local telemetry](local_telemetry.md) for lifetime, qualification and physical
-limits. Default startup remains inactive pending #42.
+limits. Default startup remains inactive without explicit commissioning.
 
 ## Handlebar owner software checks (#41)
 
@@ -426,4 +429,60 @@ beforeAdvance, 272 for control observe, 880 for facade status, 592 for local
 telemetry service, 224 for group advance and 48 for adapter service. These are
 individual compiler frames and fixed storage, not measured complete call-chain
 stack, high-water margin, heap, latency or radio capacity. Default firmware remains
-inactive pending #42; #22/#31 and all physical/protocol/reference gates stay open.
+inactive without commissioning; #22/#31 and all physical/protocol/reference gates stay open.
+The sizes/frames above are historical #41 evidence; #42 refreshes them below.
+
+
+## Composed worker supervision software checks (#42)
+
+See [startup, progress and lifetime contracts](supervision.md). The actual-main
+SDK harness drives the same `setup`/`loop`, commissioning provider, configuration
+owner, dedicated health-task handshake, concrete telemetry/control facades and
+exclusive HERO12 route as production. It exercises delayed and late config,
+config/health/SD/IMU task refusal, qualification refusal, supervisor subscription
+failure/timeout, safe mode and explicit clear, early stop, blocked ledger and
+close, current settings revocation and stale epoch/generation, final worker
+access and fresh-owner/session admission. All UART, filesystem, Bosch/I2C, SDK
+watchdog/GPIO and RTOS scheduling boundaries are synthetic.
+
+The final-access cases insert a test-only scheduler pause immediately before
+the real SD/BMI wrapper final flag in generated source copies. Production
+ownership/stop/flag logic remains real; these pauses establish that an earlier
+Storage stopped or manager-finished observation cannot release resources. A
+blocked filesystem and delayed wrapper let main run repeated bounded passes
+without advancing SD completion or claiming worker lifetime completion.
+Existing native tests preserve event-first single manager/group advancement,
+terminal GPS key release and late-response cancellation; new tests distinguish
+refused task admission, never-started lifetime cancellation and a bounded
+identity-startup timeout. Historical-source RED checks and final GREEN command
+logs are retained externally under `.pio/task-42-logs/`; fixture compile/input
+failures are distinguished from behavioral assertion failures in the report.
+
+Full native, Python, formatting, all three pinned target builds and the compiled
+config-stack check are required on the final source. Retained target symbols,
+fixed ABI and individual compiler frames are refreshed separately; none proves
+complete nested SDK/RTOS/interrupt stack, task high-water, heap margin, scheduler
+latency, radio capacity or physical watchdog behavior. The original full #22
+mixed-camera matrix and #31 fault/eight-hour-soak/controlled-ride matrix remain
+open, as do SD durability/namespace commissioning, board, camera, IMU/reference,
+Insta360 and estimator qualification.
+
+
+Final #42 source checks passed 327 native cases, 26 Python tests (including the
+actual-main SDK scenarios), formatting and all three pinned ESP32 targets. The
+fresh default ELF/object configuration-stack audit passes its 4096-byte compiled
+application-path budget with an 8192-byte SDK/RTOS reserve; the config task stays
+12288 bytes. This reserve is an allowance, not measured complete stack usage.
+
+Pinned Xtensa fixed ABI bytes: ControlStatus 864, HandlebarControl 1032,
+Esp32HandlebarControl 1232, LocalTelemetryRuntime 13512, Esp32LocalTelemetry 16000,
+SupervisedEsp32Application 18440, HealthSupervisor 140, ArduinoSdStorage 192 and
+Bmi270Worker 12. The application contains its facades; these sizes are not
+additive memory consumption. The retained factory and actual prepare/launch/
+current/service methods plus exact-owner full-route unbind appear in the linked
+HERO12 image. Individual compiler frames in that image: prepare 864, launch 48,
+current 32, application service entries 32/64, telemetry service 592, control
+beforeAdvance 32, control observe 272, handlebar status 896, GPS tick 256, SD/BMI
+wrappers 32 each, health/config tasks 64 each, setup 192 and loop 208 bytes.
+These are individual emitted frames, not nested call-chain sums or runtime
+high-water measurements. The physical acceptance boundaries above remain open.

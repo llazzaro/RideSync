@@ -60,7 +60,8 @@ uint8_t channelEndpoint(gopro::Channel c, bool write) {
 }
 } // namespace
 
-Hero12Adapter::Hero12Adapter(BleHost &host, Clock &clock) : clock_(clock), central_(host, *this) {}
+Hero12Adapter::Hero12Adapter(BleHost &host, Clock &clock)
+    : clock_(clock), central_(host, *this, &progress_) {}
 void Hero12Adapter::attach(CameraManager &manager) { manager_ = &manager; }
 RetryPolicy Hero12Adapter::managerPolicy() {
   RetryPolicy p;

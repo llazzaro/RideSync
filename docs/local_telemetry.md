@@ -6,7 +6,7 @@ creates no application task. Call `start`, `service`, control-manager operations
 `requestStop` and `status` on that same owner. Copy the fixed status through a
 mailbox before using it in another context. Do not call a manager/group tick,
 GPS tick or admission tick after the owned service pass. #41 adds controls on
-this owner; #42 supplies startup barriers and supervision. Default firmware does
+this owner; [supervised startup](supervision.md) supplies startup barriers and supervision. Default firmware does
 not construct or start the runtime.
 
 `Esp32LocalTelemetry` connects this owner to the real ArduinoModemUart,
@@ -36,7 +36,8 @@ return false with copied Refused/fault status and no pending worker lifetime.
 Repeated start is refused. An IMU task refusal is separately reported while GPS
 logging remains eligible. Actual safe mode is passed to Bmi270Worker: its current
 policy refuses IMU acquisition, and the runtime reports SafeModeRefused while
-qualified GPS continues. This does not bypass safe mode or implement #42 policy.
+qualified GPS continues. Supervision disables that non-admitted IMU slot in
+safe mode and retains independently eligible GPS/SD policy.
 Cameras are optional: an empty/disabled/refused camera configuration and NVS
 refusal do not affect independently qualified local admission. A failed camera
 activation falls back to the same local session, with CameraAdmission::Refused.

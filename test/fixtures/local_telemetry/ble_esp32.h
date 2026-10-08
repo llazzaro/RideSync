@@ -1,5 +1,6 @@
 #pragma once
 #include "ble_remote.h"
+extern bool host_failure;
 namespace ridesync {
 class Esp32BleHost : public BleHost {
 public:
@@ -7,7 +8,9 @@ public:
     static Esp32BleHost h;
     return h;
   }
-  BleHostState start(bool, bool) override { return BleHostState::Ready; }
+  BleHostState start(bool, bool) override {
+    return host_failure ? BleHostState::Failed : BleHostState::Ready;
+  }
   BleHostState state() const override { return BleHostState::Ready; }
   BleFault fault() const override { return BleFault::None; }
   void sealStartup() override {}

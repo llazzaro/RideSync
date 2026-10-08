@@ -111,6 +111,10 @@ int main(int argc, char **argv) {
   ridesync::encodeConfig(c,1,startup_settings);
  }
  setup();
+ if(scenario==13 || scenario==15) {
+  assert(task_fn==nullptr); // no policy/subscription before completed config
+  loop(); assert(task_fn==nullptr); loops=0;
+ }
  assert(config_tasks==(scenario>=13 ? 1 : 0));
  if(scenario>=9) {
   const char *admission=scenario>=13 ? "config_ble_admission=1" : "config_ble_admission=0";
@@ -120,11 +124,12 @@ int main(int argc, char **argv) {
  if(scenario==13 || scenario==15) {
   try { config_fn(nullptr); } catch(const std::runtime_error &) {}
  }
- assert(task_fn != nullptr); // actual startup must create independent supervision
+ assert(task_fn == nullptr); // setup never starts an unfixed policy
  if(scenario==6) assert(safe_mode.load());
  if(scenario==7) assert(!safe_mode.load());
  if(scenario==8) { assert(safe_mode.load()); Serial.input='C'; }
  loop(); assert(loops==1);
+ assert(task_fn != nullptr); // first completed/unavailable configuration fixes policy
  assert(status_led.state()==((scenario==1 || scenario==14 || scenario==6 || scenario==8)?ridesync::LedState::Error:ridesync::LedState::Off));
  if(scenario==13) {
   assert(Serial.output.find("config ready=1 effective=1") != std::string::npos);
@@ -187,7 +192,7 @@ inline int gpio_set_level(gpio_num_t, uint32_t) { throw std::logic_error("unexpe
             (temp / "run.cpp").write_text(HARNESS)
             subprocess.run(["c++", "-std=c++11", "-DARDUINO_ARCH_ESP32", "-I", str(temp), "-I", str(ROOT),
                             "-I", str(ROOT / "include"), str(temp / "run.cpp"),
-                            str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/config_storage.cpp"),
+                            str(ROOT / "src/application_startup.cpp"), str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/config_storage.cpp"),
                             str(ROOT / "src/config_bootstrap.cpp"), str(ROOT / "src/config.cpp"), str(ROOT / "src/button_manager.cpp"), str(ROOT / "src/storage.cpp"),
                             str(ROOT / "src/session_clock.cpp"), str(ROOT / "src/status_led.cpp"), "-o", str(temp / "run")], check=True)
             for scenario in range(16):

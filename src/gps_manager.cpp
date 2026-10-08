@@ -10,7 +10,7 @@ void GpsManager::cancel() {
     power_->key(false);
 }
 void GpsManager::tick() {
-  if (stage_ == PowerStage::Cancelled)
+  if (stage_ == PowerStage::Cancelled || stage_ == PowerStage::InvalidClock)
     return;
   const auto now = clock_.snapshot();
   if (now.monotonic_quality != MonotonicQuality::Valid ||
@@ -23,10 +23,10 @@ void GpsManager::tick() {
     auto invalid = now;
     invalid.monotonic_quality = MonotonicQuality::InvalidSession;
     modem_.tick(invalid);
+    if (completed_ != UINT32_MAX)
+      ++completed_; // Returned terminal AT service, no UART command/restart.
     return;
   }
-  if (stage_ == PowerStage::InvalidClock)
-    return;
   if (!started_) {
     if (!timing_.qualified || modem_.snapshot(now).state == ModemState::Disabled ||
         (power_ && (timing_.key_active_ms == 0 || timing_.settle_ms == 0 ||
@@ -49,8 +49,11 @@ void GpsManager::tick() {
   }
   if (stage_ == PowerStage::Settling && now.monotonic_ms - start_ms_ >= timing_.settle_ms)
     stage_ = PowerStage::Complete;
-  if (stage_ == PowerStage::Complete)
+  if (stage_ == PowerStage::Complete) {
     modem_.tick(now);
+    if (completed_ != UINT32_MAX)
+      ++completed_;
+  }
 }
 bool GpsManager::restartAfterVerifiedBarrier() {
   if (stage_ == PowerStage::Cancelled)

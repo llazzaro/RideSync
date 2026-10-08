@@ -18,7 +18,7 @@ struct HandlebarGpioStatus {
 // Retained, callable composition on the SAME telemetry/global service route.
 // Caller owns telemetry and its resources through canRelease(). Construct before
 // telemetry.start(); all entry points run on the one application owner. Default
-// configuration refuses IO/admission. #42 supplies supervised activation later.
+// configuration refuses IO/admission. Supervised startup supplies qualified activation.
 class Esp32HandlebarControl {
 public:
   Esp32HandlebarControl(Esp32LocalTelemetry &, const QualifiedHandlebar &);

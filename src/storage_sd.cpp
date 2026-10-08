@@ -138,8 +138,15 @@ bool ArduinoSdStorage::start() {
 }
 void ArduinoSdStorage::run(void *arg) {
   auto &self = *static_cast<ArduinoSdStorage *>(arg);
-  while (!self.owner_.workerStep())
+  for (;;) {
+    const bool done = self.owner_.workerStep();
+    // Allocation/mount/ledger, wait-bind and Storage all return here. Blocked IO
+    // cannot publish progress. The wrapper flag below is the lifetime barrier.
+    self.progress_.completed(self.ioError() ? DeviceHealth::IoError : DeviceHealth::Ok);
+    if (done)
+      break;
     vTaskDelay(1);
+  }
   self.finished_.store(true, std::memory_order_release);
   vTaskDelete(nullptr);
 }

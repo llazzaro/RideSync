@@ -28,6 +28,7 @@ public:
   // Refuses after cancel(); a fresh owner/session is required after terminal stop.
   bool restartAfterVerifiedBarrier();
   ModemSnapshot snapshot();
+  uint32_t completed() const { return completed_; }
   PowerStage powerStage() const { return stage_; }
 
 private:
@@ -36,6 +37,7 @@ private:
   GnssPowerControl *power_;
   QualifiedPowerTiming timing_;
   PowerStage stage_;
+  uint32_t completed_ = 0;
   bool started_ = false;
   uint64_t start_ms_ = 0, session_ = 0;
 };

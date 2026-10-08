@@ -13,10 +13,30 @@
 #include <vector>
 using namespace ridesync;
 std::atomic<uint32_t> raw_time{100};
-unsigned led_configs = 0, led_writes = 0;
+unsigned led_configs = 0, led_writes = 0, button_configs = 0;
 int gpio_failure = 0, button_level = 1;
-std::vector<std::thread> workers;
-bool fail_sd = false, fail_imu = false;
+std::vector<std::thread> worker_threads;
+bool fail_sd = false, fail_imu = false, host_failure = false;
+bool fail_health_task = false, fail_config_task = false;
+int sdk_add_error = 0;
+void (*config_task)(void *) = nullptr, (*health_task)(void *) = nullptr;
+std::atomic<bool> pause_imu_final{false}, imu_final_entered{false}, release_imu_final{false};
+std::atomic<bool> pause_sd_final{false}, sd_final_entered{false}, release_sd_final{false};
+void test_final_imu_access() {
+  if (pause_imu_final.load()) {
+    imu_final_entered.store(true);
+    while (!release_imu_final.load())
+      std::this_thread::yield();
+  }
+}
+void test_final_sd_access() {
+  if (pause_sd_final.load()) {
+    sd_final_entered.store(true);
+    while (!release_sd_final.load())
+      std::this_thread::yield();
+  }
+}
+std::atomic<bool> block_ledger{false}, ledger_entered{false}, release_ledger{false};
 std::atomic<bool> block_close{false}, close_entered{false}, release_close{false};
 std::array<std::vector<uint8_t>, 2> ledger;
 std::string csv;
@@ -24,6 +44,14 @@ int selected = 0;
 size_t offset = 0;
 unsigned mounts = 0, unmounts = 0, sd_tasks = 0, imu_tasks = 0;
 int spawn(void (*fn)(void *), const char *name, void *arg) {
+  if (strcmp(name, "config") == 0) {
+    config_task = fn;
+    return !fail_config_task;
+  }
+  if (strcmp(name, "health") == 0) {
+    health_task = fn;
+    return !fail_health_task;
+  }
   bool sd = strcmp(name, "gps_sd") == 0;
   assert(sd || strcmp(name, "imu") == 0);
   if (sd) {
@@ -35,7 +63,7 @@ int spawn(void (*fn)(void *), const char *name, void *arg) {
     if (fail_imu)
       return 0;
   }
-  workers.emplace_back([=] { fn(arg); });
+  worker_threads.emplace_back([=] { fn(arg); });
   return 1;
 }
 int test_open(const char *path, int flags, unsigned) {
@@ -50,6 +78,11 @@ int test_open(const char *path, int flags, unsigned) {
 }
 ssize_t test_read(int fd, void *b, size_t n) {
   assert(fd == 8);
+  if (block_ledger.load()) {
+    ledger_entered.store(true);
+    while (!release_ledger.load())
+      std::this_thread::yield();
+  }
   n = std::min(n, ledger[selected].size() - offset);
   if (n)
     memcpy(b, ledger[selected].data() + offset, n);
@@ -135,9 +168,12 @@ void pass(Esp32LocalTelemetry &r) {
   raw_time.fetch_add(1);
   std::this_thread::sleep_for(std::chrono::microseconds(100));
 }
+#include "main_app.inc"
 int main(int argc, char **argv) {
   assert(argc == 2);
   std::string mode = argv[1];
+  if (mode.find("main-") == 0)
+    return mainApplication(mode);
   HardwareSerial uart;
   SPIClass spi;
   TwoWire wire;
@@ -254,7 +290,7 @@ int main(int argc, char **argv) {
   if (refuse) {
     assert(runtime->status().phase == TelemetryPhase::Refused);
     assert(runtime->status().fault != TelemetryFault::None);
-    assert(runtime->canRelease() && workers.empty());
+    assert(runtime->canRelease() && worker_threads.empty());
     if (control) {
       auto camera = hero12Runtime();
       const auto ticks = camera.manager.ticks(), advances = camera.group.advancements();
@@ -264,7 +300,7 @@ int main(int argc, char **argv) {
       assert(copied.local.phase == TelemetryPhase::Refused);
       assert(copied.local.fault == runtime->status().fault && copied.led == LedState::Error);
       assert(camera.manager.ticks() == ticks && camera.group.advancements() == advances);
-      assert(workers.empty() && imu_tasks == 0 && mounts == 0);
+      assert(worker_threads.empty() && imu_tasks == 0 && mounts == 0);
     }
     if (legacy) {
       assert(runtime->status().fault == TelemetryFault::CameraRoute && uart.begins == 0 &&
@@ -355,7 +391,7 @@ int main(int argc, char **argv) {
   assert(mounts == 1 && unmounts == 1);
   control.reset();
   runtime.reset();
-  for (auto &t : workers)
+  for (auto &t : worker_threads)
     t.join();
   assert(csv.find("gps,") != std::string::npos);
   if (mode != "imu-task" && mode != "safe-mode") {

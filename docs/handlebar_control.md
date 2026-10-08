@@ -1,7 +1,7 @@
 # Handlebar control composition (#41)
 
 The source-gated, opt-in control composition shares #40's serialized application
-owner. Firmware `setup()` does not activate it; #42 must admit and supervise the
+owner. Firmware defaults leave it inactive; [supervised startup](supervision.md) admits the
 qualified workers. No physical button, LED, camera or timing result is claimed.
 
 `HandlebarControl` takes caller-owned input and LED ports and the existing HERO12
@@ -93,7 +93,9 @@ releasable (Inactive/Refused/Finished), its concrete service publishes only its 
 cached status through the same owner. It never calls an unrelated global route
 or advances camera managers on that path. The existing actual LED selector and
 present-frame renderer consume this snapshot; they do not replay missed edges.
-No supervisor execution/liveness claim is added here; #42 supplies that policy.
+The copied local observations also carry supervised stall/refusal masks and
+configuration startup outcome. [Supervised startup](supervision.md) supplies
+completed-work policy; physical watchdog behavior remains unmeasured.
 
 Native tests drive the real ButtonManager, CameraEventSession, HERO12 adapter,
 central transport, codecs and RecordingManager with synthetic UART/radio/filesystem

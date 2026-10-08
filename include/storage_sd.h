@@ -1,4 +1,5 @@
 #pragma once
+#include "health_supervisor.h"
 #include "session_storage_owner.h"
 #ifdef ARDUINO
 #include <SD.h>
@@ -39,6 +40,7 @@ public:
   // CSV PathCollision, all other nonzero ioError values mean storage/media IO.
   enum class IoStatus { None, PathCollision, Error };
   IoStatus ioStatus() const;
+  const HealthProgress &progress() const { return progress_; }
   bool workerFinished() const { return finished_.load(std::memory_order_acquire); }
 
 private:
@@ -82,6 +84,7 @@ private:
   } ledger_;
   const QualifiedSdConfig config_;
   SessionStorageOwner owner_;
+  HealthProgress progress_;
   bool started_ = false;
   std::atomic<bool> finished_{false};
   TaskHandle_t task_ = nullptr;

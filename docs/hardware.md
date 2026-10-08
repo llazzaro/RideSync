@@ -88,8 +88,10 @@ independent. `ButtonManager::begin` rejects a missing callback, zero or >= 2^31 
 intervals, long/double intervals <= debounce, and all invalid action enums.
 Defaults are 20 ms debounce, 800 ms long, 300 ms double window; double detection
 is disabled. Actions are intents only: short RecordingIntent, long WakeReconnect,
-optional double Resync. Nothing connects these intents to cameras, wake, LEDs or
-the application yet.
+optional double Resync. The qualified opt-in [handlebar owner](handlebar_control.md)
+connects these intents to the actual camera/group and LED route, under the
+[supervised application startup](supervision.md). Physical button traces and
+qualified board pins remain unverified.
 
 Poll from one scheduler context with a monotonic uint32_t millisecond clock,
 with gaps less than 2^31 ms. State is bounded, with no allocations or waits.

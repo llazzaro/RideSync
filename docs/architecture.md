@@ -253,7 +253,8 @@ clock, CameraV3 Storage and mixed admission route for camera-free or camera-enab
 logging. Its application pass owns modem/GPS/clock, camera service and admission;
 only acquisition and private SD filesystem work use the existing independent
 workers. The ESP32 facade binds this entire owner into `ridesync_hero12_service`
-for future controls, preserves safe-mode worker refusals and waits for final
+for the handlebar owner, preserves safe-mode worker refusals and waits for final
 producer/worker access before releasing caller resources. It remains callable
-and default inactive pending #42 supervision; source/host/compile evidence does
+and default inactive without explicit commissioning. [Supervised startup](supervision.md)
+fixes worker admission and completed-work policies before launch; source/host/compile evidence does
 not establish physical support or measured ride reliability.

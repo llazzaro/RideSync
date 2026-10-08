@@ -164,7 +164,11 @@ never camera identities or payload bytes.
 `main.cpp` creates one 12 KiB, priority-1 configuration task on core 1 only when
 safe mode is off and the SDK boot gate is open. It loads once into owner-private
 RAM settings and services the bootstrap at 100 ms cadence. The existing independent
-health task and its watchdog ownership remain unchanged. No producers are wired
+health task retains its watchdog ownership. Main consumes a completed snapshot
+or latches a 1000 ms startup timeout before fixing worker policy and creating
+that task; optional launch additionally waits for its owned SDK subscription.
+The permanent NVS owner survives timeout, and late publications are consumed
+without granting settings/control admission for this boot. See [supervision](supervision.md). No producers are wired
 to request saves in this milestone. The fixed reverse mailbox is exercised synthetically; future authorized producers
 must use it with the current epoch and generation; direct cross-task calls
 into `ConfigPersistence` are forbidden. Camera/control ticks, BLE callbacks and
@@ -277,7 +281,7 @@ does not update caller RAM. SDK/safe-mode refusal discards pending persistence
 and candidate admission without I/O; discovered future/corrupt/ambiguous/read
 failure also publishes explicit terminal unavailability. Gate reopening or
 operator safe-mode clearing cannot replay a discarded command or reopen this
-owner. Restart/admission belongs to later supervised composition. There is no
+owner. Supervised startup does not restart this terminal owner. There is no
 automatic default save, migration save, retry/reset command or erase.
 
 `CameraPeers` is separately provisioned once, copied and frozen for the owner
@@ -287,12 +291,15 @@ field is added. A later model/slot/count, typed BLE address or wake-address chan
 that fixed mapping permanently for this owner, even if settings change back.
 These comparisons enforce stability and never derive the opaque ID. Restoring
 admission requires a new explicitly provisioned, qualified session/owner after
-quiescing both endpoints. Production supplies no mapping.
+quiescing both endpoints. Default production supplies no mapping; an explicit
+commissioning provider may supply the frozen mapping before the config task starts.
 `admitSettings` requires explicit qualification of all configured cameras plus
 valid mapping and open safe-mode/NVS gates; button eligibility also needs its
 independent physical qualification. Its local telemetry eligibility depends only
 on independent local qualification, including during camera/config/safe-mode
-refusal. Eligibility alone starts no local logger, bus or peripheral (#40/#42).
+refusal. Eligibility alone starts no local logger, bus or peripheral; main
+launches qualified composition only after supervisor subscription. Safe mode
+retains eligible GPS/SD logging while the actual BMI270 worker refuses startup.
 
 Pinned Xtensa object sizes in bytes: `CameraSettings` 120, `Settings` 1012,
 `SettingsSave` 1032, `SettingsSnapshot` 1168, `CameraPeers` 100,

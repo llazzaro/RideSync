@@ -112,8 +112,9 @@ provenance are copied at construction: 1–48 ASCII letters, digits, underscore,
 period or hyphen; unsafe CSV/newline strings are rejected rather than escaped.
 All fields are ASCII with comma delimiters, decimal numbers and LF lines. The
 [sample CSV](example_gps.csv) is **synthetic**, not a receiver/card/ride capture.
-The current firmware entry point does not instantiate the logger or a qualified
-GNSS hardware profile and supplies no actual valid fix evidence.
+The default firmware leaves the logger and GNSS hardware inactive. An explicitly
+qualified [commissioning provider](supervision.md) composes them through the real
+firmware entry point. This software path supplies no actual valid fix evidence.
 
 The header names define the serialization; no native struct bytes are persisted:
 

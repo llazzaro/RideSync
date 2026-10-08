@@ -20,9 +20,13 @@ checks establish software behavior and build compatibility; they do not prove
 camera or sensor operation on the motorcycle.
 
 The default firmware provides serial diagnostics and health supervision, and
-loads configuration when SDK admission permits. Camera control, GNSS, SD, IMU and external controls remain disabled
-until wiring, identities, firmware/API and required store evidence are qualified.
-The complete handlebar workflow is not yet composed or bench-validated. Estimated
+loads configuration when SDK admission permits. A bounded startup barrier fixes
+worker policies before supervision and admits the commissioned optional runtime
+only after the dedicated watchdog subscription succeeds. Camera control, GNSS,
+SD, IMU and external controls remain disabled by default until wiring, identities,
+firmware/API and required store evidence are qualified. The handlebar and local
+telemetry workflows are composed and tested synthetically; physical bench
+validation remains open. Estimated
 linear acceleration/lean/pitch and Insta360 control/wake/GPS forwarding still need
 their required protocol or reference evidence. Opt-in HERO12 recovery now has a
 bounded discovery/connect/query/conditional-REC software path, with physical
@@ -30,8 +34,8 @@ sleep/wake behavior still untested. The retained camera/group logging route now
 records admitted requests, validated wire ACKs and accepted state observations
 as distinct facts in [CameraV3 logs](docs/log_format.md). Owner-receipt and storage
 admission times are separate; radio receipt and camera acquisition remain unknown.
-Configuration handoff, durable session IDs and complete application composition
-are tracked in [#38](https://github.com/llazzaro/RideSync/issues/38)–[#42](https://github.com/llazzaro/RideSync/issues/42).
+Configuration handoff, durable session IDs, local/control composition and
+supervised startup have software implementations tracked in [#38](https://github.com/llazzaro/RideSync/issues/38)–[#42](https://github.com/llazzaro/RideSync/issues/42).
 
 A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
 but acquired no position fix. No RideSync firmware or camera behavior has been
@@ -92,8 +96,10 @@ types are known. Source settings use the typed `SourceConfig` API in
 [include/config.h](include/config.h); no JSON parser is implemented. Replace null
 identifiers with measured BLE addresses, set public/random address type, then
 enable only qualified profiles through their documented commissioning API.
-[NVS persistence](docs/configuration.md) is implemented, but its owner-private
-loaded settings are not yet connected to a complete camera/control application.
+[NVS persistence](docs/configuration.md) publishes owned validated settings to
+the application startup barrier. A separately commissioned provider supplies
+qualified resources and frozen opaque peer mappings; saved settings alone grant
+no hardware admission. See [supervised startup](docs/supervision.md).
 The configurable registry capacity is 1–8 cameras; the shared central currently
 admits at most four peer slots and explicitly refuses a fifth. Neither bound is
 a measured BLE connection limit. See

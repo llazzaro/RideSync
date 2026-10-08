@@ -3,8 +3,9 @@
 - Source-gated, opt-in software implements camera intent/state contracts, bounded
   group REC/STOP, HERO12 codecs/shared BLE transport/recovery, configuration
   handoff and coherent handlebar/LED status. Default firmware keeps optional
-  control and AT/BLE/SD/IMU workers inactive pending #42 supervised admission and
-  explicit resource qualification. Native/retained builds are not hardware proof.
+  control and AT/BLE/SD/IMU workers inactive without explicit resource
+  qualification. Bounded configuration/startup, completed-work supervision and
+  ordered worker teardown are composed in software. Native/retained builds are not hardware proof.
 - A factory-firmware probe confirmed modem identity and GNSS enable/READY, but no
   position fix. RideSync firmware and per-camera compatibility remain unverified
   on physical hardware.
@@ -39,8 +40,8 @@
   calibration and dynamic lean/reference validation remain open. GPS alone does
   not measure lean; no validated inclination estimator is claimed.
 - Button/LED GPIO adapters require explicit qualified wiring and default off.
-  Software watchdog/recovery contracts exist; actual supervision/admission (#42),
-  watchdog/stack/heap measurements, installation/enclosure (#30), and the complete
+  Software watchdog/recovery and actual main supervision/admission contracts exist;
+  physical watchdog/stack/heap measurements, installation/enclosure (#30), and the complete
   #31 fault/8-hour-soak/controlled-ride acceptance remain open.
 
 Source implementation, Experimental qualification and Confirmed hardware support

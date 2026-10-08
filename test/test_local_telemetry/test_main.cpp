@@ -792,8 +792,63 @@ void control_copies_terminal_startup_refusal_even_without_worker() {
   TEST_ASSERT_EQUAL_INT(TelemetryFault::Qualification, status.local.fault);
   TEST_ASSERT_EQUAL_INT(LedState::Error, status.led);
 }
+void blocked_identity_startup_cancels_at_deadline_without_releasing_worker() {
+  Rig f;
+  auto c = qualified();
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_TRUE(r.start());
+  f.raw.value += 999;
+  r.service();
+  TEST_ASSERT_EQUAL_INT(TelemetryPhase::Allocating, r.status().phase);
+  ++f.raw.value;
+  r.service();
+  TEST_ASSERT_EQUAL_INT(TelemetryFault::StartupTimeout, r.status().fault);
+  TEST_ASSERT_EQUAL_INT(TelemetryPhase::Stopping, r.status().phase);
+  TEST_ASSERT_FALSE(r.canRelease());
+  TEST_ASSERT_NULL(r.session());
+  TEST_ASSERT_EQUAL_UINT(0, f.imu.starts);
+  TEST_ASSERT_TRUE(f.uart.tx.empty());
+  f.finish(r);
+}
+void late_identity_completion_cannot_bypass_owner_startup_deadline() {
+  Rig f;
+  auto c = qualified();
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_TRUE(r.start());
+  f.sd.step(); // committed, but not yet admitted by the application owner
+  TEST_ASSERT_EQUAL_INT(IdentityStatus::Committed, f.sd.allocation().status);
+  f.raw.value += 1000;
+  r.service();
+  TEST_ASSERT_EQUAL_INT(TelemetryFault::StartupTimeout, r.status().fault);
+  TEST_ASSERT_NULL(r.session());
+  TEST_ASSERT_EQUAL_UINT(0, f.imu.starts);
+  TEST_ASSERT_TRUE(f.uart.tx.empty());
+  TEST_ASSERT_FALSE(r.canRelease());
+  f.finish(r);
+}
+void invalid_clock_records_the_completed_terminal_at_pass_without_restarting() {
+  Rig f;
+  auto c = qualified();
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_TRUE(r.start());
+  f.pass(r);
+  f.pass(r);
+  const auto before = r.status().at_completed;
+  TEST_ASSERT_TRUE(r.session()->clock().reset(42));
+  r.service();
+  TEST_ASSERT_EQUAL_INT(UartHealth::InvalidClock, r.status().gps.health);
+  TEST_ASSERT_EQUAL_UINT32(before + 1, r.status().at_completed);
+  const auto bytes = f.uart.tx.size();
+  r.service();
+  TEST_ASSERT_EQUAL_UINT32(before + 1, r.status().at_completed);
+  TEST_ASSERT_EQUAL_UINT(bytes, f.uart.tx.size());
+  f.finish(r);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(invalid_clock_records_the_completed_terminal_at_pass_without_restarting);
+  RUN_TEST(late_identity_completion_cannot_bypass_owner_startup_deadline);
+  RUN_TEST(blocked_identity_startup_cancels_at_deadline_without_releasing_worker);
   RUN_TEST(control_copies_terminal_startup_refusal_even_without_worker);
   RUN_TEST(runtime_control_reuses_one_camera_pass_and_copied_local_observations);
   RUN_TEST(local_camera_refusal_keeps_control_ineligible_and_local_storage_running);

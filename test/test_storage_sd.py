@@ -222,7 +222,8 @@ int test_close(int);
                 '-pthread', '-I', folder, '-I', str(ROOT / 'include'),
                 str(Path(folder) / 'main.cpp'), str(ROOT / 'src/storage.cpp'),
                 str(Path(folder) / 'storage_sd.cpp'), str(ROOT / 'src/session_identity.cpp'),
-                str(ROOT / 'src/session_storage_owner.cpp'), '-o', str(executable),
+                str(ROOT / 'src/session_storage_owner.cpp'), str(ROOT / 'src/health_supervisor.cpp'),
+                str(ROOT / 'src/session_clock.cpp'), '-o', str(executable),
             ], capture_output=True)
             self.assertEqual(0, build.returncode, build.stderr.decode())
             for scenario in ('lifecycle', 'collision', 'failed-mount', 'absent', 'corrupt',

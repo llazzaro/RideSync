@@ -117,7 +117,10 @@ void HandlebarControl::observe(const LocalTelemetryStatus &s) {
   status_.group = group_.status();
   status_.health = {};
   status_.health.safe_mode = s.safe_mode;
-  status_.health.application_fault = s.fault != TelemetryFault::None || status_.led_error != 0;
+  status_.health.required_worker_stall = s.worker_stalls != 0;
+  status_.health.application_fault = s.supervision_fault || s.worker_refused ||
+                                     s.fault != TelemetryFault::None || status_.led_error != 0 ||
+                                     s.configuration == StartupState::ConfigTimedOut;
   for (size_t i = 0; i < manager_.size(); ++i) {
     status_.lifecycle[i] = manager_.state(i)->lifecycle;
     status_.recovery[i] = adapter_.recoveryState(i);

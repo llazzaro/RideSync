@@ -2,6 +2,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <stdexcept>
 #include <string>
 #define SERIAL_8N1 0
 #define OUTPUT 1
@@ -15,7 +17,8 @@ extern std::atomic<uint32_t> raw_time;
 inline uint32_t millis() { return raw_time.load(); }
 inline void delayMicroseconds(uint32_t) {}
 inline void digitalWrite(int, int) {}
-inline void pinMode(int, int) {}
+extern unsigned button_configs;
+inline void pinMode(int, int) { ++button_configs; }
 struct HardwareSerial {
   unsigned begins = 0, writes = 0;
   std::string tx;
@@ -29,3 +32,13 @@ struct HardwareSerial {
     return n;
   }
 };
+
+struct SerialPort {
+  void begin(unsigned) {}
+  void println(const char *) {}
+  template <typename... T> void printf(const char *, T...) {}
+  int available() { return 0; }
+  int read() { return -1; }
+};
+static SerialPort Serial;
+inline void delay(unsigned) {}

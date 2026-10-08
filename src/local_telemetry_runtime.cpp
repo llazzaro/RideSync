@@ -16,6 +16,7 @@ LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
                                              GnssPowerControl *power)
     : raw_(raw), uart_(uart), sd_(sd), imu_(imu), adapter_(adapter), manager_(manager),
       group_(group), config_(config), power_(power) {
+  current_safe_mode_ = config.safe_mode;
   status_.safe_mode = config.safe_mode;
 }
 LocalTelemetryRuntime::~LocalTelemetryRuntime() {
@@ -49,6 +50,7 @@ bool LocalTelemetryRuntime::start() {
     status_.fault = TelemetryFault::StorageTask;
     return false;
   }
+  startup_ms_ = raw_.now();
   sd_started_ = true;
   status_.releasable = false;
   status_.phase = TelemetryPhase::Allocating;
@@ -67,6 +69,11 @@ void LocalTelemetryRuntime::service() {
   }
   status_.identity = sd_.allocation();
   if (status_.phase == TelemetryPhase::Allocating &&
+      raw_.now() - startup_ms_ >= HealthSupervisor::kMaxGraceMs) {
+    status_.fault = TelemetryFault::StartupTimeout;
+    requestStop(); // Live blocked worker is retained; never destroy or wait here.
+  }
+  if (status_.phase == TelemetryPhase::Allocating &&
       status_.identity.status != IdentityStatus::Pending) {
     if (status_.identity.status != IdentityStatus::Committed || !status_.identity.id) {
       status_.fault = TelemetryFault::Identity;
@@ -84,8 +91,8 @@ void LocalTelemetryRuntime::service() {
         requestStop();
       } else {
         bound_ = true;
-        bool camera = config_.cameras_qualified && !config_.safe_mode && config_.peers.count &&
-                      config_.peers.count <= kMaxCameras;
+        bool camera = config_.cameras_qualified && current_camera_ && !current_safe_mode_ &&
+                      config_.peers.count && config_.peers.count <= kMaxCameras;
         if (camera) {
           for (size_t i = 0; i < config_.peers.count; ++i) {
             const auto &p = config_.peers.entries[i];
@@ -119,6 +126,7 @@ void LocalTelemetryRuntime::service() {
       requestStop();
     if (status_.phase == TelemetryPhase::Running) {
       active_->gps.tick();
+      status_.at_completed = active_->gps.completed(); // Only after an actual AT tick returns.
       auto t = s.clock().snapshot();
       auto sample = active_->modem.snapshot(t);
       const auto &fix = sample.fix;
@@ -151,6 +159,14 @@ void LocalTelemetryRuntime::service() {
         imu_finished_ = true;
       }
     }
+    status_.safe_mode = current_safe_mode_;
+    if (!current_camera_ || current_safe_mode_)
+      status_.camera =
+          config_.cameras_qualified ? CameraAdmission::Refused : CameraAdmission::Disabled;
+    if (status_.phase == TelemetryPhase::Stopping && imu_finished_ && !session_stop_requested_) {
+      s.requestStop(); // AFTER final IMU publication and actual wrapper access.
+      session_stop_requested_ = true;
+    }
     if (control_)
       control_->admission(status_);
     s.service(status_.phase == TelemetryPhase::Running ? control_ : nullptr);
@@ -166,13 +182,15 @@ void LocalTelemetryRuntime::requestStop() {
   status_.phase = TelemetryPhase::Stopping;
   if (control_)
     control_->revoke();
+  if (status_.camera == CameraAdmission::Admitted) {
+    group_.cancel();
+    adapter_.stop();
+  }
   if (active_)
     active_->gps.cancel();
   if (imu_started_)
     imu_.requestStop();
-  if (active_ && bound_)
-    active_->session.requestStop();
-  else
+  if (!active_ || !bound_)
     sd_.cancel(); // Unbound owner only; no producer or Storage queue exists.
 }
 bool LocalTelemetryRuntime::attachControl(HandlebarControl &c) {
@@ -181,11 +199,34 @@ bool LocalTelemetryRuntime::attachControl(HandlebarControl &c) {
   control_ = &c;
   return true;
 }
+void LocalTelemetryRuntime::currentAdmission(bool cameras, bool safe_mode) {
+  // A revocation is terminal for camera operations in this session. Returning
+  // settings/safe mode cannot replay queued work or re-enable the old snapshot.
+  if ((!cameras || safe_mode) && current_camera_) {
+    current_camera_ = false;
+    status_.camera =
+        config_.cameras_qualified ? CameraAdmission::Refused : CameraAdmission::Disabled;
+    if (control_)
+      control_->reset();
+    else
+      group_.cancel();
+    if (active_ && bound_ && config_.cameras_qualified)
+      adapter_.stop();
+  }
+  current_safe_mode_ = safe_mode;
+  status_.safe_mode = safe_mode;
+}
+void LocalTelemetryRuntime::supervision(uint8_t stalls, uint8_t refused, bool fault) {
+  status_.worker_stalls = stalls;
+  status_.worker_refused = refused;
+  status_.supervision_fault = fault;
+}
 void LocalTelemetryRuntime::detachControl(HandlebarControl &c) {
   if (control_ == &c && canRelease())
     control_ = nullptr;
 }
 void LocalTelemetryRuntime::observe() {
+  status_.sd_completed = sd_.completed();
   status_.storage_error = sd_.ioError();
   status_.storage_worker_finished = sd_.workerFinished();
   if (active_) {

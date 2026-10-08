@@ -1,4 +1,4 @@
-#include "config_bootstrap.h"
+#include "application_startup.h"
 #include "health_supervisor.h"
 #include "nvs_boot_guard.h"
 #include "status_led.h"
@@ -9,6 +9,7 @@
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <new>
 
 namespace {
 using namespace ridesync;
@@ -24,7 +25,7 @@ BootRecovery recovery;
 std::atomic<bool> clear_safe_mode{false}, safe_mode{false};
 std::atomic<WatchdogState> watchdog_state{WatchdogState::NotStarted};
 std::atomic<int> watchdog_error{0};
-std::atomic<uint8_t> stalled_workers{0};
+std::atomic<uint16_t> worker_health_masks{0};
 
 // One explicit owning service isolates blocking NVS calls from control loops.
 // No SDK init/deinit/erase may run while this owner is active. Future lifecycle
@@ -37,15 +38,22 @@ ConfigPersistence config_persistence(config_store);
 constexpr uint32_t kSettingsEpoch = 1;
 SettingsPublication settings_publication;
 SettingsRequests settings_requests; // no production save producer admitted
-ConfigBootstrap config_bootstrap(config_persistence, settings_publication, settings_requests,
-                                 kSettingsEpoch);
+typename std::aligned_storage<sizeof(ConfigBootstrap), alignof(ConfigBootstrap)>::type
+    config_memory;
+ConfigBootstrap *config_bootstrap = nullptr;
 ApplicationSettings application_settings(kSettingsEpoch); // loop-owned immutable copy
+constexpr uint32_t kConfigStartupMs = 1000;
+StartupState startup_state = StartupState::WaitingConfig;
+StartupState config_startup = StartupState::WaitingConfig;
+uint32_t config_started = 0, supervisor_started = 0;
+ApplicationWorkers *workers = nullptr;
+bool policy_fixed = false, workers_launched = false;
 SettingsSnapshot received_settings; // loop-only scratch; no large loop stack envelope
 void configTask(void *) {
-  config_bootstrap.start(safe_mode.load(), config_store.allowed());
+  config_bootstrap->start(safe_mode.load(), config_store.allowed());
   TickType_t next = xTaskGetTickCount();
   for (;;) {
-    config_bootstrap.service(millis(), safe_mode.load(), config_store.allowed());
+    config_bootstrap->service(millis(), safe_mode.load(), config_store.allowed());
     vTaskDelayUntil(&next, pdMS_TO_TICKS(100));
   }
 }
@@ -115,7 +123,8 @@ void healthTask(void *) {
     }
     // Fixed, lock-free snapshots; no UART/BLE/FS calls or manager mutations.
     const auto decision = supervisor.evaluate(now);
-    stalled_workers.store(decision.stalled);
+    worker_health_masks.store(static_cast<uint16_t>(decision.stalled) |
+                              (static_cast<uint16_t>(decision.refused) << 8));
     if (recovery.execution(now, decision.stable_candidate))
       retainBoot();
     watchdog.service(decision);
@@ -147,38 +156,29 @@ void setup() {
                 static_cast<unsigned>(config_ble_admission));
   if (!config_ble_admission)
     Serial.println("RideSync: config/BLE blocked; diagnostic/RAM mode; no save/format/retry.");
+  workers = commissionedApplication();
+  config_bootstrap = new (&config_memory)
+      ConfigBootstrap(config_persistence, settings_publication, settings_requests, kSettingsEpoch,
+                      workers ? workers->peers() : CameraPeers{});
+  config_started = millis();
   if (!config_ble_admission) {
     // No worker exists: setup is the sole owner on this terminal startup path.
-    config_bootstrap.unavailable(PersistStatus::Refused);
+    config_bootstrap->unavailable(PersistStatus::Refused);
   } else if (xTaskCreatePinnedToCore(configTask, "config", 12288, nullptr, 1, nullptr, 1) !=
              pdPASS) {
-    config_bootstrap.unavailable({PersistStatus::ReadError, -1});
+    config_bootstrap->unavailable({PersistStatus::ReadError, -1});
     Serial.println("RideSync: config task creation failed; settings unavailable.");
   }
-  // The retained #41 handlebar + #40 telemetry owners stay inactive pending
-  // #42 supervised admission. QualifiedHandlebar defaults to no GPIO/control.
-  // The retained opt-in HERO12 owner stays disabled until qualified settings,
-  // identity, storage and a serialized application owner are supplied.
-  // NVS failure is device/config health, never a fabricated worker stall. Qualified
-  // standalone GNSS/SD/IMU lifetimes must remain independent of camera/NVS readiness.
-  Serial.println("Optional AT/BLE/SD/IMU disabled; no pins qualified. Serial C clears safe mode.");
-  // There are no feature-qualified workers/admissions yet, including in safe mode.
-  // Future composition must suppress optional startup/admission when safe_mode is true.
-  if (!supervisor.begin({}, millis())) {
-    supervision_fault.store(true);
-    Serial.println("RideSync: health configuration failed");
-    return;
-  }
-  // Preserve framework 5-second panic TWDT and CPU0 idle ownership. No init/deinit,
-  // enableLoopWDT, implicit peripheral activation or automatic application restart.
-  if (xTaskCreatePinnedToCore(healthTask, "health", 4096, nullptr, 2, nullptr, 1) != pdPASS) {
-    supervision_fault.store(true);
-    Serial.println("RideSync: supervisor task creation failed");
-  }
+  Serial.println("Optional workers require explicit commissioning. Serial C clears safe mode.");
 }
 
 void loop() {
+  // Admission is bounded by receipt on this owner, even if publication becomes
+  // ready before the first post-deadline pass. Never accept that late envelope.
+  if (!policy_fixed && millis() - config_started >= kConfigStartupMs)
+    config_startup = StartupState::ConfigTimedOut;
   if (settings_publication.take(received_settings) &&
+      config_startup != StartupState::ConfigTimedOut &&
       application_settings.accept(received_settings)) {
     const auto &settings = application_settings.snapshot();
     Serial.printf(
@@ -190,6 +190,48 @@ void loop() {
         settings.outcome.code, static_cast<unsigned>(settings.settings.count),
         static_cast<unsigned>(settings.peers_valid));
   }
+  if (!policy_fixed && (application_settings.snapshot().completed ||
+                        millis() - config_started >= kConfigStartupMs)) {
+    // Timeout is terminal for this boot. Keep the permanent NVS owner/resources;
+    // consume but never apply a late snapshot. No erase/reinit/retry is admitted.
+    config_startup = !application_settings.snapshot().completed  ? StartupState::ConfigTimedOut
+                     : application_settings.snapshot().effective ? StartupState::ConfigReady
+                                                                 : StartupState::ConfigUnavailable;
+    Serial.printf("RideSync: configuration startup outcome=%u\n",
+                  static_cast<unsigned>(config_startup));
+    std::array<WorkerPolicy, 4> policy{};
+    if (workers)
+      policy = workers->prepare(application_settings.snapshot(), safe_mode.load(),
+                                config_store.allowed(), supervisor);
+    policy_fixed = true;
+    startup_state = StartupState::WaitingSupervisor;
+    supervisor_started = millis();
+    if (!supervisor.begin(policy, millis()) ||
+        xTaskCreatePinnedToCore(healthTask, "health", 4096, nullptr, 2, nullptr, 1) != pdPASS) {
+      supervision_fault.store(true);
+      startup_state = StartupState::SupervisionFailed;
+      Serial.println("RideSync: supervisor task creation failed or invalid policy");
+    }
+  }
+  if (policy_fixed && startup_state != StartupState::SupervisionFailed && !workers_launched) {
+    const auto watchdog = watchdog_state.load();
+    // Bound admission on this owner before accepting a ready handshake. A late
+    // Running publication cannot bypass expiry, including across millis wrap.
+    if (millis() - supervisor_started >= HealthSupervisor::kMaxGraceMs) {
+      supervision_fault.store(true);
+      startup_state = StartupState::SupervisionFailed;
+    } else if (watchdog == WatchdogState::Running) {
+      workers_launched = true;
+      startup_state = StartupState::Running;
+      if (workers) {
+        workers->current(application_settings.snapshot(), safe_mode.load(), config_store.allowed());
+        workers->launch();
+      }
+    } else if (watchdog != WatchdogState::NotStarted) {
+      supervision_fault.store(true);
+      startup_state = StartupState::SupervisionFailed;
+    }
+  }
   static WatchdogState reported = WatchdogState::NotStarted;
   const auto state = watchdog_state.load();
   if (state != reported) {
@@ -198,21 +240,27 @@ void loop() {
     reported = state;
   }
   static uint8_t reported_stalls = 0;
-  const uint8_t stalls = stalled_workers.load();
+  const uint16_t masks = worker_health_masks.load();
+  const uint8_t stalls = masks & 255, refused = masks >> 8;
   if (stalls != reported_stalls) {
     Serial.printf("RideSync: stalled worker mask=%u\n", static_cast<unsigned>(stalls));
     reported_stalls = stalls;
+  }
+  if (workers && workers_launched) {
+    workers->current(application_settings.snapshot(), safe_mode.load(), config_store.allowed());
+    workers->service(stalls, refused, supervision_fault.load() || state != WatchdogState::Running);
   }
   // Only this application scheduler owns LED service. Read published observations;
   // no camera group is composed, and no watchdog/health policy is invoked here.
   LedHealth led_health;
   led_health.safe_mode = safe_mode.load();
   led_health.required_worker_stall = stalls != 0;
+  led_health.application_fault = refused != 0 || config_startup == StartupState::ConfigTimedOut;
   led_health.application_fault =
-      supervision_fault.load() || state == WatchdogState::ExistingSubscription ||
-      state == WatchdogState::Uninitialized || state == WatchdogState::StatusFailed ||
-      state == WatchdogState::AddFailed || state == WatchdogState::FeedFailed ||
-      state == WatchdogState::RemoveFailed;
+      led_health.application_fault || supervision_fault.load() ||
+      state == WatchdogState::ExistingSubscription || state == WatchdogState::Uninitialized ||
+      state == WatchdogState::StatusFailed || state == WatchdogState::AddFailed ||
+      state == WatchdogState::FeedFailed || state == WatchdogState::RemoveFailed;
   const int led_error = status_led.service(selectLedState(nullptr, {}, led_health), millis());
   static int reported_led_error = 0;
   if (led_error != reported_led_error) {

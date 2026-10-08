@@ -88,6 +88,7 @@ public:
   // Sealed links require replacement; Closed proves final per-peer host release.
   bool linkRetiring(uint8_t peer) const;
   bool linkReleased(uint8_t peer) const;
+  const HealthProgress &progress() const { return progress_; }
   const BleCentral &central() const { return central_; }
   static BleProfileSpec profileSpec();
   static RetryPolicy managerPolicy();
@@ -149,6 +150,7 @@ private:
   Clock &clock_;
   CameraManager *manager_ = nullptr;
   RecordingManager *group_ = nullptr;
+  HealthProgress progress_;
   BleCentral central_;
   gopro::Reassembler reassembler_;
   std::array<Peer, kBlePeers> peers_{};

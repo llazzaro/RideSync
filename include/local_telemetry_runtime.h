@@ -1,6 +1,6 @@
 #pragma once
+#include "application_startup.h"
 #include "camera_event_session.h"
-#include "config_bootstrap.h"
 #include "gps_manager.h"
 #include "imu_manager.h"
 #include "session_identity.h"
@@ -19,6 +19,7 @@ public:
   virtual void cancel() = 0;
   virtual bool workerFinished() const = 0;
   virtual int ioError() const = 0;
+  virtual uint32_t completed() const { return 0; }
 };
 struct ImuWorkerObservation {
   DeviceHealth outcome = DeviceHealth::Missing;
@@ -43,7 +44,8 @@ enum class TelemetryFault {
   Identity,
   Configuration,
   Bind,
-  CameraRoute
+  CameraRoute,
+  StartupTimeout
 };
 enum class SensorAdmission { Disabled, Pending, Admitted, SafeModeRefused, TaskRefused };
 enum class CameraAdmission { Disabled, Admitted, Refused };
@@ -72,6 +74,10 @@ struct LocalTelemetryStatus {
   uint32_t imu_dropped[5]{}, imu_rejected = 0;
   int storage_error = 0;
   bool storage_worker_finished = false, releasable = true;
+  uint32_t at_completed = 0, sd_completed = 0;
+  uint8_t worker_stalls = 0, worker_refused = 0;
+  bool supervision_fault = false;
+  StartupState configuration = StartupState::WaitingConfig;
 };
 // ONE serialized application owner: start/service/requestStop/status, all GPS,
 // clock, camera, admission and future control operations. No application task
@@ -98,6 +104,10 @@ public:
   // service(). Null before allocation; resources are retained through Finished.
   CameraEventSession *session();
   bool attachControl(HandlebarControl &);
+  // Persistent current admission, evaluated before every composed control pass.
+  void currentAdmission(bool cameras, bool safe_mode);
+  void supervision(uint8_t stalls, uint8_t refused, bool fault);
+  void configurationStartup(StartupState s) { status_.configuration = s; }
   void detachControl(HandlebarControl &);
 
 private:
@@ -123,6 +133,8 @@ private:
   LocalTelemetryStatus status_;
   bool started_ = false, sd_started_ = false, bound_ = false, imu_started_ = false;
   bool imu_finished_ = false, logged_ = false, anchored_ = false, servicing_ = false;
+  bool current_camera_ = true, current_safe_mode_ = false, session_stop_requested_ = false;
+  uint32_t startup_ms_ = 0;
   uint64_t logged_ms_ = 0, anchored_receipt_ = 0;
   void observe();
 };

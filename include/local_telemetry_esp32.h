@@ -15,9 +15,9 @@ struct QualifiedLocalTelemetry {
   // No PWRKEY/supply operations are performed by this composition.
   bool modem_already_powered = false;
 };
-// Default inactive, explicitly callable by future #42. Caller owns UART, initialized
-// dedicated SPI/I2C and qualified camera singleton; all outlive canRelease.
-// Construct in static/owned storage, NOT a task stack (~16 KiB target fixed state).
+// Default inactive, callable by the supervised commissioning composition. Caller owns UART,
+// initialized dedicated SPI/I2C and qualified camera singleton; all outlive canRelease. Construct
+// in static/owned storage, NOT a task stack (~16 KiB target fixed state).
 // start/service/requestStop/status have ONE application owner. service invokes
 // the bound ridesync_hero12_service route exactly once, including GPS/admission.
 class Esp32LocalTelemetry {
@@ -47,6 +47,7 @@ private:
     void cancel() override { sd_.cancel(); }
     bool workerFinished() const override { return sd_.workerFinished(); }
     int ioError() const override { return sd_.ioError(); }
+    uint32_t completed() const override { return sd_.progress().generation(); }
 
   private:
     ArduinoSdStorage sd_;
