@@ -3,7 +3,7 @@
 #include <stdint.h>
 namespace ridesync {
 namespace gopro {
-enum class Channel { Command, Settings, Query };
+enum class Channel { Command, Settings, Query, Management };
 enum class Request {
   Video,
   ShutterOn,

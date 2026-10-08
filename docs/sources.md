@@ -111,6 +111,33 @@ providing a blanket grant. Repository inspected at
 Unlicensed insta360ctl/GPS-spec sources remain research references only; no
 implementation was copied or used by the stack probe.
 
+## HERO12 setup codec source boundary (#36)
+
+Official OpenGoPro repository pin `0f963572611c4410a15678531e9681a6ff874edb`
+was rechecked 2026-10-08. The root [network management schema](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/protobuf/network_management.proto#L195-L213),
+[control schema](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/protobuf/set_camera_control_status.proto),
+and [generic result schema](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/protobuf/response_generic.proto)
+establish required field numbers and enums. Pinned [command declarations](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/demos/python/sdk_wireless_camera_control/open_gopro/api/ble_commands.py#L384-L457),
+[IDs](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/demos/python/sdk_wireless_camera_control/open_gopro/models/constants/constants.py#L53-L110),
+and [UUIDs](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/demos/python/sdk_wireless_camera_control/open_gopro/models/constants/uuids.py#L27-L40)
+establish Management GP-0090/0091/0092, Command GP-0072/0073, and feature/action pairs.
+
+Official mutable [references.json](https://gopro.github.io/OpenGoPro/references.json)
+was fetched 2026-10-08 with SHA256
+`9670d448045f91f5a780e889a87723de0e4eacadd05afeffda9068d92827dc0c`.
+Its model/operation matrix lists HERO12 Black model 62/H23.01 and support for
+classic queries, pairing-finish `03/01→81` and control claim `F1/69→E9`.
+Capability `F5/6C→EC` and the two-byte query feature list Mission models only;
+they are outside the current HERO12 codec. The [multi-camera FAQ](https://gopro.github.io/OpenGoPro/docs/faq/#multi-camera-setups)
+was checked the same day for its generic up-to-four BLE connection statement,
+which does not certify HERO12 or RideSync mixed-link capacity.
+
+The root OpenGoPro LICENSE is a component notice, not a blanket grant over
+root protobuf schemas. RideSync independently derives only wire facts and
+authors synthetic fixtures; no official SDK, generated protobuf, or schema
+implementation is copied. Installed camera identity, firmware, API and real
+pairing/recording behavior remain unobserved.
+
 ## Actual asynchronous central backend (#35)
 
 NimBLE-Arduino 2.3.6 is pinned at `dfb4ac561a06797081be9e752902a6582e7f029e`.

@@ -66,8 +66,11 @@ not imply GPS can be injected into HERO12 video metadata.
 The official [compatibility table](https://gopro.github.io/OpenGoPro/docs/)
 lists **HERO12 Black minimum firmware v01.10.00** and notes model-specific
 features. Installed firmware is unknown; this is a documentation qualification,
-not camera verification. GoPro documents one BLE client per camera, so remove
-competing phone/remote connections during qualification.
+not camera verification. The official [multi-camera FAQ](https://gopro.github.io/OpenGoPro/docs/faq/#multi-camera-setups),
+checked 2026-10-08, says up to four simultaneous generic BLE connections; it
+does not qualify HERO12 physical coexistence or control ownership. Remove
+competing phone/remote control during qualification. RideSync still plans one
+central peer per camera.
 
 [BLE setup](https://gopro.github.io/OpenGoPro/docs/ble/protocol/ble_setup/)
 requires RideSync as central: pair once, discover services and re-subscribe on
@@ -77,6 +80,10 @@ GP-0076/0077, where GP expands to `b5f9XXXX-aa8d-11e3-9046-0002a5d5c51b`.
 Poll Get Hardware Info with a deadline until BLE readiness succeeds. Retain
 bond identity, characteristic ownership and fragmented response buffers per
 camera, never globally.
+Initial pairing also needs Camera Management GP-0090, write GP-0091 and response
+GP-0092, with subscribed response before pairing-finish. Bonding alone does not
+clear the pairing screen. Setup then claims external control on Command; neither
+acknowledgment observes recording state.
 
 [Control](https://gopro.github.io/OpenGoPro/docs/ble/control/) defines Set
 Shutter 0/1 and recommends Keep Alive every three seconds. Establish video
@@ -91,6 +98,43 @@ Use NimBLE-Arduino 2.3.6 with one client for HERO12 as specified in
 [ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
 Mixed CE80/GoPro role and four-link capacity are unmeasured. The official
 API/firmware minimum does not certify this stack or RideSync hardware.
+
+## Pure HERO12 setup codec (2026-10-08)
+
+`gopro_setup_codec` encodes a synthetic, schema-derived pairing-finish request
+`03 01 08 00 12 08 52 69 64 65 53 79 6E 63` with required state zero and the
+fixed eight-byte name `RideSync`; the bounded packet is 16 bytes compact or 17
+bytes with the extended-13 header. It separately encodes external-control claim
+`F1 69 08 02` (enum 2, rather than camera-only enum 1). These byte strings are
+author-created vectors, not camera captures. Responses require their logical
+Management/Command route and exact `03/81` or `F1/E9` pair before parsing.
+
+The setup response has an explicit GenericProtobuf result domain: required
+result 1 is success; 0 is unknown, 2–6 are known rejections, and other numeric
+results remain diagnostics without setup success. This differs from classic TLV
+ACK result 0. The bounded reader validates a complete message and skips
+well-formed unknown wire 0/1/2/5 fields. It rejects groups, malformed tags,
+wrong known-field wire type and overflow. Duplicate singular result fields use
+last-value semantics; any unknown enum occurrence keeps the response from
+becoming success even if a later duplicate is known. Raw response bytes remain
+owned and bounded to 256 bytes. A setup ACK never publishes Encoding.
+
+Classic Hardware Info `3C` and API Version `51` responses now have a separate
+owned identity extractor. Seven length-prefixed hardware fields and two nonempty
+API fields must validate fully before any model/API value is published. Numeric
+fields are big-endian unsigned up to eight bytes; wider fields are rejected.
+Firmware/name remain opaque slices into owned raw data. Hardware reserved tail
+must be absent or exactly eleven bytes, preserving the existing classic policy.
+HERO12 model 62 and firmware minimum v01.10.00 are documentary eligibility facts,
+not values observed from an installed camera; firmware is not an API version.
+
+The shared reassembler retains 64 bytes per GATT chunk, 256 bytes per message,
+four global streams, 32 packets and a 1000 ms absolute deadline. Management
+uses the same capacity and does not establish four-camera operation. Missing or
+late fragments have no transaction identity; the future adapter must retire
+ambiguous connections and correlate serialized operations. Camera pairing,
+installed firmware/API, observed status and recording, twenty cycles and
+power-reset/no-replay gates in #4/#20/#17/#24 remain open.
 
 ## Documentary pure codec (2026-10-07)
 

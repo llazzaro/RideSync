@@ -44,7 +44,36 @@ Hardware fields use their documented lengths (seven fields). Eleven reserved
 bytes may trail the hardware payload; they are retained raw. Absence is accepted
 because the documentation calls them outside the payload; partial tails reject.
 API major/minor are checked as nonempty length-prefixed fields and retained raw,
-without assuming numeric widths or a firmware/API value.
+without assuming a firmware/API value. The separate #36 identity extractor now
+accepts only one-to-eight-byte big-endian unsigned model/API values and rejects
+wider values; the original classic response decoder remains unchanged.
+
+## Setup vectors (#36)
+
+`setup_vectors.h` was authored 2026-10-08 from the pinned
+[pairing schema](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/protobuf/network_management.proto#L201-L213),
+[control schema](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/protobuf/set_camera_control_status.proto),
+[generic response](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/protobuf/response_generic.proto),
+and [pinned routing declarations](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/demos/python/sdk_wireless_camera_control/open_gopro/api/ble_commands.py#L384-L457).
+All setup bytes are **synthetic schema-derived test inputs, not official raw
+goldens or device captures**. The live official [reference matrix](https://gopro.github.io/OpenGoPro/references.json)
+was independently fetched 2026-10-08, SHA256
+`9670d448045f91f5a780e889a87723de0e4eacadd05afeffda9068d92827dc0c`.
+It lists HERO12 model 62 and support for pairing and control; Mission-only
+capability/two-byte operations are excluded.
+
+| Synthetic vector | Bytes | Derivation |
+|---|---|---|
+| Pairing-finish request, compact | `0E 03 01 08 00 12 08 52 69 64 65 53 79 6E 63` | Management feature/action, required success enum zero, required nonempty eight-byte `RideSync` name |
+| Pairing-finish request, extended-13 | `20 0E 03 01 08 00 12 08 52 69 64 65 53 79 6E 63` | Same payload, alternate packet header |
+| External-control claim, compact/extended-13 | `04 F1 69 08 02` / `20 04 F1 69 08 02` | Command feature/action, required external-control enum two |
+| Pairing success, compact | `04 03 81 08 01` | Generic result one on Management response |
+| Control success, extended-13 | `20 04 F1 E9 08 01` | Generic result one on Command response |
+
+The synthetic identity literals in tests use anonymous `HX`/`fw` bytes and
+artificial API numbers. They do not identify any installed HERO12, firmware,
+serial, MAC, or API. No SDK implementation, generated protobuf or schema file
+is vendored; upstream root proto copyright has no blanket MIT grant.
 
 ## Conflicts and application policies
 
