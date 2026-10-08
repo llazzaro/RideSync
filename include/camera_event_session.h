@@ -38,6 +38,6 @@ private:
   CameraInbox camera_;
   TelemetryAdmission admission_;
   CameraEventLogger logger_;
-  bool active_ = false, stopping_ = false, camera_finished_ = false;
+  bool active_ = false, route_owned_ = false, stopping_ = false, camera_finished_ = false;
 };
 } // namespace ridesync

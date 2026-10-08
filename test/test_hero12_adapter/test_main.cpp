@@ -3,6 +3,7 @@
 #include "profiles/gopro_hero12.h"
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <sstream>
 #include <unity.h>
 #include <vector>
@@ -550,6 +551,43 @@ void composed_session_finishes_camera_after_final_owner_access() {
   TEST_ASSERT_TRUE(stopped_callbacks > 0);
   r.adapter.service();
   TEST_ASSERT_EQUAL_UINT(stopped_callbacks, group_callbacks);
+}
+void stopped_session_cannot_detach_later_same_group_binding() {
+  Rig r;
+  unsigned group_callbacks = 0;
+  RecordingManager group(r.manager, r.clock, countGroupCallback, &group_callbacks);
+  CameraLogSink first_sink, second_sink;
+  std::unique_ptr<CameraEventSession> first(new CameraEventSession(
+      r.clock, first_sink, r.adapter, r.manager, group, 42, "fw", "synthetic"));
+  TEST_ASSERT_TRUE(first->configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  TEST_ASSERT_TRUE(first->activate());
+  first->requestStop();
+  first->finishImu();
+  for (unsigned i = 0; i < 500 && !first->stopped(); ++i) {
+    first->service();
+    first->storage().workerStep();
+  }
+  TEST_ASSERT_TRUE(first->stopped());
+  TEST_ASSERT_TRUE(r.adapter.canDestroy());
+
+  CameraEventSession second(r.clock, second_sink, r.adapter, r.manager, group, 43, "fw",
+                            "synthetic");
+  TEST_ASSERT_TRUE(second.configurePeer(0, 302, CameraModel::HERO12_BLACK));
+  TEST_ASSERT_TRUE(second.activate());
+  const unsigned before_old_service = group_callbacks;
+  first->service(); // Completed first session must not service second's adapter route.
+  TEST_ASSERT_EQUAL_UINT(before_old_service, group_callbacks);
+  first.reset(); // Old destructor must not detach the same group newly owned by second.
+  const unsigned before = group_callbacks;
+  second.service();
+  TEST_ASSERT_TRUE(group_callbacks > before);
+  second.requestStop();
+  second.finishImu();
+  for (unsigned i = 0; i < 500 && !second.stopped(); ++i) {
+    second.service();
+    second.storage().workerStep();
+  }
+  TEST_ASSERT_TRUE(second.stopped());
 }
 void inactive_or_refused_session_closes_storage_without_servicing_independent_adapter() {
   for (bool refused : {false, true}) {
@@ -1205,6 +1243,7 @@ int main() {
   RUN_TEST(group_route_keeps_shutter_ack_distinct_from_recording);
   RUN_TEST(identical_unsolicited_encoding_observations_are_each_preserved);
   RUN_TEST(composed_session_finishes_camera_after_final_owner_access);
+  RUN_TEST(stopped_session_cannot_detach_later_same_group_binding);
   RUN_TEST(inactive_or_refused_session_closes_storage_without_servicing_independent_adapter);
   RUN_TEST(missing_management_service_refuses_pairing);
   RUN_TEST(missing_cccd_refuses_pairing_without_capabilities);
