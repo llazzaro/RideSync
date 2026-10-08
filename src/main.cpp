@@ -1,4 +1,4 @@
-#include "config_storage.h"
+#include "config_bootstrap.h"
 #include "health_supervisor.h"
 #include "nvs_boot_guard.h"
 #include "status_led.h"
@@ -32,21 +32,20 @@ std::atomic<uint8_t> stalled_workers{0};
 // owner mailbox; no UI or control producer is admitted in this milestone.
 NvsConfigStore config_store;
 ConfigPersistence config_persistence(config_store);
-SourceConfig ram_settings; // owner-private; complete settings only, no runtime intent
-std::atomic<PersistStatus> config_status{PersistStatus::Defaults};
-std::atomic<int32_t> config_error{0};
+// Boot-local epoch: all envelopes and endpoints are destroyed at reboot. This is
+// not a durable session ID; future endpoint restart needs a new nonzero epoch.
+constexpr uint32_t kSettingsEpoch = 1;
+SettingsPublication settings_publication;
+SettingsRequests settings_requests; // no production save producer admitted
+ConfigBootstrap config_bootstrap(config_persistence, settings_publication, settings_requests,
+                                 kSettingsEpoch);
+ApplicationSettings application_settings(kSettingsEpoch); // loop-owned immutable copy
+SettingsSnapshot received_settings; // loop-only scratch; no large loop stack envelope
 void configTask(void *) {
-  auto result = safe_mode.load() ? PersistResult{PersistStatus::Refused}
-                                 : config_persistence.load(ram_settings);
-  config_error.store(result.code);
-  config_status.store(result.status);
+  config_bootstrap.start(safe_mode.load(), config_store.allowed());
   TickType_t next = xTaskGetTickCount();
   for (;;) {
-    // service() checks the SDK gate on every operation and drops pending work
-    // after refusal. No automatic default/migration requests or driver begin.
-    result = config_persistence.service(millis());
-    config_error.store(result.code);
-    config_status.store(result.status);
+    config_bootstrap.service(millis(), safe_mode.load(), config_store.allowed());
     vTaskDelayUntil(&next, pdMS_TO_TICKS(100));
   }
 }
@@ -148,9 +147,14 @@ void setup() {
                 static_cast<unsigned>(config_ble_admission));
   if (!config_ble_admission)
     Serial.println("RideSync: config/BLE blocked; diagnostic/RAM mode; no save/format/retry.");
-  if (config_ble_admission &&
-      xTaskCreatePinnedToCore(configTask, "config", 12288, nullptr, 1, nullptr, 1) != pdPASS)
-    Serial.println("RideSync: config task creation failed; RAM defaults only.");
+  if (!config_ble_admission) {
+    // No worker exists: setup is the sole owner on this terminal startup path.
+    config_bootstrap.unavailable(PersistStatus::Refused);
+  } else if (xTaskCreatePinnedToCore(configTask, "config", 12288, nullptr, 1, nullptr, 1) !=
+             pdPASS) {
+    config_bootstrap.unavailable({PersistStatus::ReadError, -1});
+    Serial.println("RideSync: config task creation failed; settings unavailable.");
+  }
   // The retained opt-in HERO12 owner stays disabled until qualified settings,
   // identity, storage and a serialized application owner are supplied.
   // NVS failure is device/config health, never a fabricated worker stall. Qualified
@@ -172,12 +176,17 @@ void setup() {
 }
 
 void loop() {
-  static PersistStatus reported_config = PersistStatus::Defaults;
-  const auto settings_status = config_status.load();
-  if (settings_status != reported_config) {
-    Serial.printf("RideSync: config status=%u error=%d\n", static_cast<unsigned>(settings_status),
-                  config_error.load());
-    reported_config = settings_status;
+  if (settings_publication.take(received_settings) &&
+      application_settings.accept(received_settings)) {
+    const auto &settings = application_settings.snapshot();
+    Serial.printf(
+        "RideSync: config ready=%u effective=%u epoch=%u generation=%llu "
+        "load=%u outcome=%u error=%d cameras=%u peers=%u\n",
+        static_cast<unsigned>(settings.completed), static_cast<unsigned>(settings.effective),
+        settings.epoch, static_cast<unsigned long long>(settings.generation),
+        static_cast<unsigned>(settings.load.status), static_cast<unsigned>(settings.outcome.status),
+        settings.outcome.code, static_cast<unsigned>(settings.settings.count),
+        static_cast<unsigned>(settings.peers_valid));
   }
   static WatchdogState reported = WatchdogState::NotStarted;
   const auto state = watchdog_state.load();

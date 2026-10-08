@@ -29,8 +29,8 @@ BLE bond restoration; stack restore outcomes still need separate observation.
 
 Current `setup()` reports config/BLE admission and keeps diagnostic supervision
 running on missing/failed init or refused formatting. All physical drivers remain
-disabled. A separate configuration owner loads settings after admission; there
-is no BLE host yet. RAM defaults must
+disabled. A separate configuration owner loads settings after admission; startup
+does not activate the retained opt-in BLE host. RAM defaults must
 not admit camera control while this gate is closed. NVS failure is a device/config
 fault, not scheduler starvation. Future independently qualified standalone
 GNSS/SD/IMU worker lifetimes must not depend on camera-NVS readiness.
@@ -156,16 +156,17 @@ algorithm. It changes application settings only and leaves stack bonds alone.
 Pairing reset is a separate explicit BLE operation, with user settings untouched.
 Settings never include recording state/intent, executed gestures, command queues,
 retry counters, telemetry caches, credentials, IRKs/LTKs or keys. Status logging
-contains only status and error code, never camera identities or payload bytes.
+contains readiness, epoch/generation, status/error, counts and mapping validity,
+never camera identities or payload bytes.
 
 ## Owning context and startup composition
 
 `main.cpp` creates one 12 KiB, priority-1 configuration task on core 1 only when
 safe mode is off and the SDK boot gate is open. It loads once into owner-private
-RAM settings and services persistence at 100 ms cadence. The existing independent
+RAM settings and services the bootstrap at 100 ms cadence. The existing independent
 health task and its watchdog ownership remain unchanged. No producers are wired
-to request saves in this milestone. Future settings UI producers must use a
-bounded latest-settings mailbox consumed by this task; direct cross-task calls
+to request saves in this milestone. The fixed reverse mailbox is exercised synthetically; future authorized producers
+must use it with the current epoch and generation; direct cross-task calls
 into `ConfigPersistence` are forbidden. Camera/control ticks, BLE callbacks and
 acquisition tasks must never call storage operations. Blocking SDK commit/read
 latency therefore belongs to the storage task, never the camera scheduler.
@@ -187,8 +188,9 @@ path, with no additional workspace allocation during service. Empty defaults
 are reconstructed in place using SourceConfig's own defaults, eliminating a
 large overlapping temporary. Encoding clears its supplied record in place.
 
-The pinned target disassembly now measures configTask 64, service 80, scan 880
-and decodeConfig 944 bytes: 1968 bytes of simultaneously nested owner frames,
+The pinned target disassembly measures configTask 48, bootstrap start 48, bootstrap
+service 64, persistence service 80, scan 880 and decodeConfig 944 bytes. The largest
+listed nested path is service/decode at 2016 bytes; load/decode is 1968 bytes,
 versus the original 13024-byte defect. The configured task remains 12288 bytes.
 `scripts/check_config_stack.py` checks ELF/object frames for load/request/reset/
 retry/service, including GCC split helpers and the SDK boundary paths. A 4096-byte
@@ -202,6 +204,117 @@ GC, failures and simultaneous interrupts before stack qualification. Bounded
 string heap use and real flash latency also still require device measurement.
 Successful NVS admission never enables BLE, GPIO or another unqualified driver.
 Independently qualified GNSS/SD/IMU lifetimes remain independent of camera NVS.
+
+## Application bootstrap and bounded handoff (#38)
+
+`ConfigBootstrap` is noncopyable and exclusively owns its two `SourceConfig`
+values (effective and pending), uses the existing exclusive `ConfigPersistence`,
+and publishes copied `SettingsSnapshot` values. `configTask` starts it once after
+SDK/safe-mode admission and services it every 100 ms. `loop` takes into a static
+scratch envelope and accepts into its own `ApplicationSettings`; it never sees a
+pointer/reference to the persistence owner's strings. If the worker is not
+admitted or creation fails, setup is the sole owner of terminal publication:
+`Refused` or `ReadError/-1`, respectively. Successful task creation transfers
+ownership to the task; setup never subsequently accesses that owner.
+
+Before publication, readiness is incomplete (including the initial enum value
+`Defaults`). Completed validation publishes generation 1 with one camera/button
+snapshot. `Defaults`, `Loaded`, `Migrated` and `Recovered` may supply effective
+settings. Other load statuses publish explicit completed/unavailable results and
+inactive defaults, never a partial candidate. The immutable `load` result remains
+separate from `outcome`, which records later success/refusal. Effective settings
+are software data, not driver qualification. Missing mapping, safe mode, a closed
+NVS gate, and absent physical/protocol evidence continue to refuse camera/BLE
+admission. All production optional drivers remain disabled.
+
+Epochs are nonzero endpoint-lifetime tokens, not persisted generations or durable
+session IDs. Current endpoints exist for exactly one boot, with epoch 1; no
+mailbox survives reboot. A future in-process endpoint restart must first quiesce
+both endpoints and supply a new epoch. Each effective-settings adoption or
+terminal revocation advances the application generation. Consumers reject
+incomplete, zero/wrong-epoch, equal and older-generation snapshots. The application
+generation is independent of the on-flash record generation. Saves are refused
+at generation `UINT64_MAX-1`, reserving the final generation for terminal
+revocation; generations never wrap. This is a practical arithmetic bound, not an
+observed multi-billion-update runtime test.
+
+`Settings` contains eight fixed active-slot camera records (65/18/18-byte C
+strings), count/capacity, button gesture settings and GPIO data. `copySettings`
+validates camera/button/GPIO semantics before copying active slots only. It
+ignores arbitrarily large unused source strings and leaves output unchanged on
+failure. Embedded NUL names cannot be represented faithfully and are explicitly
+refused by this application envelope (with no storage rewrite or schema change).
+`expandSettings` checks termination before bounded owner-only string allocation,
+validates the whole candidate, and replaces output only on success. Callback and
+control paths copy fixed envelopes and never allocate or use NVS.
+
+Publication and reverse requests each use a one-slot, lock-free SPSC mailbox.
+Each endpoint and its caller-owned input/output buffer must outlive an operation;
+the mailbox must outlive both endpoints. Producer CAS acquires the empty slot,
+copies the entire value, and releases READY as its **final slot access**. Consumer
+CAS acquires READY, copies into its own value, and releases EMPTY as its **final
+slot access**. The producer can then reuse the slot without changing the
+consumer's copy. Full publication returns false: the config owner retains its
+latest coherent dirty snapshot and retries next service; an older queued snapshot
+is never overwritten. Full save submission returns false to the producer.
+Neither endpoint blocks/spins inside `put`/`take`. No reset, destruction,
+reprovisioning or additional producer/consumer is permitted until quiescence.
+
+The reverse `SettingsSave` carries an epoch, expected effective generation, and
+fixed settings. Only the config owner expands/validates and invokes persistence.
+Wrong epoch/generation, malformed input, owner refusal and a save already in
+flight have distinct `Stale`, `Invalid`, `Refused` and `Busy` outcomes. There is
+one candidate in flight; commands do not silently replace it. The old effective
+snapshot remains active during throttling or write/commit/verification failure.
+`saveResult` retains the persistence error/cause/indeterminate observation and
+`saveOutcome` reports `PersistenceError`; these accessors are owner-only, not
+cross-task atomic observations. A future UI must supply its own bounded
+acknowledgement policy. No production save producer exists here.
+
+Only `Durable` or `Unchanged` adopts that pending candidate into owner RAM,
+canonicalizes it and publishes the next effective generation. `ConfigPersistence`
+does not update caller RAM. SDK/safe-mode refusal discards pending persistence
+and candidate admission without I/O; discovered future/corrupt/ambiguous/read
+failure also publishes explicit terminal unavailability. Gate reopening or
+operator safe-mode clearing cannot replay a discarded command or reopen this
+owner. Restart/admission belongs to later supervised composition. There is no
+automatic default save, migration save, retry/reset command or erase.
+
+`CameraPeers` is separately provisioned once, copied and frozen for the owner
+lifetime. It must match every configured slot/model exactly and supply unique
+nonzero opaque IDs. No ID is derived from name/MAC/serial, and no persistence
+field is added. A later model/slot/count, typed BLE address or wake-address change invalidates
+that fixed mapping permanently for this owner, even if settings change back.
+These comparisons enforce stability and never derive the opaque ID. Restoring
+admission requires a new explicitly provisioned, qualified session/owner after
+quiescing both endpoints. Production supplies no mapping.
+`admitSettings` requires explicit qualification of all configured cameras plus
+valid mapping and open safe-mode/NVS gates; button eligibility also needs its
+independent physical qualification. Its local telemetry eligibility depends only
+on independent local qualification, including during camera/config/safe-mode
+refusal. Eligibility alone starts no local logger, bus or peripheral (#40/#42).
+
+Pinned Xtensa object sizes in bytes: `CameraSettings` 120, `Settings` 1012,
+`SettingsSave` 1032, `SettingsSnapshot` 1168, `CameraPeers` 100,
+`ConfigBootstrap` 3856, publication 1176, requests 1040, application-owned view
+1176, and loop scratch 1168. The five bootstrap/handoff globals total 8416 bytes;
+with the existing 6992-byte persistence object the total is 15408 bytes, excluding
+store/RTOS objects, owner string heap, stacks and SDK memory. Large envelopes are
+static/member objects, never multiple stack copies in control/loop workers.
+Individual compiled bootstrap frames are start 48, service 64, refusal 1072,
+expand 816, and canonical-copy wrapper 32 plus split helper 1056. The enhanced
+stack checker includes these actual nested owner paths and still reserves 8192
+bytes for SDK/RTOS/interrupt work within the 12288-byte task. Runtime high-water,
+heap fragmentation, flash latency, capacity/timing and physical power-loss
+behavior remain unmeasured and retain their existing hardware gates (#18/#22/#31).
+
+Native behavior tests cover the bootstrap barrier, bounded copies/refusal,
+publication pressure, stale epochs/generations, concurrent owned-copy lifetime,
+synthetic authorized saves, no replay, qualification independence and stable
+peer mapping. The actual Arduino startup/task harness exercises loaded settings,
+disabled defaults, safe-mode/NVS refusal and worker creation failure. Retained
+ESP32 builds link the actual config-owner handoff; these are compile/link and
+host behavior evidence, not board/camera/bond/pin/protocol qualification.
 
 ## Stack-owned bonds and future BLE integration gates
 

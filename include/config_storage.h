@@ -52,6 +52,7 @@ public:
   virtual StoreResult read(unsigned slot, ConfigRecord &) = 0;
   virtual StoreResult write(unsigned slot, const ConfigRecord &) = 0;
 };
+bool validateSettings(const SourceConfig &);
 PersistResult encodeConfig(const SourceConfig &, uint64_t generation, ConfigRecord &);
 PersistResult decodeConfig(const ConfigRecord &, SourceConfig &, uint64_t &generation);
 // Exclusive, nonreentrant owner only. Store callbacks must not reenter any
@@ -66,6 +67,8 @@ public:
   PersistResult reset(uint32_t now);
   PersistResult retry(uint32_t now);
   PersistResult service(uint32_t now);
+  // Exclusive owner cancellation; no storage calls or replay after refusal.
+  void discardPending() { pending_ = false; }
   bool pending() const { return pending_; }
   PersistResult result() const { return result_; }
 

@@ -110,6 +110,7 @@ bool samePayload(const ConfigRecord &a, const ConfigRecord &b) {
          std::equal(a.bytes.begin() + header, a.bytes.begin() + a.size, b.bytes.begin() + header);
 }
 } // namespace
+bool validateSettings(const SourceConfig &c) { return settingsValid(c); }
 void ConfigPersistence::scan() {
   auto &s = scan_;
   s.result = {};

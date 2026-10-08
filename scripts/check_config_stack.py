@@ -12,7 +12,7 @@ root = Path(__file__).resolve().parents[1]
 objdump = Path.home() / ".platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
 build = root / ".pio/build/lilygo_t_a7670e_r2"
 frames = {}
-for artifact in (build / "firmware.elf", build / "src/config_storage.cpp.o"):
+for artifact in (build / "firmware.elf", build / "src/config_storage.cpp.o", build / "src/config_bootstrap.cpp.o"):
     output = subprocess.check_output([str(objdump), "-d", "-C", str(artifact)], text=True)
     for name, body in re.findall(r"^[0-9a-f]+ <([^\n]+)>:\n(.*?)(?=^[0-9a-f]+ <|\Z)", output, re.M | re.S):
         entry = re.search(r"\bentry\s+a1,\s*(0x[0-9a-f]+|[0-9]+)", body)
@@ -38,21 +38,28 @@ helper_reserve = 1024
 budget = 4096
 worker = frame("configTask(void*)")
 scan_name = "scan("
+startup = worker + frame("ConfigBootstrap::start(")
+service = worker + frame("ConfigBootstrap::service(")
 paths = {
-    "load/decode": worker + frame("ConfigPersistence::load(") + frame(scan_name) + frame("decodeConfig("),
-    "load/scan/encode": worker + frame("ConfigPersistence::load(") + frame(scan_name) + frame("encodeConfig("),
-    "service/scan/encode": worker + frame("ConfigPersistence::service(") + frame(scan_name) + frame("encodeConfig("),
-    "service/decode": worker + frame("ConfigPersistence::service(") + frame(scan_name) + frame("decodeConfig("),
-    "request/encode": worker + frame("ConfigPersistence::request(") + frame("encodeConfig("),
+    "load/decode": startup + frame("ConfigPersistence::load(") + frame(scan_name) + frame("decodeConfig("),
+    "load/scan/encode": startup + frame("ConfigPersistence::load(") + frame(scan_name) + frame("encodeConfig("),
+    "startup/canonical copy": startup + frame("copySettings("),
+    "service/scan/encode": service + frame("ConfigPersistence::service(") + frame(scan_name) + frame("encodeConfig("),
+    "service/decode": service + frame("ConfigPersistence::service(") + frame(scan_name) + frame("decodeConfig("),
+    "service/expand request": service + frame("expandSettings("),
+    "service/canonical copy": service + frame("copySettings("),
+    "service/refusal": service + frame("ConfigBootstrap::refuse("),
+    "request/encode": service + frame("ConfigPersistence::request(") + frame("encodeConfig("),
+    # Reset/retry are persistence API budgets only: the bootstrap exposes neither.
     "reset/request/encode": worker + frame("ConfigPersistence::reset(") + frame("ConfigPersistence::request(") + frame("encodeConfig("),
     "retry": worker + frame("ConfigPersistence::retry("),
-    "service/read SDK boundary": worker + frame("ConfigPersistence::service(") + frame("NvsConfigStore::read("),
-    "service/write SDK boundary": worker + frame("ConfigPersistence::service(") + frame("NvsConfigStore::write("),
-    "load/scan/read SDK boundary": worker + frame("ConfigPersistence::load(") + frame(scan_name) + frame("NvsConfigStore::read("),
+    "service/read SDK boundary": service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::read("),
+    "service/write SDK boundary": service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::write("),
+    "load/scan/read SDK boundary": startup + frame("ConfigPersistence::load(") + frame(scan_name) + frame("NvsConfigStore::read("),
 }
 for name, size in paths.items():
     print(f"{name}: nested={size}, application allowance={size + helper_reserve}, limit={budget}")
-for fragment in ("configTask(void*)", "ConfigPersistence::", "scan(", "decodeConfig(", "encodeConfig(", "NvsConfigStore::", "nvs_open", "nvs_commit", "nvs_set_blob", "nvs_get_blob"):
+for fragment in ("configTask(void*)", "ConfigBootstrap::", "copySettings(", "expandSettings(", "ConfigPersistence::", "scan(", "decodeConfig(", "encodeConfig(", "NvsConfigStore::", "nvs_open", "nvs_commit", "nvs_set_blob", "nvs_get_blob"):
     for name, size in sorted(frames.items()):
         if fragment in name and "lambda" not in name:
             print(f"frame {size}: {name}")
