@@ -1,0 +1,26 @@
+/* Synthetic C ABI bridge; all mutation above uses attributed SDK functions. */
+void *reset_sdk_values(int type){switch(type){
+case 1:return ble_store_config_our_secs;case 2:return ble_store_config_peer_secs;
+case 3:return ble_store_config_cccds;case 8:return ble_store_config_csfcs;
+case 6:return ble_store_config_rpa_recs;case 7:return ble_store_config_local_irks;
+case 4:return peer_dev_rec;default:return 0;}}
+int *reset_sdk_count(int type){switch(type){
+case 1:return &ble_store_config_num_our_secs;case 2:return &ble_store_config_num_peer_secs;
+case 3:return &ble_store_config_num_cccds;case 8:return &ble_store_config_num_csfcs;
+case 6:return &ble_store_config_num_rpa_recs;case 7:return &ble_store_config_num_local_irks;
+case 4:return &ble_store_num_peer_dev_rec;default:return 0;}}
+int reset_sdk_delete(int type,const void *key){switch(type){
+case 1:return ble_store_config_delete_our_sec(key);case 2:return ble_store_config_delete_peer_sec(key);
+case 3:return ble_store_config_delete_cccd(key);case 8:return ble_store_config_delete_csfc(key);
+case 6:return ble_store_config_delete_rpa_rec(key);default:return 99;}}
+int reset_sdk_find(int type,const void*key){switch(type){
+case 1:return ble_store_config_find_sec(key,ble_store_config_our_secs,ble_store_config_num_our_secs);
+case 2:return ble_store_config_find_sec(key,ble_store_config_peer_secs,ble_store_config_num_peer_secs);
+case 3:return ble_store_config_find_cccd(key);
+case 8:return ble_store_config_find_csfc(key,ble_store_config_csfcs,ble_store_config_num_csfcs);
+case 6:return ble_store_config_find_rpa_rec(key);default:return -1;}}
+struct ble_hs_resolv_entry *reset_sdk_resolving(void){return g_ble_hs_resolv_list;}
+void reset_sdk_resolving_count(unsigned value){g_ble_hs_resolv_data.rl_cnt=value;}
+
+static int reset_delete_callback(int t,const union ble_store_key*k){return reset_sdk_callback_delete(t,k);}
+int reset_sdk_dispatch(int t,const void*k){ble_hs_cfg.store_delete_cb=reset_delete_callback;return upstream_ble_store_delete(t,k);}

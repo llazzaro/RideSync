@@ -10,6 +10,10 @@ namespace ridesync {
 constexpr size_t kBlePeers = 4, kBleServices = 3, kBleEndpoints = 8;
 constexpr size_t kBleDiscoveredChars = 32, kBlePayload = 64, kBleQueue = 32;
 constexpr uint16_t kBleNoHandle = 0xffff;
+// Private transport backpressure: no SDK reference was acquired. Consumers defer
+// the copied operation; this must never become a permanent peer transport fault.
+constexpr int kBleHostReserved = -30001;
+constexpr uint16_t kBleMtuReserved = 0xffff;
 struct BleUuid {
   uint8_t size = 2; // 2 or 16, little endian as the pinned host represents UUIDs.
   std::array<uint8_t, 16> bytes{};
@@ -131,6 +135,7 @@ struct BleBondAdmission {
   bool stack_ready = false, restore_verified = false, refusal_installed = false;
   bool existing_verified_identity = false, identity_matches = false, persistence_allowed = false;
   unsigned used = 0, capacity = 0;
+  bool reserved = false;
   bool allowed() const;
 };
 enum class BleHostState : uint8_t { Disabled, Starting, Ready, Failed };
@@ -224,7 +229,8 @@ private:
     uint8_t service = 0, endpoint = 0, char_count = 0;
     uint32_t deadline = 0, next_procedure = 0;
     bool active = false, complete = false, retired_reported = false, terminate_submitted = false;
-    bool cancel_submitted = false;
+    bool cancel_submitted = false, deferred = false, security_waiting = false;
+    BleCommand deferred_command;
     int error = 0;
     BleFault retirement = BleFault::None;
   };
@@ -240,7 +246,7 @@ private:
   uint8_t initiating_ = kBlePeers, cursor_ = 0;
   bool begun_ = false, enabled_ = false, stopping_ = false, startup_failed_ = false;
   bool scanning_ = false, scan_reported_ = false, startup_confirmed_ = false;
-  bool scan_cancel_attempted_ = false;
+  bool scan_cancel_attempted_ = false, scan_pending_ = false;
   int scan_cancel_error_ = 0;
   void cancelScanOnce();
   bool pop(BleEvent &);

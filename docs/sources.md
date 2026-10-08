@@ -2,7 +2,7 @@
 
 Inspected 2026-10-07. Commit links below freeze the research baseline. The three Insta360 MIT license files were read at the pinned revisions below.
 Other license labels are metadata unless the audit notes explicitly say otherwise.
-The attributed NimBLE restore-function test fixture below is the only vendored
+The attributed NimBLE restore/reset function fixtures below are the only vendored
 third-party implementation; no protocol documentation has been vendored.
 RideSync's MIT license does not relicense any referenced project.
 
@@ -182,3 +182,48 @@ modified SHA256 `04c3363f08b532867c70d0c55b742745a88b1fb1aa954eafeb71028f7ce1c8c
 No persistent store bytes are modified by the build patch. Other initializer
 restore errors can be logged/ignored upstream, so actual persisted-vs-stack
 readback and independent restoration proof remain mandatory.
+
+
+## Targeted reset source contract (#43)
+
+The same exact NimBLE-Arduino pin supplies `host/src/ble_store.c` (delete holds
+`ble_hs_lock` across the callback), `host/store/config/src/ble_store_config.c`
+(typed record lookup and RAM-before-persist deletion), `ble_store_nvs.c`
+(per-key erase/commit), `host/src/ble_store_util.c` (early-stop sequential deletion)
+and `host/src/ble_gap.c` (`ble_gap_unpair` can mask store errors and miss orphan
+records). Consequently reset uses bounded typed SDK deletes and durable/live
+verification rather than a thin unpair wrapper. Private tables are inspected
+read-only; no application security copy or direct mutation of SDK arrays exists.
+
+`ble_store_config_find_rpa_rec` lacks the `BLE_ADDR_ANY` branch used by security
+and CCCD finders. `ble_store_util_count(PEER_ADDR)` therefore returns zero for a
+normal nonempty RPA table. The pinned bounded private RPA count is used for both
+startup restoration verification and reset inventory. The cold-loaded RPA test
+runs real restoration admission before reset; malformed/partial restores still
+fail closed under independent proof.
+
+`host/src/ble_hs_resolv.c` has two necessary narrow exact-pin corrections:
+resolving-list removal copies `rl_cnt - position - 1` entries, and lookup matches
+identity bytes only with their identity type, or RPA bytes only in the random
+address domain. The helper is called by both add-duplicate checking and removal.
+Original full-file SHA256 is
+`d4392a827f71ad2dfb04a137c95d3d9886cd37f2c253ed535885a639adcab5f4`.
+The build patch reverses only these known changes to validate the original whole
+source SHA, checks unique patterns, is idempotent, and rejects drift. Source
+notices remain intact. Exact-body sanitizer regressions cover first/middle/last
+full-capacity removal, same bytes/different identity types, random RPA aliases,
+and both add and remove callers. The original separate nonfull typed cases fail
+their own assertions; the memory-capacity case fails ASan independently.
+
+The unchanged `ble_rpa_replace_id_with_rand_addr` helper also uses untyped alias
+lookup, but only rewrites a connection found by the typed target address. Reset
+requires that connection absent, rejects foreign identity/random/pseudo aliases
+before removal and runs on the sole host event queue. It does not patch that
+unrelated helper or authorize an ambiguous mapping. SDK privacy-device removal
+ignores persistence failure; durable/live verification catches the divergence.
+
+Compile guards require host privacy=1, ENC_ADV_DATA=0, SMP_ID_RESET=0, five bonds,
+32 CCCDs. Changing schema/features requires new source and device qualification.
+The attributed reset fixtures retain their original notices and Apache license;
+[fixture attribution](../test/fixtures/nimble/README.md) names each source/function.
+Synthetic NVS/radio/timing boundaries are not device captures or physical proof.

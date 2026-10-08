@@ -323,43 +323,51 @@ disabled defaults, safe-mode/NVS refusal and worker creation failure. Retained
 ESP32 builds link the actual config-owner handoff; these are compile/link and
 host behavior evidence, not board/camera/bond/pin/protocol qualification.
 
-## Stack-owned bonds and future BLE integration gates
+## Stack-owned bonds and reset admission
 
-The selected provisional NimBLE 2.3.6 owns credentials and CCCDs in `nimble_bond`.
-No BLE dependency, second host or duplicate security store is introduced here.
-The `BondResetPort` policy is a tested abstraction; there is no concrete NimBLE
-backend or camera pairing/reset integration yet. It accepts only verified typed
-stable identities (public or random-static, with six address bytes in stack order,
-least significant byte first), obtained from authenticated connection identity or
-verified stack mapping. Configured MACs are not security identity evidence.
-Unresolved RPAs, unknown types and zero addresses are refused. The port must check
-SDK/host/restoration admission per operation, serialize with BLE mutation, and
-verify removal of all relevant targeted security/CCCD records. Enumeration alone
-cannot prove successful restore or complete partial deletion.
+The pinned NimBLE 2.3.6 owns credentials and CCCDs in `nimble_bond` on the existing
+boot-lifetime `Esp32BleHost`. Its explicit `requestBondReset`/`cancelBondReset`/
+`bondResetResult` API now supplies a concrete bounded host-event transaction.
+The portable `BondResetPort` remains a separately tested synchronous policy;
+it is not used to block the application on this asynchronous backend.
 
-Reset performs one targeted removal, at most one busy retry after controlled
-quiescence, then verifies absence; presence or inability to verify is
-`Indeterminate`. Other removal failures are actionable outcomes and make no
-rollback claim. There is no global-delete API, generic-auth-failure deletion,
-automatic re-pair or recording replay. Only a later protocol-authorized caller
-may permit one fresh pairing/reconnect after verified removal. Remote camera-side
-forget/reset may still be required.
+Only independently verified typed public/random-static identities are admitted,
+with six address bytes in stack order, least significant byte first. Configured
+MAC strings and unresolved RPAs cannot authorize deletion. Current host, separate
+restoration proof, NVS boot permission and overflow-refusal gates are checked
+before each mutation. Matching contexts must already be released and relevant
+GAP activity quiescent; otherwise reset returns Busy without terminating them.
+Ambiguous private-record aliases are refused. Actual SDK deletion is followed by
+bounded durable and live readback of security, CCCD, CSFC and privacy records;
+foreign records and local/global identity material must remain unchanged.
 
-Before pairing, the future BLE owner must install a device store-status callback
-that fails/reports capacity without eviction. NimBLE's default callback invokes
-oldest-peer unpairing on overflow and is prohibited. `admitBond` requires host,
-separate restoration evidence, installed overflow refusal, and free capacity (or
-an already verified stored identity). It is a policy, not a runtime SDK proof.
-NimBLE's default three bonds cannot cover even the four required target cameras;
-configure and qualify at least four, or eight for full SourceConfig capacity,
-with measured controller/radio/storage limits. Stack restore is void with logging
-limitations, so new observable restoration evidence is required. Future backend
-work must account for partial unpair deletions and bounded enumeration (strict
-index < peer count), and must never delete unrelated cameras to recover capacity.
+Every submitted request owns fixed storage until its host event's final access.
+Cancellation/deadline can finish intent while `releasable` remains false. An
+already admitted SDK operation may complete after cancellation; no later mutation
+is admitted. Removed, unchanged Absent, Busy, Refused, Error and Indeterminate are
+separate outcomes. Partial deletion has no rollback promise. No second host,
+global delete, SDK/NVS restart, eviction, automatic pairing/reconnect or recording
+replay is introduced. Remote camera-side forget may still be required.
+
+`requalification_required` flags any attempted mutation. It is an obligation for
+the dependent application/operator integration (#44), not a durable proof
+revocation record. This backend never rewrites or self-authorizes `BleStoreProof`.
+Changed durable bytes fail the existing next-boot digest/count admission against
+an old proof. A failed write can leave the old durable bytes unchanged, so the
+flag must still be consumed by the application owner and independent commissioning
+must requalify the next boot; a copied flag alone cannot enforce that policy.
+Application maintenance/current-configuration admission and user operation remain
+pending #44. This API is not activated by default firmware.
+
+The host installs a capacity-refusal callback and never invokes NimBLE's default
+oldest-peer eviction. The proved schema is five bonds/connections, 32 CCCDs,
+host-based privacy enabled, encrypted advertising and SMP identity reset disabled;
+compile-time guards require requalification before those macros change. Four
+central peers are admitted; these settings do not prove physical capacity.
+See [BLE transport](ble_transport.md) and [source evidence](sources.md).
 
 Issue #18 remains OPEN pending installed-firmware reboot/migration/power-failure
 recovery, actual bond restoration and scoped reset, capacity measurements,
 watchdog/task-memory/latency qualification, and observed absence of recording
 command replay. Host fault injection and pinned ESP32 compilation are software
-evidence only. Two retained blobs plus NVS overhead and stack bonds must fit the
-actual partition; no partition-table or SDK source edits are made here.
+evidence only. No physical camera or radio was used for this change.

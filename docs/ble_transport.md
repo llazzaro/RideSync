@@ -178,8 +178,7 @@ records still need independent commissioning evidence before a later boot.
 - Application: four peers, three services/eight endpoints and at most 32 discovered
   characteristic declarations per peer; excess or duplicates retire the link.
   Queue is 32 records, each 132 bytes (4224 bytes); one command copy is 120 bytes.
-  Native ARM64 `sizeof(BleCentral)` is 9024 bytes; the pinned Xtensa target is
-  8920 bytes and each target callback context is 32 bytes. No application
+  The pinned Xtensa `sizeof(BleCentral)` is 9400 bytes and each target callback context is 32 bytes. No application
   transport heap allocation or per-command FIFO is used; one caller request per ready peer is admitted.
 - Host: configured five total connections and five bonds, with four central peers
   admitted and one connection reserved for a future raw peripheral role; 32 CCCD
@@ -187,7 +186,7 @@ records still need independent commissioning evidence before a later boot.
   fixed pools and SDK allocations; target measured heap/stack stress remains open.
 - One checked SDK host task uses a 4096-byte stack, priority 5, CPU0. The application
   owner runs in the caller's serialized context, without another helper worker.
-  The linked target backend singleton is 484 bytes, plus an eight-byte C++
+  The linked target backend singleton is 4928 bytes, plus an eight-byte C++
   initialization guard. Nine backend slots have fixed NPL terminal barriers,
   enqueue admission flags and callback counters.
   Store inspection uses a fixed 80-name table, a 512-byte aligned scratch record
@@ -213,3 +212,54 @@ Physical gates #17/#18/#4/#22 remain OPEN: real four/mixed-link capacity, restor
 identity/security/CCCD behavior and power-cut preservation, actual refusal at
 capacity, callback/teardown and initialization/NVS latency, stack/heap margin,
 coexistence and camera screen/recording evidence. No hardware was used here.
+
+
+## Explicit targeted reset transaction (#43)
+
+`Esp32BleHost` copies a verified stable identity, strictly increasing nonzero
+operation ID and a future monotonic millisecond deadline (maximum five seconds).
+One serialized owner submits/polls/cancels; the existing host task executes the
+fixed NPL event. Submission uses zero queue wait. Queue refusal releases the
+request with Busy; duplicate/stale IDs cannot replay it. `cancelBondReset` is the
+permanent lease revocation seam for #44: current application authorization must
+be checked by that future owner and revoked on configuration change. No borrowed
+callback, manager or caller buffer is retained.
+
+Poll never waits for SDK/NVS. Before the callback releases, it exposes atomic
+intent/cancel/mutation state only. `finished` can be true on cancellation/expiry
+while `releasable` is false. A blocked SDK callback retains the singleton, request,
+event and scratch until its real final access; no timeout reuses that storage.
+The next request is admitted only after release. One SDK call already admitted
+can finish after revocation; subsequent calls check the lease and actual clock.
+
+Reset reserves all main-context potentially locking SDK entries: submission,
+retirement, scan cancellation, bond readback/admission and MTU. The reservation
+is distinct from a transport fault. `BleCentral` keeps a fixed copied deferred
+operation and its original deadline; it retries service admission within that
+existing deadline, without a command FIFO or replay of a submitted operation.
+Never-submitted scans/connections can cancel and release without inventing a
+backend callback. Submitted contexts still require terminal callbacks, callback
+counter zero and the actual host-queue barrier. Other peer ATT/retire calls return
+promptly while SDK delete/NVS holds the host mutex. Excessive real NVS latency
+can still expire ordinary deadlines; physical timing remains unqualified.
+
+Preflight refuses matching retained link/procedure slots and unknown slot
+provenance, relevant GAP activity or a live target connection. It never detaches
+or terminates a context. ATT slots retain typed ownership after link release.
+The transaction deletes bounded exact typed security/CCCD/CSFC/RPA records and
+owned private device records with actual SDK functions. Orphan CCCD and either
+one-sided security are included. Both NVS and live arrays are checked before and
+after; the foreign preservation digest is a sorted multiset of schema/length/blob
+hashes, preserving duplicate multiplicity while ignoring SDK record positions.
+Local IRK is always foreign. No matching target records/resolving entry means
+unchanged Absent. Failed or unverifiable partial mutation means Indeterminate
+and seals host store admission; it never reports success from `ble_gap_unpair`.
+
+Any attempted mutation exposes `requalification_required`, including conservative
+partial/error cases. The backend does not change the independent commissioning
+proof. Actual next-boot invalidation/maintenance policy is #44's obligation;
+changed durable content already fails old digest/count restoration admission.
+See [configuration](configuration.md#stack-owned-bonds-and-reset-admission) for
+the unchanged-durable-write-failure limit. No reset entry point is activated by
+normal firmware. The retained qualification image contains data-only member
+pointer anchors for submit/cancel/poll and the actual SDK deletion/readback paths.

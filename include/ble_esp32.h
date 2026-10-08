@@ -19,6 +19,14 @@ struct BleStoreObservation {
   int error = 0;
   BleStoreProof snapshot;
 };
+enum class BondResetSubmission { Queued, Busy, Refused, Stale };
+struct BleBondResetResult {
+  uint32_t operation = 0;
+  BondOutcome outcome = BondOutcome::Busy;
+  int error = 0;
+  bool finished = false, releasable = false, mutation = false;
+  bool requalification_required = false, cancelled = false, timed_out = false;
+};
 class Esp32BleHost final : public BleHost, public NimBLEDeviceCallbacks {
 public:
   // One boot-lifetime instance, also the future raw peripheral host/store owner.
@@ -44,6 +52,18 @@ public:
   uint16_t mtu(uint16_t) const override;
   int onStoreStatus(ble_store_status_event *, void *) override;
   int error() const { return error_.load(); }
+  // One serialized caller. Operation IDs strictly increase for this boot.
+  // Copied identity must come from independent verified stable peer evidence.
+  // Caller first releases matching contexts and relevant GAP activity. No I/O
+  // occurs on this caller; a queued host event owns the fixed storage.
+  BondResetSubmission requestBondReset(const BondIdentity &, uint32_t operation, uint32_t deadline,
+                                       uint32_t now);
+  // Permanent revocation, also used by #44 for current-configuration admission.
+  // An SDK call already admitted may finish; no subsequent mutation is admitted.
+  bool cancelBondReset(uint32_t operation);
+  // Deadline/cancel may finish intent while releasable remains false. Never reuse
+  // storage based on a timeout: only the host callback's final release permits it.
+  BleBondResetResult bondResetResult(uint32_t operation, uint32_t now);
 
 private:
   Esp32BleHost() = default;
@@ -65,6 +85,27 @@ private:
   bool leased_ = false, restore_verified_ = false, refusal_installed_ = false,
        host_started_ = false;
   uint8_t own_address_type_ = 0;
+  mutable std::atomic<unsigned> sdk_calls_{0};
+  std::atomic<bool> reset_gate_{false};
+  struct Reset {
+    ble_npl_event event{};
+    std::atomic<unsigned> phase{0}; // idle, queued, running, final access released
+    std::atomic<bool> cancelled{false}, timed_out{false}, mutation{false};
+    uint32_t operation = 0, last_operation = 0, deadline = 0;
+    BondIdentity identity;
+    BleBondResetResult result;
+    // Host-only scratch, never placed on the 4096-byte host task stack.
+    std::array<std::array<char, 16>, 80> names{};
+    alignas(std::max_align_t) std::array<uint8_t, 512> bytes{};
+    std::array<std::array<uint8_t, 32>, 80> digests{};
+    bool ambiguous = false, initialized = false;
+  } reset_;
+  bool resetAllowed();
+  bool resetInventory(std::array<uint8_t, 32> &, unsigned &target_records);
+  int resetClassify(unsigned schema, const void *blob) const;
+  static void resetEvent(ble_npl_event *);
+  void performBondReset();
+
   Slot &slot(BleContext &);
   static void barrier(ble_npl_event *);
   static void terminal(Slot &);

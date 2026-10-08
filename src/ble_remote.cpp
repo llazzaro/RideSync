@@ -109,6 +109,7 @@ bool BleCentral::connect(uint8_t i, uint32_t gen, const BondIdentity &id,
   p.service_start = {};
   p.service_end = {};
   p.next_procedure = 0;
+  p.deferred = p.security_waiting = false;
   p.active = p.complete = p.retired_reported = p.terminate_submitted = p.cancel_submitted = false;
   p.retirement = BleFault::None;
   p.error = 0;
@@ -137,7 +138,11 @@ bool BleCentral::scan(uint32_t duration, uint32_t now) {
   BleCommand c;
   c.phase = BlePhase::Scan;
   c.duration_ms = duration;
-  if (host_.submit(c, scan_) != 0) {
+  const int rc = host_.submit(c, scan_);
+  scan_pending_ = rc == kBleHostReserved;
+  if (scan_pending_)
+    scan_.terminal.store(false);
+  if (rc && !scan_pending_) {
     scan_.sealed.store(true);
     scan_.fault.store(BleFault::Host);
     return false;
@@ -178,9 +183,6 @@ bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t 
       size > kBlePayload || !(peers_[i].spec.endpoints[endpoint].properties & 8))
     return false;
   auto &p = peers_[i];
-  const auto mtu = host_.mtu(p.link.connection.load());
-  if (mtu < 3 || size > static_cast<size_t>(mtu - 3))
-    return false;
   p.endpoint = endpoint;
   BleCommand c;
   c.phase = BlePhase::Write;
@@ -196,8 +198,18 @@ void BleCentral::disconnect(uint8_t i) {
 void BleCentral::cancelScanOnce() {
   if (!scanning_ || scan_cancel_attempted_ || scan_.terminal.load())
     return;
+  if (scan_pending_) {
+    scan_pending_ = false;
+    scan_.terminal.store(true);
+    return;
+  }
   scan_cancel_attempted_ = true; // Before call: immediate terminal callbacks are safe.
   scan_cancel_error_ = host_.cancelScan(scan_);
+  if (scan_cancel_error_ == kBleHostReserved) {
+    scan_cancel_attempted_ = false;
+    scan_cancel_error_ = 0;
+    return;
+  }
   if (scan_cancel_error_) {
     BleResult result;
     result.kind = BleResultKind::ScanCancelFailed;
@@ -320,6 +332,8 @@ void BleCentral::retire(uint8_t i, BleFault fault, int error) {
   const bool connecting = p.link.connection.load() == kBleNoHandle;
   if (!p.link.terminal.load() && !(connecting ? p.cancel_submitted : p.terminate_submitted)) {
     const int rc = host_.retire(p.link);
+    if (rc == kBleHostReserved)
+      return;
     if (connecting)
       p.cancel_submitted = true;
     else
@@ -337,7 +351,20 @@ bool BleCentral::launch(uint8_t i, BleCommand c, uint32_t now) {
     return false;
   }
   p.phase = c.phase;
-  p.deadline = now + kPhaseDeadlineMs;
+  if (!p.deferred)
+    p.deadline = now + kPhaseDeadlineMs;
+  p.deferred = true;
+  p.deferred_command = c;
+  if (c.phase == BlePhase::Write || c.phase == BlePhase::Subscribe) {
+    const auto mtu = host_.mtu(p.link.connection.load());
+    if (mtu == kBleMtuReserved)
+      return true;
+    if (mtu < 3 || c.size > static_cast<size_t>(mtu - 3)) {
+      p.deferred = false;
+      p.phase = BlePhase::ReadyForProfile;
+      return false;
+    }
+  }
   p.active = true;
   p.complete = false;
   p.error = 0;
@@ -345,6 +372,12 @@ bool BleCentral::launch(uint8_t i, BleCommand c, uint32_t now) {
   resetContext(p.procedure, i, p.link.generation, c.phase, ++p.next_procedure, c.connection,
                c.handle);
   const int rc = host_.submit(c, p.procedure);
+  if (rc == kBleHostReserved) {
+    p.active = false;
+    p.procedure.receiver = nullptr;
+    return true;
+  }
+  p.deferred = false;
   if (rc) {
     retire(i, BleFault::Host, rc);
     return false;
@@ -408,11 +441,6 @@ void BleCentral::event(const BleEvent &e) {
       return;
     }
     initiating_ = kBlePeers;
-    const auto admission = host_.bondAdmission(p.identity);
-    if (!admission.allowed()) {
-      retire(e.peer, BleFault::Store);
-      return;
-    }
     p.phase = BlePhase::Security;
     p.active = false;
     return;
@@ -525,6 +553,10 @@ void BleCentral::advance(uint8_t i, uint32_t now) {
   auto &p = peers_[i];
   if (p.link.sealed.load())
     return;
+  if (p.deferred) {
+    launch(i, p.deferred_command, now);
+    return;
+  }
   if (p.active) {
     if (!p.complete || !host_.quiescent(p.procedure))
       return;
@@ -594,10 +626,24 @@ void BleCentral::advance(uint8_t i, uint32_t now) {
     c.size = 2;
     c.bytes[0] = p.spec.endpoints[p.endpoint].subscribe;
   } else if (p.phase == BlePhase::Security && !p.active) {
+    const auto admission = host_.bondAdmission(p.identity);
+    if (admission.reserved)
+      return;
+    if (!admission.allowed()) {
+      retire(i, BleFault::Store);
+      return;
+    }
     p.active = true;
-    p.deadline = now + kPhaseDeadlineMs;
+    if (!p.security_waiting)
+      p.deadline = now + kPhaseDeadlineMs;
+    p.security_waiting = true;
     c.connection = p.link.connection.load();
     const int rc = host_.submit(c, p.link);
+    if (rc == kBleHostReserved) {
+      p.active = false;
+      return;
+    }
+    p.security_waiting = false;
     if (rc)
       retire(i, BleFault::Host, rc);
     return;
@@ -638,6 +684,22 @@ void BleCentral::service(uint32_t now) {
     }
   };
   faults();
+  if (scan_pending_ && !scan_.sealed.load() && !expired(now, scan_deadline_)) {
+    BleCommand command;
+    command.phase = BlePhase::Scan;
+    command.duration_ms = scan_deadline_ - now;
+    scan_.terminal.store(false);
+    const int rc = host_.submit(command, scan_);
+    if (rc == kBleHostReserved)
+      scan_.terminal.store(false);
+    else {
+      scan_pending_ = false;
+      if (rc) {
+        scan_.sealed.store(true);
+        scan_.fault.store(BleFault::Host);
+      }
+    }
+  }
   if (scanning_ && (scan_.fault.load() != BleFault::None || stopping_ || startup_failed_ ||
                     (!scan_reported_ && expired(now, scan_deadline_)))) {
     scan_.sealed.store(true);
@@ -670,8 +732,8 @@ void BleCentral::service(uint32_t now) {
     auto &p = peers_[i];
     if (p.phase == BlePhase::Retiring || p.phase == BlePhase::Quarantined) {
       // A CONNECT can win cancellation. Terminate its actual captured handle.
-      if (!p.link.terminal.load() && p.link.connection.load() != kBleNoHandle &&
-          !p.terminate_submitted)
+      if (!p.link.terminal.load() &&
+          !(p.link.connection.load() == kBleNoHandle ? p.cancel_submitted : p.terminate_submitted))
         retire(i, p.retirement, p.error);
       if (p.link.terminal.load() && host_.quiescent(p.link) &&
           (!p.procedure.receiver || host_.quiescent(p.procedure)) && host_.releaseContext(p.link) &&
@@ -696,8 +758,13 @@ void BleCentral::service(uint32_t now) {
       c.identity = p.identity;
       c.duration_ms = kPhaseDeadlineMs;
       const int rc = host_.submit(c, p.link);
-      if (rc)
+      if (rc == kBleHostReserved) {
+        p.phase = BlePhase::Queued;
+        p.link.terminal.store(true);
+        initiating_ = kBlePeers;
+      } else if (rc) {
         retire(i, BleFault::Host, rc);
+      }
       // At most one initiating admission per pass, including immediate callbacks.
       continue;
     }

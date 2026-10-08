@@ -22,7 +22,7 @@ struct FakeHost : BleHost {
   std::vector<BleContext *> contexts;
   std::vector<BleContext *> quiet;
   int submit_error = 0, retire_error = 0;
-  bool immediate_connect = false, allow_release = true;
+  bool immediate_connect = false, allow_release = true, reserved = false;
   unsigned releases = 0;
   unsigned starts = 0, retirements = 0, scan_cancellations = 0;
   FakeHost() {
@@ -42,6 +42,11 @@ struct FakeHost : BleHost {
   }
   BleBondAdmission bondAdmission(const BondIdentity &) override { return bond; }
   int submit(const BleCommand &c, BleContext &ctx) override {
+    if (reserved) {
+      if (c.phase != BlePhase::Security)
+        ctx.terminal.store(true);
+      return -30001;
+    }
     commands.push_back(c);
     contexts.push_back(&ctx);
     quiet.erase(std::remove(quiet.begin(), quiet.end(), &ctx), quiet.end());
@@ -840,10 +845,33 @@ void scan_completion_at_absolute_deadline_loses_to_timeout_even_if_terminal() {
   TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::ScanComplete));
   TEST_ASSERT_TRUE(owner.canDestroy());
 }
+void maintenance_reservation_defers_att_without_retiring_live_peer() {
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  ready(h, owner);
+  h.reserved = true;
+  const uint8_t value[] = {1, 2};
+  const bool accepted = owner.write(0, 0, value, sizeof value, 30);
+  const unsigned retired = sink.count(BleResultKind::Retired);
+  h.reserved = false;
+  owner.service(31);
+  const size_t write = command(h, 0, BlePhase::Write);
+  h.done(write);
+  owner.service(32);
+  const bool still_ready = owner.admissionOpen(0);
+  owner.stop();
+  closed(h, owner, 0);
+  TEST_ASSERT_TRUE(accepted);
+  TEST_ASSERT_EQUAL(0, retired);
+  TEST_ASSERT_TRUE(still_ready);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(maintenance_reservation_defers_att_without_retiring_live_peer);
   RUN_TEST(disabled_and_unqualified_do_not_initialize_or_publish_health);
   RUN_TEST(one_global_connect_and_immediate_callback_are_safe);
   RUN_TEST(subscription_requires_actual_cccd_att_completion_and_readback);

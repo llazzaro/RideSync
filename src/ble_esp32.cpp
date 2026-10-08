@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <esp_bt.h>
+#include <esp_timer.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
 #if CONFIG_BT_LE_CONTROLLER_NPL_OS_PORTING_SUPPORT
@@ -16,9 +17,16 @@
 #include <nimble/nimble/host/include/host/ble_store.h>
 #include <nimble/nimble/host/src/ble_hs_resolv_priv.h>
 #include <nimble/nimble/host/store/config/include/store/config/ble_store_config.h>
+#include <nimble/nimble/host/store/config/src/ble_store_config_priv.h>
 #include <nimble/porting/nimble/include/nimble/nimble_port.h>
 #include <nimble/porting/nimble/include/os/os_mbuf.h>
 #include <nvs.h>
+
+// Reset inventory and deletion are proved only for this exact pinned schema.
+static_assert(MYNEWT_VAL(BLE_HOST_BASED_PRIVACY) == 1 && MYNEWT_VAL(ENC_ADV_DATA) == 0 &&
+                  MYNEWT_VAL(BLE_SMP_ID_RESET) == 0 && MYNEWT_VAL(BLE_STORE_MAX_BONDS) == 5 &&
+                  MYNEWT_VAL(BLE_STORE_MAX_CCCDS) == 32,
+              "Requalify targeted reset before changing the pinned store/privacy schema");
 
 extern "C" void ble_store_config_init(void);
 namespace ridesync {
@@ -284,7 +292,9 @@ BleStoreObservation Esp32BleHost::inspectStore(bool compare_stack) {
   if (compare_stack && valid) {
     for (unsigned schema = 0; schema < 6; ++schema) {
       int actual_count = -1;
-      if (ble_store_util_count(types[schema], &actual_count) != 0 || actual_count < 0 ||
+      const int result = schema == 5 ? (actual_count = ble_store_config_num_rpa_recs, 0)
+                                     : ble_store_util_count(types[schema], &actual_count);
+      if (result != 0 || actual_count < 0 ||
           unsigned(actual_count) != out.snapshot.counts[schema]) {
         valid = false;
         break;
@@ -426,8 +436,396 @@ int Esp32BleHost::onStoreStatus(ble_store_status_event *event, void *) {
     fail(BleFault::Store, BLE_HS_ESTORE_CAP);
   return BLE_HS_ESTORE_CAP;
 }
+namespace {
+bool resetExpired(uint32_t now, uint32_t deadline) {
+  return static_cast<int32_t>(now - deadline) >= 0;
+}
+bool sameAddress(const ble_addr_t &a, const ble_addr_t &b) {
+  return a.type == b.type && std::memcmp(a.val, b.val, 6) == 0;
+}
+bool validResetIdentity(const BondIdentity &id) {
+  bool nonzero = false;
+  for (auto b : id.address)
+    nonzero |= b != 0;
+  return id.verified && nonzero &&
+         (id.type == IdentityType::Public ||
+          (id.type == IdentityType::RandomStatic && (id.address[5] & 0xc0) == 0xc0));
+}
+} // namespace
+BondResetSubmission Esp32BleHost::requestBondReset(const BondIdentity &id, uint32_t operation,
+                                                   uint32_t deadline, uint32_t now) {
+  if (reset_.phase.load(std::memory_order_acquire) == 1 || reset_.phase.load() == 2)
+    return BondResetSubmission::Busy;
+  if (!operation || operation <= reset_.last_operation)
+    return BondResetSubmission::Stale;
+  if (!validResetIdentity(id) || resetExpired(now, deadline) || deadline - now > 5000 ||
+      state() != BleHostState::Ready || fault() != BleFault::None || !restore_verified_ ||
+      !refusal_installed_ || !nvsBootStatus().persistenceAllowed())
+    return BondResetSubmission::Refused;
+  reset_.last_operation = reset_.operation = operation;
+  reset_.identity = id;
+  reset_.deadline = deadline;
+  reset_.cancelled.store(false);
+  reset_.timed_out.store(false);
+  reset_.mutation.store(false);
+  reset_.result = {};
+  reset_.ambiguous = false;
+  reset_.result.operation = operation;
+  if (!reset_.initialized) {
+    ble_npl_event_init(&reset_.event, resetEvent, this);
+    reset_.initialized = true;
+  }
+  reset_.phase.store(1, std::memory_order_release);
+  auto *event = &reset_.event;
+  event->queued = true;
+  if (xQueueSendToBack(nimble_port_get_dflt_eventq()->q, &event, 0) != pdPASS) {
+    event->queued = false;
+    reset_.result.finished = reset_.result.releasable = true;
+    reset_.result.outcome = BondOutcome::Busy;
+    reset_.result.error = BLE_HS_ENOMEM;
+    reset_.phase.store(3, std::memory_order_release);
+    return BondResetSubmission::Busy;
+  }
+  return BondResetSubmission::Queued;
+}
+bool Esp32BleHost::cancelBondReset(uint32_t operation) {
+  if (!operation || operation != reset_.operation ||
+      reset_.phase.load(std::memory_order_acquire) == 3)
+    return false;
+  reset_.cancelled.store(true, std::memory_order_release);
+  return true;
+}
+BleBondResetResult Esp32BleHost::bondResetResult(uint32_t operation, uint32_t now) {
+  BleBondResetResult out;
+  out.operation = operation;
+  if (!operation || operation != reset_.operation) {
+    out.outcome = BondOutcome::Refused;
+    out.finished = true;
+    return out;
+  }
+  if (reset_.phase.load(std::memory_order_acquire) == 3)
+    return reset_.result;
+  if (resetExpired(now, reset_.deadline)) {
+    reset_.timed_out.store(true, std::memory_order_release);
+    reset_.cancelled.store(true, std::memory_order_release);
+  }
+  out.cancelled = reset_.cancelled.load(std::memory_order_acquire);
+  out.timed_out = reset_.timed_out.load(std::memory_order_acquire);
+  out.mutation = reset_.mutation.load(std::memory_order_acquire);
+  out.requalification_required = out.mutation;
+  out.finished = out.cancelled;
+  out.outcome = out.cancelled ? (out.mutation ? BondOutcome::Indeterminate : BondOutcome::Refused)
+                              : BondOutcome::Busy;
+  return out;
+}
+bool Esp32BleHost::resetAllowed() {
+  if (resetExpired(static_cast<uint32_t>(esp_timer_get_time() / 1000), reset_.deadline)) {
+    reset_.timed_out.store(true, std::memory_order_release);
+    reset_.cancelled.store(true, std::memory_order_release);
+  }
+  return !reset_.cancelled.load(std::memory_order_acquire) && state() == BleHostState::Ready &&
+         fault() == BleFault::None && restore_verified_ && refusal_installed_ &&
+         nvsBootStatus().persistenceAllowed();
+}
+void Esp32BleHost::resetEvent(ble_npl_event *event) {
+  auto &host = *static_cast<Esp32BleHost *>(ble_npl_event_get_arg(event));
+  host.reset_.phase.store(2, std::memory_order_release);
+  host.reset_gate_.store(true, std::memory_order_release);
+  host.performBondReset();
+  host.reset_.result.mutation = host.reset_.mutation.load();
+  host.reset_.result.requalification_required = host.reset_.result.mutation;
+  host.reset_.result.cancelled = host.reset_.cancelled.load();
+  host.reset_.result.timed_out = host.reset_.timed_out.load();
+  host.reset_.result.finished = host.reset_.result.releasable = true;
+  host.reset_gate_.store(false, std::memory_order_release);
+  // FINAL host access. The pinned NPL has already cleared event->queued before
+  // invocation. A late/blocked event retains this singleton state until here.
+  host.reset_.phase.store(3, std::memory_order_release);
+}
+int Esp32BleHost::resetClassify(unsigned schema, const void *blob) const {
+  const auto target = address(reset_.identity);
+  const ble_addr_t *peer = nullptr;
+  if (schema < 2)
+    peer = &static_cast<const ble_store_value_sec *>(blob)->peer_addr;
+  else if (schema == 2)
+    peer = &static_cast<const ble_store_value_cccd *>(blob)->peer_addr;
+  else if (schema == 3)
+    peer = &static_cast<const ble_store_value_csfc *>(blob)->peer_addr;
+  else if (schema == 4)
+    return 0; // Local/global IRK is never one camera's credential.
+  else if (schema == 5) {
+    const auto &rpa = *static_cast<const ble_store_value_rpa_rec *>(blob);
+    if (sameAddress(rpa.peer_addr, target))
+      return 1;
+    return sameAddress(rpa.peer_rpa_addr, target) ? -1 : 0;
+  } else if (schema == 6) {
+    const auto &record = *static_cast<const ble_hs_dev_records *>(blob);
+    const bool bytes_match = !std::memcmp(record.identity_addr, target.val, 6) ||
+                             !std::memcmp(record.rand_addr, target.val, 6) ||
+                             !std::memcmp(record.pseudo_addr, target.val, 6);
+    if (record.rec_used && sameAddress(record.peer_sec.peer_addr, target) &&
+        !std::memcmp(record.identity_addr, target.val, 6))
+      return 1;
+    // The SDK's private peer-record lookup is untyped. Never authorize it from
+    // raw aliases when independently typed ownership cannot be established.
+    return bytes_match ? -1 : 0;
+  }
+  return peer && sameAddress(*peer, target) ? 1 : 0;
+}
+bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &target_records) {
+  target_records = 0;
+  std::array<unsigned, 7> counts{};
+  nvs_handle_t handle = 0;
+  if (!resetAllowed())
+    return false;
+  const auto opened = nvs_open("nimble_bond", NVS_READONLY, &handle);
+  if (opened != ESP_OK && opened != ESP_ERR_NVS_NOT_FOUND)
+    return false;
+  unsigned count = 0;
+  bool valid = true;
+  if (opened == ESP_OK) {
+    auto iterator = nvs_entry_find("nvs", "nimble_bond", NVS_TYPE_ANY);
+    while (iterator) {
+      nvs_entry_info_t info{};
+      nvs_entry_info(iterator, &info);
+      if (count == reset_.names.size() || info.type != NVS_TYPE_BLOB ||
+          !std::memchr(info.key, 0, sizeof info.key)) {
+        valid = false;
+        break;
+      }
+      std::memcpy(reset_.names[count++].data(), info.key, 16);
+      iterator = nvs_entry_next(iterator);
+    }
+    if (iterator)
+      nvs_release_iterator(iterator);
+  }
+  std::sort(reset_.names.begin(), reset_.names.begin() + count,
+            [](const std::array<char, 16> &a, const std::array<char, 16> &b) {
+              return std::strncmp(a.data(), b.data(), 16) < 0;
+            });
+  unsigned foreign_count = 0;
+  auto digestRecord = [&](unsigned schema, const uint8_t *bytes, size_t length) {
+    if (foreign_count == reset_.digests.size())
+      return false;
+    mbedtls_sha256_context hash;
+    mbedtls_sha256_init(&hash);
+    const uint8_t domain[] = {uint8_t(schema), uint8_t(length), uint8_t(length >> 8)};
+    bool ok = mbedtls_sha256_starts_ret(&hash, 0) == 0 &&
+              mbedtls_sha256_update_ret(&hash, domain, sizeof domain) == 0 &&
+              mbedtls_sha256_update_ret(&hash, bytes, length) == 0 &&
+              mbedtls_sha256_finish_ret(&hash, reset_.digests[foreign_count++].data()) == 0;
+    mbedtls_sha256_free(&hash);
+    return ok;
+  };
+  auto finish = [&](std::array<uint8_t, 32> &digest) {
+    std::sort(reset_.digests.begin(), reset_.digests.begin() + foreign_count);
+    mbedtls_sha256_context hash;
+    mbedtls_sha256_init(&hash);
+    bool ok = mbedtls_sha256_starts_ret(&hash, 0) == 0;
+    for (unsigned n = 0; n < foreign_count && ok; ++n)
+      ok = mbedtls_sha256_update_ret(&hash, reset_.digests[n].data(), 32) == 0;
+    ok &= mbedtls_sha256_finish_ret(&hash, digest.data()) == 0;
+    mbedtls_sha256_free(&hash);
+    return ok;
+  };
+  for (unsigned n = 0; n < count && valid; ++n) {
+    const auto *name = reset_.names[n].data();
+    unsigned schema = 7, index = 0;
+    for (unsigned t = 0; t < 7; ++t) {
+      const auto length = std::strlen(prefixes[t]);
+      if (std::strncmp(name, prefixes[t], length))
+        continue;
+      const char *digit = name + length;
+      bool digits = *digit != 0;
+      for (; *digit && digits; ++digit) {
+        digits = *digit >= '0' && *digit <= '9';
+        if (digits) {
+          index = index * 10 + *digit - '0';
+          digits = index < kStoreKeys;
+        }
+      }
+      if (digits)
+        schema = t;
+      break;
+    }
+    if (schema == 7 ||
+        index >= (schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
+                              : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0))) {
+      valid = false;
+      break;
+    }
+    size_t length = reset_.bytes.size();
+    if (!resetAllowed() || nvs_get_blob(handle, name, reset_.bytes.data(), &length) != ESP_OK ||
+        length != sizes[schema]) {
+      valid = false;
+      break;
+    }
+    ++counts[schema];
+    const int classification = resetClassify(schema, reset_.bytes.data());
+    if (classification < 0) {
+      reset_.ambiguous = true;
+      valid = false;
+      break;
+    }
+    if (classification == 1) {
+      ++target_records;
+      continue;
+    }
+    valid &= digestRecord(schema, reset_.bytes.data(), length);
+  }
+  valid &= finish(foreign);
+  foreign_count = 0;
+  unsigned live_targets = 0;
+  const void *tables[] = {ble_store_config_our_secs,     ble_store_config_peer_secs,
+                          ble_store_config_cccds,        ble_store_config_csfcs,
+                          ble_store_config_local_irks,   ble_store_config_rpa_recs,
+                          ble_rpa_get_peer_dev_records()};
+  const int live_counts[] = {ble_store_config_num_our_secs,     ble_store_config_num_peer_secs,
+                             ble_store_config_num_cccds,        ble_store_config_num_csfcs,
+                             ble_store_config_num_local_irks,   ble_store_config_num_rpa_recs,
+                             ble_rpa_get_num_peer_dev_records()};
+  for (unsigned schema = 0; schema < 7 && valid; ++schema) {
+    const unsigned bound = schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
+                                       : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0);
+    const int actual = live_counts[schema];
+    if (actual < 0 || unsigned(actual) > bound || unsigned(actual) != counts[schema]) {
+      valid = false;
+      break;
+    }
+    for (int n = 0; n < actual && valid; ++n) {
+      const auto *bytes = static_cast<const uint8_t *>(tables[schema]) + n * sizes[schema];
+      const int classification = resetClassify(schema, bytes);
+      if (classification < 0) {
+        reset_.ambiguous = true;
+        valid = false;
+      } else if (classification == 1) {
+        ++live_targets;
+      } else {
+        valid &= digestRecord(schema, bytes, sizes[schema]);
+      }
+    }
+  }
+  std::array<uint8_t, 32> live_foreign{};
+  valid &= finish(live_foreign) && foreign == live_foreign && live_targets == target_records;
+  if (opened == ESP_OK)
+    nvs_close(handle);
+  return valid && resetAllowed();
+}
+void Esp32BleHost::performBondReset() {
+  auto &result = reset_.result;
+  result.outcome = BondOutcome::Refused;
+  if (!resetAllowed())
+    return;
+  if (sdk_calls_.load(std::memory_order_acquire) || ble_gap_disc_active() || ble_gap_adv_active() ||
+      ble_gap_conn_active() || routing_lock_.test_and_set(std::memory_order_acquire)) {
+    result.outcome = BondOutcome::Busy;
+    return;
+  }
+  bool busy = false;
+  const auto target = address(reset_.identity);
+  for (const auto &slot : slots_)
+    if (slot.context && (slot.context->phase == BlePhase::Scan || !slot.identity.verified ||
+                         sameAddress(address(slot.identity), target)))
+      busy = true;
+  routing_lock_.clear(std::memory_order_release);
+  ble_gap_conn_desc connection{};
+  if (busy || ble_gap_conn_find_by_addr(&target, &connection) != BLE_HS_ENOTCONN) {
+    result.outcome = BondOutcome::Busy;
+    return;
+  }
+  auto *resolving = ble_hs_resolv_list_find(const_cast<uint8_t *>(target.val));
+  if (resolving && (resolving->rl_addr_type != target.type ||
+                    std::memcmp(resolving->rl_identity_addr, target.val, 6)))
+    return; // Untyped alias cannot prove ownership.
+  std::array<uint8_t, 32> before{}, after{};
+  unsigned records = 0, remaining = 0;
+  if (!resetInventory(before, records)) {
+    result.outcome =
+        !resetAllowed() || reset_.ambiguous ? BondOutcome::Refused : BondOutcome::Error;
+    result.error = BLE_HS_ESTORE_FAIL;
+    return;
+  }
+  if (!records && !resolving) {
+    result.outcome = BondOutcome::Absent;
+    return;
+  }
+  int error = 0;
+  auto mutate = [&]() {
+    if (!resetAllowed())
+      return false;
+    reset_.mutation.store(true, std::memory_order_release);
+    return true;
+  };
+  if (resolving) {
+    if (!mutate())
+      return;
+    error = ble_hs_resolv_list_rmv(target.type, const_cast<uint8_t *>(target.val));
+  }
+  const unsigned schemas[] = {0, 1, 2, 3, 5};
+  for (unsigned schema : schemas) {
+    if (error)
+      break;
+    ble_store_key key{};
+    if (schema < 2)
+      key.sec.peer_addr = target;
+    else if (schema == 2)
+      key.cccd.peer_addr = target;
+    else if (schema == 3)
+      key.csfc.peer_addr = target;
+    else
+      key.rpa_rec.peer_rpa_addr = target;
+    const unsigned bound = schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS : CONFIG_BT_NIMBLE_MAX_BONDS;
+    for (unsigned n = 0; n <= bound; ++n) {
+      if (!mutate()) {
+        error = BLE_HS_EDISABLED;
+        break;
+      }
+      const int rc = ble_store_delete(types[schema], &key);
+      if (rc == BLE_HS_ENOENT)
+        break;
+      if (rc || n == bound) {
+        error = rc ? rc : BLE_HS_ESTORE_FAIL;
+        break;
+      }
+    }
+  }
+  for (unsigned n = 0; !error && n <= CONFIG_BT_NIMBLE_MAX_BONDS + 1; ++n) {
+    const int count = ble_rpa_get_num_peer_dev_records();
+    if (count < 0 || count > CONFIG_BT_NIMBLE_MAX_BONDS + 1) {
+      error = BLE_HS_ESTORE_FAIL;
+      break;
+    }
+    auto *entries = ble_rpa_get_peer_dev_records();
+    ble_hs_dev_records *found = nullptr;
+    for (int i = 0; i < count; ++i)
+      if (resetClassify(6, &entries[i]) == 1) {
+        found = &entries[i];
+        break;
+      }
+    if (!found)
+      break;
+    if (!mutate()) {
+      error = BLE_HS_EDISABLED;
+      break;
+    }
+    error = ble_rpa_remove_peer_dev_rec(found);
+    if (n == CONFIG_BT_NIMBLE_MAX_BONDS + 1)
+      error = BLE_HS_ESTORE_FAIL;
+  }
+  const bool verified = resetInventory(after, remaining) && !remaining && before == after &&
+                        !ble_hs_resolv_list_find(const_cast<uint8_t *>(target.val));
+  result.error = error;
+  result.outcome = !error && verified ? BondOutcome::Removed : BondOutcome::Indeterminate;
+  if (!verified || error)
+    fail(BleFault::Store, error ? error : BLE_HS_ESTORE_FAIL);
+}
 BleBondAdmission Esp32BleHost::bondAdmission(const BondIdentity &id) {
   BleBondAdmission out;
+  CallbackAccess sdk(sdk_calls_);
+  if (reset_gate_.load(std::memory_order_acquire)) {
+    out.reserved = true;
+    return out;
+  }
   out.stack_ready = state() == BleHostState::Ready && fault() == BleFault::None;
   out.restore_verified = restore_verified_;
   out.refusal_installed = refusal_installed_;
@@ -534,8 +932,17 @@ bool Esp32BleHost::releaseContext(BleContext &ctx) {
   routing_lock_.clear(std::memory_order_release);
   return true;
 }
-uint16_t Esp32BleHost::mtu(uint16_t connection) const { return ble_att_mtu(connection); }
+uint16_t Esp32BleHost::mtu(uint16_t connection) const {
+  CallbackAccess sdk(sdk_calls_);
+  return reset_gate_.load(std::memory_order_acquire) ? kBleMtuReserved : ble_att_mtu(connection);
+}
 int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
+  CallbackAccess sdk(sdk_calls_);
+  if (reset_gate_.load(std::memory_order_acquire)) {
+    if (cmd.phase != BlePhase::Security)
+      ctx.terminal.store(true);
+    return kBleHostReserved;
+  }
   if (state() != BleHostState::Ready || fault() != BleFault::None || ctx.sealed.load()) {
     if (cmd.phase != BlePhase::Security)
       ctx.terminal.store(true);
@@ -548,8 +955,18 @@ int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
     return BLE_HS_EBUSY;
   }
   auto &entry = slot(ctx);
+  entry.identity = {};
   if (cmd.phase == BlePhase::Connect)
     entry.identity = cmd.identity;
+  else if (cmd.phase != BlePhase::Scan) {
+    // A retained ATT slot must keep peer ownership even after the link slot is
+    // released. Unknown provenance remains a conservative reset Busy barrier.
+    for (const auto &link : slots_)
+      if (link.context && link.context->phase == BlePhase::Connect &&
+          link.context->peer == ctx.peer && link.context->generation == ctx.generation &&
+          link.context->connection.load() == cmd.connection)
+        entry.identity = link.identity;
+  }
   entry.quiet.store(false);
   routing_lock_.clear(std::memory_order_release);
   int rc = BLE_HS_ENOTSUP;
@@ -594,11 +1011,17 @@ int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   return rc;
 }
 int Esp32BleHost::retire(BleContext &ctx) {
+  CallbackAccess sdk(sdk_calls_);
+  if (reset_gate_.load(std::memory_order_acquire))
+    return kBleHostReserved;
   return ctx.connection.load() == kBleNoHandle
              ? ble_gap_conn_cancel()
              : ble_gap_terminate(ctx.connection.load(), BLE_ERR_REM_USER_CONN_TERM);
 }
 int Esp32BleHost::cancelScan(BleContext &ctx) {
+  CallbackAccess sdk(sdk_calls_);
+  if (reset_gate_.load(std::memory_order_acquire))
+    return kBleHostReserved;
   const int rc = ble_gap_disc_cancel();
   // Pinned cancel resets scan state without emitting DISC_COMPLETE. Success is
   // documented fully aborted; queue barrier also accounts for an in-flight copy.
@@ -827,6 +1250,15 @@ int Esp32BleHost::attribute(uint16_t connection, const ble_gatt_error *error,
 #if defined(ARDUINO_ARCH_ESP32)
 // The dedicated compile environment retains the real vtable and every raw SDK
 // operation. Default main does not call this accessor or activate a BLE host.
+struct PairingResetBackendSymbols {
+  decltype(&ridesync::Esp32BleHost::requestBondReset) request;
+  decltype(&ridesync::Esp32BleHost::cancelBondReset) cancel;
+  decltype(&ridesync::Esp32BleHost::bondResetResult) result;
+};
+// Data-only linker anchor: retaining these member pointers does not execute reset.
+extern "C" const PairingResetBackendSymbols ridesync_ble_pairing_reset_backend = {
+    &ridesync::Esp32BleHost::requestBondReset, &ridesync::Esp32BleHost::cancelBondReset,
+    &ridesync::Esp32BleHost::bondResetResult};
 extern "C" ridesync::BleHost *ridesync_ble_qualification_backend() {
   return &ridesync::Esp32BleHost::instance();
 }

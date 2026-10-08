@@ -1,0 +1,79 @@
+/* Synthetic boundary declarations. Production target compilation checks SDK ABI. */
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#define MYNEWT_VAL(x) V_##x
+#define V_BLE_STORE_MAX_BONDS 5
+#define V_BLE_STORE_MAX_CCCDS 32
+#define V_BLE_HOST_BASED_PRIVACY 1
+#define V_ENC_ADV_DATA 0
+#define BLE_DEV_ADDR_LEN 6
+#define BLE_ADDR_RANDOM 1
+#define BLE_HS_ENOENT 12
+#define BLE_HS_EUNKNOWN 99
+#define BLE_HS_ESTORE_FAIL 10
+#define BLE_HS_LOG(...) ((void)0)
+#define ESP_LOGD(...) ((void)0)
+#define ESP_LOGE(...) ((void)0)
+#define ESP_OK 0
+#define NVS_READWRITE 1
+#define NIMBLE_NVS_STR_NAME_MAX_LEN 16
+#define NIMBLE_NVS_NAMESPACE "nimble_bond"
+#define BLE_STORE_OBJ_TYPE_OUR_SEC 1
+#define BLE_STORE_OBJ_TYPE_PEER_SEC 2
+#define BLE_STORE_OBJ_TYPE_CCCD 3
+#define BLE_STORE_OBJ_TYPE_PEER_DEV_REC 4
+#define BLE_STORE_OBJ_TYPE_PEER_ADDR 6
+#define BLE_STORE_OBJ_TYPE_LOCAL_IRK 7
+#define BLE_STORE_OBJ_TYPE_CSFC 8
+#define BLE_RESOLV_LIST_SIZE 6
+struct ble_addr { uint8_t type,val[6]; };
+typedef struct ble_addr ble_addr_t;
+static const ble_addr_t ble_any={255,{0}};
+#define BLE_ADDR_ANY (&ble_any)
+struct ble_store_value_sec { ble_addr_t peer_addr;uint16_t bond_count;uint8_t key_size,ltk[16],ltk_present,authenticated; };
+struct ble_store_value_cccd { ble_addr_t peer_addr;uint16_t chr_val_handle,flags; };
+struct ble_store_value_csfc { ble_addr_t peer_addr;uint8_t csfc[1]; };
+struct ble_store_value_local_irk { ble_addr_t addr;uint8_t irk[16]; };
+struct ble_store_value_rpa_rec { ble_addr_t peer_rpa_addr,peer_addr; };
+struct ble_store_key_sec { ble_addr_t peer_addr;uint8_t idx; };
+struct ble_store_key_cccd { ble_addr_t peer_addr;uint16_t chr_val_handle;uint8_t idx; };
+struct ble_store_key_csfc { ble_addr_t peer_addr;uint8_t idx; };
+struct ble_store_key_rpa_rec { ble_addr_t peer_rpa_addr;uint8_t idx; };
+struct ble_hs_peer_sec { ble_addr_t peer_addr;uint8_t irk[16];unsigned irk_present:1; };
+struct ble_hs_dev_records { _Bool rec_used;uint8_t rand_addr_type,pseudo_addr[6],rand_addr[6],identity_addr[6];struct ble_hs_peer_sec peer_sec; };
+struct ble_hs_resolv_entry { uint8_t rl_addr_type,rl_local_irk[16],rl_peer_irk[16],rl_identity_addr[6],rl_pseudo_id[6],rl_local_rpa[6],rl_peer_rpa[6],rl_isrpa; };
+union ble_store_value { struct ble_store_value_sec sec;struct ble_store_value_cccd cccd;struct ble_store_value_csfc csfc;struct ble_store_value_rpa_rec rpa_rec;struct ble_store_value_local_irk local_irk; };
+struct ble_store_value_sec ble_store_config_our_secs[5],ble_store_config_peer_secs[5];
+struct ble_store_value_cccd ble_store_config_cccds[32];
+struct ble_store_value_csfc ble_store_config_csfcs[5];
+struct ble_store_value_rpa_rec ble_store_config_rpa_recs[5];
+struct ble_store_value_local_irk ble_store_config_local_irks[5];
+struct ble_hs_dev_records peer_dev_rec[6];
+struct ble_hs_resolv_entry g_ble_hs_resolv_list[6];
+struct {unsigned rl_cnt;} g_ble_hs_resolv_data={1};
+int ble_store_config_num_our_secs,ble_store_config_num_peer_secs,ble_store_config_num_cccds,ble_store_config_num_csfcs,ble_store_config_num_rpa_recs,ble_store_config_num_local_irks,ble_store_num_peer_dev_rec;
+int ble_store_config_persist_our_secs(void),ble_store_config_persist_peer_secs(void),ble_store_config_persist_cccds(void),ble_store_config_persist_csfcs(void),ble_store_config_persist_rpa_recs(void),ble_store_persist_peer_records(void);
+static int ble_addr_cmp(const ble_addr_t*a,const ble_addr_t*b){return a->type!=b->type||memcmp(a->val,b->val,6);}
+static void ble_rpa_replace_id_with_rand_addr(uint8_t*a,uint8_t*b){(void)a;(void)b;} /* No target connection is admitted. */
+int ble_rpa_get_num_peer_dev_records(void){return ble_store_num_peer_dev_rec;}
+struct ble_hs_dev_records *ble_rpa_get_peer_dev_records(void){return peer_dev_rec;}
+typedef int esp_err_t;
+typedef unsigned nvs_handle_t;
+int reset_nvs_open(const char*,int,nvs_handle_t*),reset_nvs_erase_key(nvs_handle_t,const char*),reset_nvs_commit(nvs_handle_t);
+void reset_nvs_close(nvs_handle_t);
+#define nvs_open reset_nvs_open
+#define nvs_erase_key reset_nvs_erase_key
+#define nvs_commit reset_nvs_commit
+#define nvs_close reset_nvs_close
+int get_nvs_db_attribute(int,int,const void*,int),get_nvs_max_obj_value(int);
+void get_nvs_key_string(int,int,char*);
+int ble_store_nvs_write(int,const union ble_store_value*);
+int ble_store_nvs_peer_records(int,const struct ble_hs_dev_records*);
+
+union ble_store_key {struct ble_store_key_sec sec;struct ble_store_key_cccd cccd;struct ble_store_key_csfc csfc;struct ble_store_key_rpa_rec rpa_rec;};
+void ble_hs_lock(void),ble_hs_unlock(void);
+int reset_sdk_callback_delete(int,const void*);
+static struct {int(*store_delete_cb)(int,const union ble_store_key*);} ble_hs_cfg;
+#define ble_store_delete upstream_ble_store_delete
+#define BLE_HS_ENOTSUP 13

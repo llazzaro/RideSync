@@ -1,0 +1,124 @@
+/*
+ * Copyright 2020 Espressif Systems (Shanghai) PTE LTD
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+static int
+ble_hs_is_on_resolv_list(uint8_t *addr, uint8_t addr_type)
+{
+#if MYNEWT_VAL(BLE_STORE_MAX_BONDS)
+    int i;
+    struct ble_hs_resolv_entry *rl = &g_ble_hs_resolv_list[1];
+
+    for (i = 1; i < g_ble_hs_resolv_data.rl_cnt; ++i) {
+        if ((!memcmp(rl->rl_identity_addr, addr, BLE_DEV_ADDR_LEN)) || (!memcmp(rl->rl_peer_rpa, addr, BLE_DEV_ADDR_LEN))) {
+            return i;
+        }
+        ++rl;
+    }
+
+#endif
+    return 0;
+}
+
+struct ble_hs_resolv_entry *
+ble_hs_resolv_list_find(uint8_t *addr)
+{
+#if MYNEWT_VAL(BLE_STORE_MAX_BONDS)
+    int i;
+    struct ble_hs_resolv_entry *rl = &g_ble_hs_resolv_list[1];
+
+    for (i = 1; i < g_ble_hs_resolv_data.rl_cnt; ++i) {
+        if (memcmp(rl->rl_identity_addr, addr, BLE_DEV_ADDR_LEN) == 0) {
+            return rl;
+        }
+
+        if (memcmp(rl->rl_pseudo_id, addr, BLE_DEV_ADDR_LEN) == 0) {
+            return rl;
+        }
+
+        if (memcmp(rl->rl_peer_rpa, addr, BLE_DEV_ADDR_LEN) == 0) {
+            return rl;
+        }
+        ++rl;
+    }
+#endif
+    return NULL;
+}
+
+int
+ble_hs_resolv_list_rmv(uint8_t addr_type, uint8_t *ident_addr)
+{
+    int rc = BLE_HS_ENOENT;
+
+#if MYNEWT_VAL(BLE_STORE_MAX_BONDS)
+    int position;
+
+    /* Remove from IRK records */
+    position = ble_hs_is_on_resolv_list(ident_addr, addr_type);
+
+    if (position) {
+        memmove(&g_ble_hs_resolv_list[position],
+                &g_ble_hs_resolv_list[position + 1],
+                (g_ble_hs_resolv_data.rl_cnt - position) * sizeof (struct
+                        ble_hs_resolv_entry));
+        --g_ble_hs_resolv_data.rl_cnt;
+
+        rc = 0;
+    }
+
+    /* As we are removing the RL record, it is needed to change
+     * peer_address to its latest received OTA address, this helps when existing bond at
+     * peer side is removed */
+    ble_rpa_replace_id_with_rand_addr(&addr_type, ident_addr);
+#endif
+
+    return rc;
+}
+
+int
+ble_rpa_remove_peer_dev_rec(struct ble_hs_dev_records *p_dev_rec)
+{
+    int i;
+
+    for (i = 0; i < ble_store_num_peer_dev_rec; i++) {
+        if (!(memcmp(p_dev_rec, &peer_dev_rec[i], sizeof(struct
+                     ble_hs_dev_records)))) {
+            memset(&peer_dev_rec[i], 0, sizeof(struct ble_hs_dev_records));
+            break;
+        }
+    }
+
+    if (i >= ble_store_num_peer_dev_rec) {
+        return BLE_HS_EUNKNOWN;
+    }
+
+    ble_store_num_peer_dev_rec--;
+    if ((i != ble_store_num_peer_dev_rec) && (ble_store_num_peer_dev_rec != 0)) {
+        memmove(&peer_dev_rec[i], &peer_dev_rec[i + 1],
+                (ble_store_num_peer_dev_rec - i) * sizeof(struct ble_hs_dev_records ));
+        memset(&peer_dev_rec[ble_store_num_peer_dev_rec], 0, sizeof(struct ble_hs_dev_records));
+    }
+
+    BLE_HS_LOG(DEBUG, " RPA: removed device at index = %d, no. of peer records"
+               " = %d\n", i, ble_store_num_peer_dev_rec);
+
+    ble_store_persist_peer_records();
+    return 0;
+}

@@ -1,0 +1,243 @@
+/*
+* Copyright 2015-2019 Espressif Systems (Shanghai) PTE LTD
+*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*  http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+static int
+ble_nvs_delete_value(int obj_type, int8_t index)
+{
+    esp_err_t err;
+    nvs_handle_t nimble_handle;
+    char key_string[NIMBLE_NVS_STR_NAME_MAX_LEN];
+
+    if (index > get_nvs_max_obj_value(obj_type)) {
+        ESP_LOGE(LOG_TAG, "Invalid index provided to delete");
+        return BLE_HS_EUNKNOWN;
+    }
+
+    err = nvs_open(NIMBLE_NVS_NAMESPACE, NVS_READWRITE, &nimble_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(LOG_TAG, "NVS open operation failed !!");
+        return BLE_HS_ESTORE_FAIL;
+    }
+
+    get_nvs_key_string(obj_type, index, key_string);
+
+    /* Erase the key with given index */
+    err = nvs_erase_key(nimble_handle, key_string);
+    if (err != ESP_OK) {
+        goto error;
+    }
+    err = nvs_commit(nimble_handle);
+    if (err != ESP_OK) {
+        goto error;
+    }
+
+    nvs_close(nimble_handle);
+    return 0;
+error:
+    nvs_close(nimble_handle);
+    return BLE_HS_ESTORE_FAIL;
+}
+
+int ble_store_config_persist_cccds(void)
+{
+    int nvs_count, nvs_idx;
+    union ble_store_value val;
+
+    nvs_count = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_CCCD, 0, NULL, 0);
+    if (nvs_count == -1) {
+        ESP_LOGE(LOG_TAG, "NVS operation failed while persisting CCCD");
+        return BLE_HS_ESTORE_FAIL;
+    }
+
+    if (nvs_count < ble_store_config_num_cccds) {
+
+        /* NVS db count less than RAM count, write operation */
+        ESP_LOGD(LOG_TAG, "Persisting CCCD value in NVS...");
+        val.cccd = ble_store_config_cccds[ble_store_config_num_cccds - 1];
+        return ble_store_nvs_write(BLE_STORE_OBJ_TYPE_CCCD, &val);
+    } else if (nvs_count > ble_store_config_num_cccds) {
+        /* NVS db count more than RAM count, delete operation */
+        nvs_idx = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_CCCD, 0,
+                                       ble_store_config_cccds, ble_store_config_num_cccds);
+        if (nvs_idx == -1) {
+            ESP_LOGE(LOG_TAG, "NVS delete operation failed for CCCD");
+            return BLE_HS_ESTORE_FAIL;
+        }
+        ESP_LOGD(LOG_TAG, "Deleting CCCD, nvs idx = %d", nvs_idx);
+        return ble_nvs_delete_value(BLE_STORE_OBJ_TYPE_CCCD, nvs_idx);
+    }
+    return 0;
+}
+
+int ble_store_config_persist_csfcs(void)
+{
+    int nvs_count, nvs_idx;
+    union ble_store_value val;
+
+    nvs_count = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_CSFC, 0, NULL, 0);
+    if (nvs_count == -1) {
+        ESP_LOGE(LOG_TAG, "NVS operation failed while persisting CSFC");
+        return BLE_HS_ESTORE_FAIL;
+    }
+
+    if (nvs_count < ble_store_config_num_csfcs) {
+        /* NVS db count less than RAM count, write operation */
+        ESP_LOGD(LOG_TAG, "Persisting CSFC value in NVS...");
+        val.csfc = ble_store_config_csfcs[ble_store_config_num_csfcs - 1];
+        return ble_store_nvs_write(BLE_STORE_OBJ_TYPE_CSFC, &val);
+    } else if (nvs_count > ble_store_config_num_csfcs) {
+        /* NVS db count more than RAM count, delete operation */
+        nvs_idx = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_CSFC, 0,
+                                       ble_store_config_csfcs, ble_store_config_num_csfcs);
+        if (nvs_idx == -1) {
+            ESP_LOGE(LOG_TAG, "NVS delete operation failed for CSFC");
+            return BLE_HS_ESTORE_FAIL;
+        }
+        ESP_LOGD(LOG_TAG, "Deleting CSFC, nvs idx = %d", nvs_idx);
+        return ble_nvs_delete_value(BLE_STORE_OBJ_TYPE_CSFC, nvs_idx);
+    }
+    return 0;
+}
+
+int ble_store_config_persist_rpa_recs(void)
+{
+    int nvs_count, nvs_idx;
+    union ble_store_value val;
+    nvs_count = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_PEER_ADDR, 0, NULL, 0);
+     if (nvs_count == -1) {
+        ESP_LOGE(LOG_TAG, "NVS operation failed while persisting RPA_RECS");
+        return BLE_HS_ESTORE_FAIL;
+    }
+    if (nvs_count < ble_store_config_num_rpa_recs) {
+        /* NVS db count less than RAM count, write operation */
+        ESP_LOGD(LOG_TAG, "Persisting RPA_RECS value in NVS...");
+        val.rpa_rec = ble_store_config_rpa_recs[ble_store_config_num_rpa_recs - 1];
+        return ble_store_nvs_write(BLE_STORE_OBJ_TYPE_PEER_ADDR, &val);
+    } else if (nvs_count > ble_store_config_num_rpa_recs) {
+        /* NVS db count more than RAM count, delete operation */
+        nvs_idx = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_PEER_ADDR, 0,
+                                       ble_store_config_rpa_recs, ble_store_config_num_rpa_recs);
+        if (nvs_idx == -1) {
+            ESP_LOGE(LOG_TAG, "NVS delete operation failed for RPA_REC");
+            return BLE_HS_ESTORE_FAIL;
+        }
+        ESP_LOGD(LOG_TAG, "Deleting RPA_REC, nvs idx = %d", nvs_idx);
+        return ble_nvs_delete_value(BLE_STORE_OBJ_TYPE_PEER_ADDR, nvs_idx);
+    }
+    return 0;
+
+}
+
+int ble_store_config_persist_peer_secs(void)
+{
+    int nvs_count, nvs_idx;
+    union ble_store_value val;
+
+    nvs_count = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_PEER_SEC, 0, NULL, 0);
+    if (nvs_count == -1) {
+        ESP_LOGE(LOG_TAG, "NVS operation failed while persisting peer sec");
+        return BLE_HS_ESTORE_FAIL;
+    }
+
+    if (nvs_count < ble_store_config_num_peer_secs) {
+
+        /* NVS db count less than RAM count, write operation */
+        ESP_LOGD(LOG_TAG, "Persisting peer sec value in NVS...");
+        val.sec = ble_store_config_peer_secs[ble_store_config_num_peer_secs - 1];
+        return ble_store_nvs_write(BLE_STORE_OBJ_TYPE_PEER_SEC, &val);
+    } else if (nvs_count > ble_store_config_num_peer_secs) {
+        /* NVS db count more than RAM count, delete operation */
+        nvs_idx = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_PEER_SEC, 0,
+                                       ble_store_config_peer_secs, ble_store_config_num_peer_secs);
+        if (nvs_idx == -1) {
+            ESP_LOGE(LOG_TAG, "NVS delete operation failed for peer sec");
+            return BLE_HS_ESTORE_FAIL;
+        }
+        ESP_LOGD(LOG_TAG, "Deleting peer sec, nvs idx = %d", nvs_idx);
+        return ble_nvs_delete_value(BLE_STORE_OBJ_TYPE_PEER_SEC, nvs_idx);
+    }
+    return 0;
+}
+
+int ble_store_config_persist_our_secs(void)
+{
+    int nvs_count, nvs_idx;
+    union ble_store_value val;
+
+    nvs_count = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_OUR_SEC, 0, NULL, 0);
+    if (nvs_count == -1) {
+        ESP_LOGE(LOG_TAG, "NVS operation failed while persisting our sec");
+        return BLE_HS_ESTORE_FAIL;
+    }
+
+    if (nvs_count < ble_store_config_num_our_secs) {
+
+        /* NVS db count less than RAM count, write operation */
+        ESP_LOGD(LOG_TAG, "Persisting our sec value to NVS...");
+        val.sec = ble_store_config_our_secs[ble_store_config_num_our_secs - 1];
+        return ble_store_nvs_write(BLE_STORE_OBJ_TYPE_OUR_SEC, &val);
+    } else if (nvs_count > ble_store_config_num_our_secs) {
+        /* NVS db count more than RAM count, delete operation */
+        nvs_idx = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_OUR_SEC, 0,
+                                       ble_store_config_our_secs, ble_store_config_num_our_secs);
+        if (nvs_idx == -1) {
+            ESP_LOGE(LOG_TAG, "NVS delete operation failed for our sec");
+            return BLE_HS_ESTORE_FAIL;
+        }
+        ESP_LOGD(LOG_TAG, "Deleting our sec, nvs idx = %d", nvs_idx);
+        return ble_nvs_delete_value(BLE_STORE_OBJ_TYPE_OUR_SEC, nvs_idx);
+    }
+    return 0;
+}
+
+int ble_store_persist_peer_records(void)
+{
+    int nvs_count, nvs_idx;
+    struct ble_hs_dev_records peer_rec;
+    int ble_store_num_peer_dev_rec = ble_rpa_get_num_peer_dev_records();
+    struct ble_hs_dev_records *peer_dev_rec = ble_rpa_get_peer_dev_records();
+
+    nvs_count = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_PEER_DEV_REC, 0, NULL, 0);
+    if (nvs_count == -1) {
+        ESP_LOGE(LOG_TAG, "NVS operation failed while persisting peer_dev_rec");
+        return BLE_HS_ESTORE_FAIL;
+    }
+
+    if (nvs_count < ble_store_num_peer_dev_rec) {
+
+        /* NVS db count less than RAM count, write operation */
+        ESP_LOGD(LOG_TAG, "Persisting peer dev record to NVS...");
+        peer_rec = peer_dev_rec[ble_store_num_peer_dev_rec - 1];
+        return ble_store_nvs_peer_records(BLE_STORE_OBJ_TYPE_PEER_DEV_REC, &peer_rec);
+    } else if (nvs_count > ble_store_num_peer_dev_rec) {
+        /* NVS db count more than RAM count, delete operation */
+        nvs_idx = get_nvs_db_attribute(BLE_STORE_OBJ_TYPE_PEER_DEV_REC, 0,
+                                       peer_dev_rec,
+                                       ble_store_num_peer_dev_rec);
+        if (nvs_idx == -1) {
+            ESP_LOGE(LOG_TAG, "NVS delete operation failed for peer records");
+            return BLE_HS_ESTORE_FAIL;
+        }
+        ESP_LOGD(LOG_TAG, "Deleting peer record, nvs idx = %d", nvs_idx);
+        return ble_nvs_delete_value(BLE_STORE_OBJ_TYPE_PEER_DEV_REC, nvs_idx);
+    }
+    return 0;
+}

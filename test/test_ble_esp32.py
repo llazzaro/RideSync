@@ -20,6 +20,12 @@ STUB = r'''
 #include <string>
 #include <functional>
 #include <utility>
+#define MYNEWT_VAL(x) V_##x
+#define V_BLE_HOST_BASED_PRIVACY 1
+#define V_ENC_ADV_DATA 0
+#define V_BLE_SMP_ID_RESET 0
+#define V_BLE_STORE_MAX_BONDS 5
+#define V_BLE_STORE_MAX_CCCDS 32
 #define CONFIG_BT_NIMBLE_MAX_BONDS 5
 #define CONFIG_BT_NIMBLE_MAX_CCCDS 32
 #define CONFIG_BT_NIMBLE_MAX_CONNECTIONS 5
@@ -39,6 +45,7 @@ STUB = r'''
 #define BLE_HS_ETIMEOUT 17
 #define BLE_HS_EINVAL 18
 #define BLE_HS_EDONE 19
+#define BLE_HS_ENOTCONN 20
 #define BLE_HS_IO_NO_INPUT_OUTPUT 0
 #define BLE_SM_PAIR_KEY_DIST_ENC 1
 #define BLE_SM_PAIR_KEY_DIST_ID 2
@@ -85,14 +92,40 @@ struct ble_store_value_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle=0,fl
 struct ble_store_value_csfc { ble_addr_t peer_addr; uint8_t csfc[1]{}; };
 struct ble_store_value_local_irk { ble_addr_t addr; uint8_t irk[16]{}; };
 struct ble_store_value_rpa_rec { ble_addr_t peer_rpa_addr,peer_addr; };
-struct ble_hs_dev_records { bool rec_used; uint8_t identity_addr[6]; };
+struct ble_hs_peer_sec { ble_addr_t peer_addr; uint8_t irk[16]{}; unsigned irk_present:1; };
+struct ble_hs_dev_records { bool rec_used=false; uint8_t rand_addr_type=0,pseudo_addr[6]{},rand_addr[6]{},identity_addr[6]{}; ble_hs_peer_sec peer_sec{}; };
+struct ble_hs_resolv_entry { uint8_t rl_addr_type=0,rl_local_irk[16]{},rl_peer_irk[16]{},rl_identity_addr[6]{},rl_pseudo_id[6]{},rl_local_rpa[6]{},rl_peer_rpa[6]{},rl_isrpa=0; };
+struct ble_store_key_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle; uint8_t idx; };
+struct ble_store_key_csfc { ble_addr_t peer_addr; uint8_t idx; };
+struct ble_store_key_local_irk { ble_addr_t addr; uint8_t idx; };
+struct ble_store_key_rpa_rec { ble_addr_t peer_rpa_addr; uint8_t idx; };
+static ble_store_value_sec ble_store_config_our_secs[5],ble_store_config_peer_secs[5];
+static ble_store_value_cccd ble_store_config_cccds[32];
+static ble_store_value_csfc ble_store_config_csfcs[5];
+static ble_store_value_local_irk ble_store_config_local_irks[5];
+static ble_store_value_rpa_rec ble_store_config_rpa_recs[5];
+static int ble_store_config_num_our_secs=0,ble_store_config_num_peer_secs=0,ble_store_config_num_cccds=0,ble_store_config_num_csfcs=0,ble_store_config_num_local_irks=0,ble_store_config_num_rpa_recs=0;
+static ble_addr_t any_address=[](){ble_addr_t value;value.type=255;return value;}();
+static const ble_addr_t *BLE_ADDR_ANY=&any_address;
+static int64_t fake_time=0;
+static int64_t esp_timer_get_time(){return fake_time*1000;}
+static bool gap_scan=false,gap_adv=false,gap_connect=false;
+static int ble_gap_disc_active(){return gap_scan;}
+static int ble_gap_adv_active(){return gap_adv;}
+static int ble_gap_conn_active(){return gap_connect;}
+struct ble_gap_conn_desc;
+static int ble_gap_conn_find_by_addr(const ble_addr_t*,ble_gap_conn_desc*);
+static ble_hs_resolv_entry *ble_hs_resolv_list_find(uint8_t*){return nullptr;}
+static int ble_hs_resolv_list_rmv(uint8_t,uint8_t*){return BLE_HS_ENOENT;}
+static int ble_rpa_remove_peer_dev_rec(ble_hs_dev_records*){return 0;}
+
 struct ble_store_key_sec { ble_addr_t peer_addr; uint8_t idx=0; };
 union ble_store_key {
  ble_store_key_sec sec;
- struct { ble_addr_t peer_addr; uint16_t chr_val_handle; } cccd;
- struct { ble_addr_t peer_addr; } csfc;
- struct { ble_addr_t addr; } local_irk;
- struct { ble_addr_t peer_rpa_addr; } rpa_rec;
+ ble_store_key_cccd cccd;
+ ble_store_key_csfc csfc;
+ ble_store_key_local_irk local_irk;
+ ble_store_key_rpa_rec rpa_rec;
  ble_store_key() { std::memset(this,0,sizeof *this); }
 };
 union ble_store_value {
@@ -113,7 +146,7 @@ static uint16_t os_mbuf_len(os_mbuf *m) { return m->data.size(); }
 static std::function<void()> copy_hook;
 static int os_mbuf_copydata(os_mbuf*m,int offset,int length,void*p) {
  if(copy_hook)copy_hook();
- std::memcpy(p,m->data.data()+offset,length); return 0;
+ if(length)std::memcpy(p,m->data.data()+offset,length); return 0;
 }
 struct ble_gap_sec_state { bool encrypted=false,authenticated=false,bonded=false; };
 struct ble_gap_conn_desc { ble_gap_sec_state sec_state; ble_addr_t peer_id_addr; uint16_t conn_handle=0; };
@@ -203,6 +236,9 @@ static int ble_store_read_cccd(const void*pointer,ble_store_value_cccd*value){
 static int ble_store_read_csfc(const void*,ble_store_value_csfc*){return BLE_HS_ENOENT;}
 static int ble_store_read_local_irk(const void*,ble_store_value_local_irk*){return BLE_HS_ENOENT;}
 static int ble_store_read_rpa_rec(const void*,ble_store_value_rpa_rec*){return BLE_HS_ENOENT;}
+static int ble_store_delete(int type,const ble_store_key*key){return ble_hs_cfg.store_delete_cb(type,key);}
+static int ble_store_read(int,const ble_store_key*,ble_store_value*){return BLE_HS_ENOENT;}
+static int ble_gap_conn_find_by_addr(const ble_addr_t*,ble_gap_conn_desc*){return BLE_HS_ENOTCONN;}
 static ble_hs_dev_records *ble_rpa_get_peer_dev_records(){return nullptr;}
 static int ble_rpa_get_num_peer_dev_records(){return 0;}
 static int (*gap_callbacks[5])(ble_gap_event*,void*){};
@@ -394,7 +430,7 @@ class BleEsp32(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             (temp / "standin.h").write_text(STUB)
-            includes = ["NimBLEDevice.h", "esp_bt.h", "freertos/task.h", "freertos/queue.h", "mbedtls/sha256.h", "nvs.h",
+            includes = ["NimBLEDevice.h", "esp_bt.h", "freertos/task.h", "freertos/queue.h", "mbedtls/sha256.h", "nvs.h", "esp_timer.h",
                         "nimble/nimble/host/include/host/ble_gatt.h",
                         "nimble/nimble/include/nimble/nimble_npl.h",
                         "nimble/esp_port/esp-hci/include/esp_nimble_hci.h",
@@ -402,6 +438,7 @@ class BleEsp32(unittest.TestCase):
                         "nimble/nimble/host/include/host/ble_store.h",
                         "nimble/nimble/host/src/ble_hs_resolv_priv.h",
                         "nimble/nimble/host/store/config/include/store/config/ble_store_config.h",
+                        "nimble/nimble/host/store/config/src/ble_store_config_priv.h",
                         "nimble/porting/nimble/include/nimble/nimble_port.h",
                         "nimble/porting/nimble/include/os/os_mbuf.h"]
             for name in includes:
