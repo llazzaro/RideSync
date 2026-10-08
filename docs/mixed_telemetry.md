@@ -99,10 +99,12 @@ No hard sampling/service-period/200 Hz throughput guarantee follows. Tick and
 admission contain no allocation, bus/filesystem calls, formatting, mutex, wait
 or unbounded retry; uint32/boolean atomics are lock-free on supported builds.
 
-Future qualified composition: construct `ArduinoSdStorage` with its existing
-explicit qualified dedicated bus/card config and a MixedV2 `StorageConfig`;
-construct `SessionClock`, `ImuInbox`, `TelemetryAdmission(clock, sd.storage(),
-inbox)` with one unique caller-supplied session. The transport owner publishes
+Future qualified composition: start pre-session `ArduinoSdStorage` with the
+explicit qualified dedicated bus/card/commissioned-namespace config. Wait for
+`allocation().status == Committed`, then construct `SessionClock` with that
+committed ID and one MixedV2 `Storage` on `sd.sink()`. Bind that Storage to the
+same SD owner; construct `ImuInbox` and `TelemetryAdmission(clock, storage, inbox)`
+under the serialized control owner. The transport owner publishes
 immutable evidence and handles stop requests. In the control owner use the same
 `snapshot` for `modem.snapshot(timestamp)` and `admission.gps(timestamp, sample)`;
 use `event` for owner configuration/health/control and `tick` for inbox service.

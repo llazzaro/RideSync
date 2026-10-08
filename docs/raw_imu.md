@@ -23,8 +23,10 @@ all qualification flags and nonzero caller identity. No Wire.begin, pin routing
 or board power API is called. Sensor identity is caller evidence; mount/calibration metadata is copied
 unchanged (defaults unknown). Never turn qualification on just to obtain output.
 
-Construct MixedV2 ArduinoSdStorage using its existing qualified card/bus config,
-SessionClock with unique session, ImuInbox, TelemetryAdmission, Bmi270Imu,
+Reserve an identity with ArduinoSdStorage using its qualified card/bus/namespace config,
+wait for committed allocation, then construct SessionClock with that ID and one
+MixedV2 Storage on the same owner.sink(), bind it, and construct ImuInbox,
+TelemetryAdmission, Bmi270Imu,
 ImuManager(port,inbox,supervisor.progress(Worker::Imu),session,metadata), then
 Bmi270Worker(manager,progress). All are caller owned and remain alive. Configure
 supervisor's optional IMU policy from qualification; start worker only outside

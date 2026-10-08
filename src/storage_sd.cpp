@@ -5,11 +5,17 @@
 #include <fcntl.h>
 #include <unistd.h>
 namespace ridesync {
-ArduinoSdStorage::ArduinoSdStorage(SPIClass &spi, const QualifiedSdConfig &pins,
-                                   const StorageConfig &config)
-    : sink_(spi, pins), config_(pins), storage_(sink_, config) {}
+ArduinoSdStorage::ArduinoSdStorage(SPIClass &spi, const QualifiedSdConfig &config)
+    : sink_(spi, config), ledger_(sink_), config_(config),
+      owner_(sink_, ledger_, config.commissioned_namespace) {}
+ArduinoSdStorage::IoStatus ArduinoSdStorage::ioStatus() const {
+  const int error = ioError();
+  return error == EEXIST ? IoStatus::PathCollision : error ? IoStatus::Error : IoStatus::None;
+}
 std::atomic<bool> ArduinoSdStorage::Sink::volume_reserved_{false};
 bool ArduinoSdStorage::Sink::mount() {
+  if (mounted_)
+    return true;
   // Own a private SDFS; never adopt or end the application's global SD mount.
   // /ridesync is reserved for this adapter. Serialize adapter mount attempts so
   // a failing second begin cannot unregister another adapter's VFS path.
@@ -65,6 +71,8 @@ bool ArduinoSdStorage::Sink::flush() {
   return true;
 }
 void ArduinoSdStorage::Sink::close() {
+  if (ledger_fd_ >= 0)
+    closeLedger();
   if (fd_ >= 0) {
     if (::close(fd_) != 0)
       error_.store(errno ? errno : EIO);
@@ -81,8 +89,47 @@ void ArduinoSdStorage::Sink::close() {
     reserved_ = false;
   }
 }
+bool ArduinoSdStorage::Sink::open(unsigned slot, bool writing, bool exclusive_create) {
+  if (!mounted_ || ledger_fd_ >= 0 || slot > 1) {
+    error_.store(EBADF);
+    return false;
+  }
+  const char *path = slot == 0 ? "/ridesync/.session-id-a" : "/ridesync/.session-id-b";
+  const int flags = writing ? O_WRONLY | (exclusive_create ? O_CREAT | O_EXCL : 0) : O_RDONLY;
+  ledger_fd_ = ::open(path, flags, 0600);
+  if (ledger_fd_ < 0)
+    error_.store(errno ? errno : EIO);
+  return ledger_fd_ >= 0;
+}
+int ArduinoSdStorage::Sink::read(uint8_t *bytes, size_t n) {
+  const ssize_t result = ::read(ledger_fd_, bytes, n);
+  if (result < 0)
+    error_.store(errno ? errno : EIO);
+  return int(result);
+}
+int ArduinoSdStorage::Sink::write(const uint8_t *bytes, size_t n) {
+  const ssize_t result = ::write(ledger_fd_, bytes, n);
+  if (result < 0 || size_t(result) != n)
+    error_.store(result < 0 && errno ? errno : EIO);
+  return int(result);
+}
+bool ArduinoSdStorage::Sink::sync() {
+  if (::fsync(ledger_fd_) == 0)
+    return true;
+  error_.store(errno ? errno : EIO);
+  return false;
+}
+bool ArduinoSdStorage::Sink::closeLedger() {
+  const int fd = ledger_fd_;
+  ledger_fd_ = -1;
+  if (::close(fd) == 0)
+    return true;
+  error_.store(errno ? errno : EIO);
+  return false;
+}
 bool ArduinoSdStorage::start() {
   if (started_ || !config_.opt_in || !config_.wiring_card_qualified || !config_.exclusive_volume ||
+      !config_.namespace_commissioned || !config_.commissioned_namespace ||
       config_.chip_select < 0 || config_.chip_select > 33 || !config_.frequency_hz ||
       config_.frequency_hz > 20000000)
     return false;
@@ -91,15 +138,8 @@ bool ArduinoSdStorage::start() {
 }
 void ArduinoSdStorage::run(void *arg) {
   auto &self = *static_cast<ArduinoSdStorage *>(arg);
-  for (;;) {
-    self.storage_.workerStep();
-    if (self.storage_.health().stopped || self.storage_.health().terminal)
-      break;
+  while (!self.owner_.workerStep())
     vTaskDelay(1);
-  }
-  // A terminal failure still schedules worker-owned close. It may also block.
-  if (!self.storage_.health().stopped)
-    self.storage_.workerStep();
   self.finished_.store(true, std::memory_order_release);
   vTaskDelete(nullptr);
 }

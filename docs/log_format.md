@@ -184,12 +184,119 @@ more data to that stream. Remaining records become loss/uncertainty; close runs
 only in the worker. A new session/object and fresh unique filename are needed
 for recovery. No automatic format, deletion, truncation recovery or old-file reuse.
 
+### Commissioned session identities and pre-session SD ownership
+
+Unattended SD sessions reserve `id = (uint64_t(namespace32) << 32) | counter32`.
+The opaque namespace is nonzero and assigned once by an external commissioning
+authority; counters are `1..UINT32_MAX`, with exhaustion terminal and no wrap.
+Unique namespace assignment, exclusive ownership and retention of acknowledged
+ledger commits are explicit premises. No hardware identifier, camera peer ID,
+settings epoch, random sample, RTC count or GNSS/UTC time supplies uniqueness.
+Camera configuration/NVS refusal and safe mode do not prevent an independently
+qualified local-telemetry allocation. Local eligibility alone does not start SD.
+
+`QualifiedSdConfig` defaults disabled and additionally requires
+`namespace_commissioned` and independently supplied `commissioned_namespace`.
+The worker mounts its one private SDFS, then automatically recovers and commits
+one counter. `allocation()` publishes copied `{status, id, error}` with
+release/acquire ordering only after exact write, successful `fsync`, successful
+close, and a separate exact readback/EOF/close verification. Repeated reservation
+on that owner returns the same result; no retry/reset after uncertainty. An ID
+committed before cancellation, publication, binding or CSV creation is burned.
+Each new owner reserves a new ID, even if all CSV files have been deleted.
+
+The adapter retains the same mount while waiting for control to construct its
+`SessionClock` and session-specific `Storage` (including camera-free sessions).
+Use `ArduinoSdStorage(spi, qualified_config)`, check `start()` succeeded, then poll `allocation()`,
+and only on `Committed` construct `SessionClock` and `Storage` with the copied
+ID and `owner.sink()`, then `owner.bind(storage)`. Bind accepts exactly once,
+checks configuration, matching session ID and actual sink ownership, and rejects
+stopped/terminal Storage. The same worker services that Storage; its mount is
+idempotent. Future camera composition must give `CameraEventSession` this sink
+and bind its one Storage; do not create another logger or filesystem owner.
+`cancel()` also terminates an owner waiting for bind or allocation, and a bound
+cancel drains Storage through its existing stop contract. One serialized control
+context owns polling/bind/cancel and producer coordination. All owner, sink,
+SPI, Storage and session lifetimes extend through `workerFinished()`; no worker
+access to them follows its final publication. Unbound/refusal paths close and
+unmount too. Producers must be quiescent before destruction. There is no automatic
+retry of a terminal owner and no in-place Storage reset.
+
+A false first `start()` return means qualification or task creation refused:
+no worker was created, no SD IO occurs, allocation remains `Pending`, and no
+`workerFinished()` publication follows. Handle that returned refusal directly;
+never wait for a nonexistent worker or construct a session. Destruction is safe
+immediately after that first-call refusal. A second `start()` on an active owner
+also returns false but does not stop or replace its existing worker.
+
+The persistent files at SD root are `.session-id-a` and `.session-id-b`, distinct
+from CSV paths and reserved from cleanup. Each is exactly 40 bytes, independent
+of compiler ABI, with ten little-endian 32-bit words:
+
+| Byte offset | Value |
+| --- | --- |
+| 0 | Magic `0x44495352` (`RSID`) |
+| 4 | Version `1` |
+| 8 | Commissioned namespace |
+| 12 | Committed high-water counter |
+| 16 | Sequence, exactly equal to counter |
+| 20, 24, 28 | Bitwise complements of namespace, counter, sequence |
+| 32 | Reserved, zero |
+| 36 | IEEE CRC32 of bytes 0..35 |
+
+Both slots must be present, exact length, valid and match the independently
+expected namespace. Normal recovery accepts both `0/0` commissioning baselines,
+or a coherent pair with adjacent positive high-water values (including `1/0`).
+Equal positive, nonadjacent, invalid checksum/version/complement, or mismatched
+namespace slots refuse. Never fall back to a lone valid slot: it might be the
+older copy of a lost acknowledged allocation. Commit overwrites only the older
+slot, without creation/truncation; ordinary startup never initializes a blank
+card. The copied statuses distinguish `IdentityUnavailable`, `LedgerCorrupt`,
+`Exhausted`, `MediaError` and `CommitUncertain`, with supported backend errno.
+A later CSV `ioStatus()==PathCollision` (`EEXIST`) is separately terminal;
+`O_EXCL` is a secondary safeguard and cannot prove identity uniqueness.
+
+First-use commissioning is an explicit offline operation. With firmware and all
+other volume users stopped, the authority assigns a **never-used** namespace and
+records exclusive ownership outside the card. Run
+`python3 scripts/commission_session_ledger.py <host-mounted-volume-root> --namespace <value> --authority-confirms-never-used`, then safely unmount before firmware ownership.
+This creates both checked baseline slots with exclusive creation, sync, close
+and readback; it never replaces an existing slot. The portable explicit
+`SessionIdentityAllocator::commission` offers the same baseline protocol to an
+exclusive provisioning backend; boot never calls it. Partial commissioning is
+terminal and must not be retried as a reset. Missing/replaced/corrupt media needs
+explicit recovery: a newly assigned never-used namespace, or an independently
+verified high-water transfer that retires all old ownership. Neither a card CID,
+label nor an on-card marker establishes uniqueness or prevents clones.
+
+The software fault model assumes every acknowledged commit survives reboot.
+Tests cover torn writes with both retained and discarded unacknowledged bytes,
+all open/read/write/sync/close/readback boundaries, burn before bind/CSV, overflow,
+removed/replaced/corrupt media, NVS refusal and final worker barriers. A wholly
+valid older snapshot of **both** slots is indistinguishable from a legitimate
+earlier state without an independent monotonic anchor. The test explicitly
+shows the repeated candidate in that out-of-model rollback case, including after
+CSV removal; no anti-rollback guarantee is claimed. Detectable lone-slot damage
+and nonadjacent conflicts still refuse.
+
+Pinned [IDF 4.4.7 FAT VFS](https://github.com/espressif/esp-idf/blob/v4.4.7/components/fatfs/vfs/vfs_fat.c)
+reports `fsync` through `f_sync`; [FatFs](https://github.com/espressif/esp-idf/blob/v4.4.7/components/fatfs/src/ff.c)
+synchronizes file/directory state through `CTRL_SYNC`.
+Pinned [Arduino 2.0.17 SPI SD](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/SD/src/sd_diskio.cpp)
+implements `CTRL_SYNC` by selecting/deselecting the card. This source proves
+software ordering/error propagation, not physical card/controller persistence.
+Physical abrupt-power-cut tests must establish acknowledged-commit survival,
+torn-write/media-removal handling, rollback behavior, latency, scheduler and
+stack high-water limits on each qualified board/card. These criteria remain open;
+compilation, mocks and host `fsync` do not close them. Default activation and the
+original mixed-brand/IMU/ride qualification gates remain unchanged.
+
 ### Opt-in Arduino SD worker and loss bounds
 
 `ArduinoSdStorage` uses the SD library bundled with the already pinned Arduino
 ESP32 framework `3.20017.241212+sha.dcc1105b`; no additional dependency. Its
 configuration defaults disabled and requires explicit opt-in, qualified wiring/
-card/filesystem, exclusive volume ownership, output-capable CS and frequency.
+card/filesystem, exclusive volume ownership, commissioned namespace, output-capable CS and frequency.
 Caller supplies a dedicated already configured `SPIClass`; the adapter assigns no
 board pins. Pinned `SDFS::begin()` calls `SPIClass::begin()` internally; its early
 return on an already initialized bus preserves the caller's configuration. This
@@ -213,7 +320,7 @@ are reported there too; they do not retroactively change flushed row counters.
 
 `/ridesync` is reserved for this adapter: no external user may mount or register
 that namespace. A lock-free atomic reservation serializes adapter ownership;
-other instances fail bounded mount attempts rather than adopting/releasing the
+other instances refuse their pre-session mount rather than adopting/releasing the
 first instance's mount. The private SDFS starts unmounted and never reuses or
 ends the application's global `SD` instance. Successful mounts are ended in the
 worker after descriptor close, before `workerFinished()` publishes completion.

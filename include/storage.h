@@ -15,6 +15,7 @@ public:
   virtual size_t write(const char *bytes, size_t length) = 0;
   virtual bool flush() = 0;
   virtual void close() = 0;
+  virtual int ioError() const { return 0; }
 };
 struct StorageConfig {
   uint64_t session_id;
@@ -41,6 +42,8 @@ public:
   static constexpr size_t kMaxRowBytes = 2048, kChunkBytes = 256;
   Storage(StorageSink &sink, const StorageConfig &config);
   bool configValid() const { return valid_; }
+  uint64_t sessionId() const { return session_; }
+  bool usesSink(const StorageSink &sink) const { return &sink_ == &sink; }
   bool enqueue(const RecordTimestamp &timestamp, const ModemSnapshot &sample);
   bool enqueueImu(const RecordTimestamp &timestamp, const ImuEvidence &evidence,
                   bool reserve = false);
