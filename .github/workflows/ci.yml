@@ -18,6 +18,8 @@ jobs:
         run: python -m unittest discover -s test -v
       - name: SD bench admission and lifetime checks
         run: python tools/bench/sd_logging/test_run.py -v
+      - name: X5 peripheral capture policy checks
+        run: python tools/bench/x5_peripheral/test_capture.py -v
       - name: Native camera and source configuration tests
         run: pio test -e native
       - name: C++ format check
@@ -35,3 +37,7 @@ jobs:
         run: |
           pio run -d tools/bench/sd_readonly
           pio run -d tools/bench/sd_logging
+      - name: Build and audit isolated X5 peripheral probe (compile only)
+        run: |
+          pio run -d tools/bench/x5_peripheral
+          python tools/bench/x5_peripheral/inspect_link.py --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
