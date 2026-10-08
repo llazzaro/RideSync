@@ -156,3 +156,7 @@ The unresolved hardware keeps physical IMU qualification open. See also
 [hardware bring-up](hardware.md) and [source/license notes](sources.md).
 Estimator observability, GNSS limits and the finite independent reference plan
 are documented in the [motion estimator feasibility plan](motion_estimator_plan.md).
+
+The [experimental static estimator core](motion_estimator.md) converts qualified
+raw records and computes externally referenced static roll/pitch. It is not yet
+wired to logging and does not implement dynamic lean or gravity-free acceleration.

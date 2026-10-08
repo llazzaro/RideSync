@@ -1,7 +1,9 @@
 # Motion estimator feasibility and reference plan (#28)
 
-Inspected 2026-10-09. Documentary decision only; no estimator code or reference
-campaign has run. BMI270 activation, exact mount and electrical setup remain
+Inspected 2026-10-09. This records the design decision; no physical reference
+campaign has run. The later [static core](motion_estimator.md) implements only
+the qualified static subset, with host tests; dynamic estimation and application
+telemetry integration remain incomplete. BMI270 activation, exact mount and electrical setup remain
 unqualified ([raw IMU path](raw_imu.md)).
 
 ## Decision and #13 scope
