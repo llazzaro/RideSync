@@ -86,6 +86,22 @@ start #21 from assumptions; resume this protocol when hardware is available.
 
 ## Planned GoPro and mixed-camera validation
 
+`pio test -e native -f test_hero12_adapter` exercises the actual adapter,
+manager, codec and shared central using a deterministic fake host. It covers
+synthetic pairing/control/identity/status setup, missing Management/CCCD,
+Busy gating, Encoding confirmation, dropped shutter ACK, fragmentation,
+oversized notifications and fragment expiry.
+The fake packets are authored from published protocol structure and are not
+HERO12 captures. `pio run -e hero12_adapter_compile` links the opt-in ESP32
+composition against the pinned real backend without starting BLE. It proves
+source and symbol compatibility, not timing, stack high-water mark, camera
+behavior or safe controller startup. Commissioning must record exact installed
+model/firmware/API, pairing screen and control ownership, CCCD results,
+response/notification traces and response latency. Run at least twenty
+screen-and-Encoding-confirmed REC/STOP cycles and power-cycle/reset/reconnect
+checks without replay, then measure keep-alive cadence and mixed-link
+coexistence. These physical gates remain open.
+
 Follow [GoPro milestone acceptance](gopro_plan.md) for each selected model and
 firmware. Test pairing persistence, video-mode selection, explicit shutter
 on/off, observed encoding state, busy responses, keep-alive, sleep versus full

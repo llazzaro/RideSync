@@ -138,6 +138,15 @@ authors synthetic fixtures; no official SDK, generated protobuf, or schema
 implementation is copied. Installed camera identity, firmware, API and real
 pairing/recording behavior remain unobserved.
 
+The [official BLE setup](https://gopro.github.io/OpenGoPro/docs/ble/protocol/ble_setup/)
+was rechecked on 2026-10-08 for the adapter: it lists FEA6 and Management
+GP-0090/0091/0092, subscription on every connection, and Hardware Info polling
+until a success status indicates camera BLE readiness. It describes pairing
+but does not establish a HERO12 MITM requirement. RideSync's twenty-poll,
+500 ms spacing and 120-second overall manager deadline are local bounded
+policies, not timings guaranteed by that page. Actual installed firmware/API,
+pairing-screen clearance, and transaction latency still need bench evidence.
+
 ## Actual asynchronous central backend (#35)
 
 NimBLE-Arduino 2.3.6 is pinned at `dfb4ac561a06797081be9e752902a6582e7f029e`.

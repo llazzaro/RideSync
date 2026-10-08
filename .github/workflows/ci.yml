@@ -24,3 +24,5 @@ jobs:
         run: pio run -e lilygo_t_a7670e_r2
       - name: Link all opt-in BLE central SDK operations (activation disabled)
         run: pio run -e ble_central_compile
+      - name: Link opt-in HERO12 adapter with the shared ESP32 host (activation disabled)
+        run: pio run -e hero12_adapter_compile

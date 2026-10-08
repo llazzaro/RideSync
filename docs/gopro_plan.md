@@ -1,9 +1,9 @@
 # GoPro support plan
 
-Status: **adapter planned, no hardware tests; documentary pure codec implemented**.
+Status: **opt-in HERO12 software adapter implemented; no hardware tests**.
 Added 2026-10-07.
 The first target is **GoPro HERO12 Black**; record its installed firmware before
-implementation. Additional GoPro models require separate qualification. Use the official
+activation and bench verification. Additional GoPro models require separate qualification. Use the official
 [Open GoPro compatibility table](https://gopro.github.io/OpenGoPro/) to qualify
 each target rather than assuming every GoPro supports this API.
 
@@ -39,8 +39,8 @@ media transfer and preview are outside this milestone.
 
 ## Delivery order and acceptance
 
-Single-camera GoPro issue: identify model/firmware and its documented API version; capture
-pairing and responses; implement a separately testable adapter. Bench-test
+Single-camera GoPro issue: identify model/firmware and its returned API version; capture
+pairing and responses; bench-test the separately testable adapter with
 repeated start/stop, busy state, camera power cycling, ESP32 reset during
 recording, bond persistence and sleep recovery. Include golden packets and
 malformed/fragmented notification cases in native codec tests.
@@ -103,7 +103,7 @@ API/firmware minimum does not certify this stack or RideSync hardware.
 
 `gopro_setup_codec` encodes a synthetic, schema-derived pairing-finish request
 `03 01 08 00 12 08 52 69 64 65 53 79 6E 63` with required state zero and the
-fixed eight-byte name `RideSync`; the bounded packet is 16 bytes compact or 17
+fixed eight-byte name `RideSync`; the bounded packet is 15 bytes compact or 16
 bytes with the extended-13 header. It separately encodes external-control claim
 `F1 69 08 02` (enum 2, rather than camera-only enum 1). These byte strings are
 author-created vectors, not camera captures. Responses require their logical
@@ -128,11 +128,73 @@ must be absent or exactly eleven bytes, preserving the existing classic policy.
 HERO12 model 62 and firmware minimum v01.10.00 are documentary eligibility facts,
 not values observed from an installed camera; firmware is not an API version.
 
+## Opt-in HERO12 adapter (2026-10-08)
+
+`Hero12Adapter` composes with the shared `BleCentral` and boot-lifetime
+`Esp32BleHost`; `hero12Runtime()` exposes an ESP32 composition with the real
+backend and a `CameraManager`. Its construction has no BLE I/O. The normal
+firmware still does not call `adapter.start(true, true)`, configure a runtime
+camera source, or choose board pins. A commissioning caller must provide a
+verified `BondIdentity`, independently retained bond/store proof, and an exact
+expected installed firmware byte string and numeric API major/minor in
+`Hero12Qualification`. `source_qualified` and `classic_profile_confirmed` are
+explicit caller assertions backed by commissioning evidence, never inferred
+from a configured MAC, the published minimum firmware, or an advertisement.
+The adapter compares actual owned Hardware Info model 62 and firmware field,
+and actual API Version fields, against that qualification before publishing
+start/stop/query capabilities. A mismatch or absent evidence retires the link.
+The shared host refuses unverified restoration, full bond admission and absent
+store refusal; the adapter cannot bypass those checks.
+
+On each connection the shared central discovers FEA6 and GP-0090, checks eight
+endpoint properties and reads back all four response CCCDs after subscribing.
+The adapter then sends Management pairing-finish, Command external-control
+claim, bounded Hardware Info readiness polling/API, three status registrations and fresh Busy, Encoding,
+Ready queries. ATT completion, setup protobuf success 1, classic ACK 0,
+camera Ready and observed Encoding remain separate facts. Setup ACKs never
+become recording observations. A Start queries fresh Encoding, Busy and Ready;
+if stopped/available it loads video mode, sends explicit shutter on, then
+requires a fresh Encoding query showing recording. Stop queries Encoding and,
+when recording, sends explicit shutter off and confirms stopped. It never loads
+mode while encoding. A same-state fresh query can complete without shutter.
+The connection-scoped Encoding notification is an observation, not proof that
+an outstanding shutter ACK arrived.
+
+Application composition uses `Hero12Adapter::managerPolicy()`: 120-second
+manager operation deadline, one attempt and a 200 ms backoff value that is
+unused at one attempt. Each camera transaction has a 2-second absolute
+response deadline; fragments retain the codec's 1-second absolute deadline.
+These are bounded software budgets, not measured camera/SDK latency.
+Initial setup has ten serialized camera transactions plus BLE discovery;
+the 120-second policy leaves bounded room for the shared central's 5-second
+per-ATT phase deadlines. If discovery or camera delivery becomes ambiguous,
+the adapter seals the peer and whole BLE link and delivers the captured
+connection-scoped disconnect before the manager ticks, clearing any queued
+Start/Stop intent. A canceled operation follows the same rule; no shutter
+write is blindly retried. Physical response times and actual firmware/API
+compatibility remain to be measured.
+The Hardware Info poll is a RideSync cap of twenty attempts separated by
+500 ms after explicit nonzero readiness replies. Lost, malformed or ambiguous
+responses retire the link; polling does not retry a shutter or another
+uncertain delivery. BLE encryption and bonding with verified identity are
+required. NimBLE's optional `authenticated` bit denotes MITM protection and
+is not treated as proof of ordinary pairing; the official setup page does not
+specify a HERO12 MITM requirement.
+
+Once connected, one Settings keep-alive `5B 01 42` is due every 3 seconds.
+It shares each peer's serialized camera transaction slot with queries and
+commands; a due keep-alive runs at the next safe step and its next deadline
+starts from its actual acknowledged response, without catch-up bursts. A
+blocked or lost response retires the link. Four fixed BLE peer slots are
+available; CameraManager's eight-entry software registry does not expand
+that hardware capacity. No Mission capability path, two-byte IDs, Wi-Fi,
+GPS injection, sleep/wake or other camera profile is enabled here.
+
 The shared reassembler retains 64 bytes per GATT chunk, 256 bytes per message,
 four global streams, 32 packets and a 1000 ms absolute deadline. Management
 uses the same capacity and does not establish four-camera operation. Missing or
-late fragments have no transaction identity; the future adapter must retire
-ambiguous connections and correlate serialized operations. Camera pairing,
+late fragments have no transaction identity; the adapter retires
+ambiguous connections and correlates serialized operations. Camera pairing,
 installed firmware/API, observed status and recording, twenty cycles and
 power-reset/no-replay gates in #4/#20/#17/#24 remain open.
 

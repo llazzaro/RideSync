@@ -7,7 +7,7 @@ namespace gopro {
 enum class SetupOperation { PairingFinish, ClaimExternalControl };
 enum class SetupResultDomain { None, GenericProtobuf };
 
-// Outbound pairing needs 16/17 bytes; classic Packet remains eight bytes.
+// Outbound pairing needs 15/16 bytes; classic Packet remains eight bytes.
 struct SetupPacket {
   Channel channel = Channel::Command;
   uint8_t feature = 0, action = 0;
