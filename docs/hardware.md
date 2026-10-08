@@ -80,6 +80,11 @@ identity, GNSS power-on/READY and empty no-fix responses. This verifies only the
 factory-firmware probe, not the planned RideSync drivers. #1 retains remaining
 board/pin/antenna qualification work.
 
+The [October 8 reconnect investigation](hardware-results/2026-10-08-reconnect.md)
+reproduced USB communication and factory ESP32 boot, but did not reproduce modem
+readiness. Preserve that result alongside the earlier successful GNSS-ready
+probe; modem startup and recovery remain unqualified.
+
 ## Button software and qualification (#8)
 
 `SourceConfig::button` supplies separately validated timing/action settings;
