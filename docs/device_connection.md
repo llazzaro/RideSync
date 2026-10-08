@@ -31,7 +31,10 @@ isolated electrical cause.
 
 A subsequent macOS trial skipped pySerial's explicit DTR/RTS updates and cleared
 termios HUPCL on the open descriptor. It received `AT` → `OK` without an observed
-ESP32 reset banner. Use one continuous connection for startup and GNSS polling;
+ESP32 reset banner. Three subsequent close/reopen trials each received `OK`
+within a three-second capture window, with HUPCL confirmed clear and no observed
+reset banner. These were warm reconnects, not cold-start deadline measurements.
+Use one continuous connection for startup and GNSS polling;
 avoid repeatedly opening a monitor while diagnosing this behavior.
 
 The tested connection setup is below. It uses **pySerial 3.5 private POSIX hooks**,

@@ -193,3 +193,18 @@ banner. The owner confirmed the antenna remained indoors next to a window and
 could not perform an outdoor test today. Clear-sky position acquisition is
 therefore deferred; the no-fix result does not establish a receiver/antenna
 fault. The host serial descriptor was closed after the bounded test.
+
+
+## Warm reconnect repeatability
+
+After the passive-open GNSS session, three consecutive passive close/reopen
+trials each sent only `AT` and received `OK` in a three-second capture window
+(3.07, 3.08 and 3.09 seconds total capture duration). HUPCL was confirmed clear
+on each open descriptor. No ESP32 reset/startup banner was observed. Each port
+was closed after its capture, with one second between trials. No firmware or
+GNSS power command was sent. These are successful warm serial reconnects with
+the already-running vendor bridge, not measured AT response latencies or
+cold-start deadline/power-cycle qualification. The earlier ordinary-open
+failure remains in the evidence; no further potentially disruptive comparison
+was made. Issue #1 remains open for its exact manual and electrical/startup
+qualification criteria.
