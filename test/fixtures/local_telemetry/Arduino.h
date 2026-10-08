@@ -40,5 +40,5 @@ struct SerialPort {
   int available() { return 0; }
   int read() { return -1; }
 };
-static SerialPort Serial;
+extern SerialPort Serial;
 inline void delay(unsigned) {}

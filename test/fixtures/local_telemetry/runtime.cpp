@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 using namespace ridesync;
+SerialPort Serial;
 std::atomic<uint32_t> raw_time{100};
 unsigned led_configs = 0, led_writes = 0, button_configs = 0;
 int gpio_failure = 0, button_level = 1;
