@@ -121,3 +121,36 @@ This failure persists with the vendor startup sequence and baud probes; it does
 not establish defective hardware, a firmware cause, actual GPIO voltage levels,
 or adequate supply current. The next evidence needed is modem LED behavior and
 qualified power/reset/UART electrical measurements. Issue #1 remains open.
+
+## Recovery after a further USB connection change
+
+The user reported that both modem red LEDs remained off, then changed the USB
+connection again. Its exact cable, port and supply characteristics were not
+measured or independently identified. No firmware was written during the
+following two sessions: the same vendor diagnostic remained installed.
+
+In the first session, the modem responded at 115200 baud approximately
+19.78 seconds after serial open. A host `AT` received `OK`. `ATI` identified
+**A7670E-FASE**, revision **A7670M7_V1.11.1**; `AT+CGMR` returned
+**A110B01A7670M7_F**. GNSS power was initially 0 and the location query returned
+ERROR while GNSS was off. The module also reported `SIM REMOVED`.
+
+In the second session, the modem again responded at 115200 baud, approximately
+19.73 seconds after open. Following an independently successful host `AT`,
+`AT+CGNSSPWR=1` received `OK` at approximately 20.12 seconds. The unsolicited
+`+CGNSSPWR: READY!` arrived at approximately 28.44 seconds. Seven subsequent
+power/location query pairs, ending at approximately 91.90 seconds, returned
+power 1 and empty `+CGNSSINFO: ,,,,,,,,` fields with `OK`.
+
+The serial ports were closed after both bounded sessions. GNSS was requested
+on and was not deliberately powered off afterward. No position fix was observed.
+The antenna appeared unconnected in the earlier photographs; its current
+connection and sky view remain unverified.
+
+This reproduces modem command readiness twice and GNSS-ready/no-fix behavior
+with the vendor diagnostic after the connection change. It does **not** isolate
+the electrical cause of the earlier failures: cable capability, port power,
+voltage sag, reset state and other changed conditions were not measured. Two
+startup observations do not qualify a worst-case startup deadline. RideSync
+drivers, actual GPS position, camera control and SD/IMU operation remain untested
+on the device. Issue #1 remains open.

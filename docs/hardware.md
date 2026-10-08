@@ -82,9 +82,12 @@ factory-firmware probe, not the planned RideSync drivers. #1 retains remaining
 board/pin/antenna qualification work.
 
 The [October 8 reconnect investigation](hardware-results/2026-10-08-reconnect.md)
-reproduced USB communication and factory ESP32 boot, but did not reproduce modem
-readiness. Preserve that result alongside the earlier successful GNSS-ready
-probe; modem startup and recovery remain unqualified.
+initially reproduced USB communication and factory ESP32 boot without modem
+readiness. After a verified factory backup, vendor diagnostic installation and
+a further USB connection change, two sessions reproduced modem command readiness
+and a bounded GNSS probe reproduced READY with no position fix. The connection
+change's electrical effect was not measured. These are vendor-diagnostic results;
+RideSync drivers and worst-case startup/recovery remain unqualified.
 
 ## Button software and qualification (#8)
 
