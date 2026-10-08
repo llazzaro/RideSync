@@ -10,13 +10,28 @@ telemetry forwarding depend on each model's verified capabilities.
 
 ## Current status
 
-**Repository foundation only.** Firmware currently prints a serial bring-up
-message and yields to the scheduler. BLE control, wake, buttons, LEDs, GNSS,
-logging, watchdog configuration, and persistent settings are not implemented.
+**Software modules are implemented; hardware qualification is incomplete.**
+Native tests cover camera/group state machines, button and LED behavior, session
+time, A7670E GNSS parsing/transport, bounded GPS/raw-IMU storage, configuration
+persistence, health supervision, the shared BLE central and the HERO12 adapter.
+The retained ESP32 builds link the real BLE host and HERO12 composition. These
+checks establish software behavior and build compatibility; they do not prove
+camera or sensor operation on the motorcycle.
+
+The default firmware provides serial diagnostics and health supervision, and
+loads configuration when SDK admission permits. Camera control, GNSS, SD, IMU and external controls remain disabled
+until wiring, identities, firmware/API and required store evidence are qualified.
+The complete handlebar workflow is not yet composed or bench-validated. Estimated
+linear acceleration/lean/pitch and Insta360 control/wake/GPS forwarding still need
+their required protocol or reference evidence. HERO12 sleep/wake recovery is
+under implementation; camera-event logging is tracked in
+[#37](https://github.com/llazzaro/RideSync/issues/37).
+
 A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
 but acquired no position fix. No RideSync firmware or camera behavior has been
 verified on hardware. See [bring-up results](docs/hardware-results/2026-10-07-bringup.md).
-This is not yet ride-ready firmware.
+This is not yet ride-ready firmware. The matrix below reports **hardware support**;
+passing synthetic tests does not promote a camera to Confirmed.
 
 | Feature | X5 | GO 3S | ONE RS | HERO12 Black |
 |---|---|---|---|---|
@@ -26,11 +41,12 @@ This is not yet ride-ready firmware.
 | Wake | Not tested | Not tested | Not tested | Not tested |
 | GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
 
-GoPro HERO12 Black is the planned first GoPro target.
-BLE pairing/reconnect, start/stop and state reporting are planned using
-[Open GoPro](https://gopro.github.io/OpenGoPro/). Wake is model-dependent and
-untested. External GPS/IMU injection into GoPro is not assumed; local microSD
-ride logging remains independent. See [GoPro plan](docs/gopro_plan.md).
+GoPro HERO12 Black is the first implemented GoPro profile. Its opt-in adapter
+uses [Open GoPro](https://gopro.github.io/OpenGoPro/) for initial pairing/control,
+identity/API qualification and explicit start/stop with observed Encoding
+confirmation. Its tests use schema-derived synthetic host packets; physical
+pairing, recording and wake remain untested. External GPS/IMU injection into GoPro
+is not assumed; local microSD ride logging remains independent. See [GoPro plan](docs/gopro_plan.md).
 
 These statuses refer to RideSync, not claims made by upstream projects.
 See [protocol research](docs/insta360_protocol.md) and
@@ -40,7 +56,9 @@ See [protocol research](docs/insta360_protocol.md) and
 
 Use Python 3.11 for the same host environment as CI. PlatformIO Core and the
 ESP32 platform, Arduino framework, toolchain and build tools are pinned.
-No third-party firmware libraries are used yet. Host tests use the pinned
+Firmware dependencies include commit-pinned NimBLE-Arduino and SparkFun BMI270
+with its Bosch driver; see [sources and notices](docs/sources.md). A checked build
+patch guards the pinned NimBLE empty-store restore case. Host tests use the pinned
 PlatformIO native platform 1.2.1 and Unity 2.6.1 (the system C++ compiler is
 provided by macOS developer tools or Ubuntu 24.04 in CI).
 
@@ -57,7 +75,7 @@ pio device monitor --port /dev/your-port --baud 115200
 ```
 
 Confirm the exact board variant before flashing; see [hardware](docs/hardware.md).
-The scaffold does not enable the modem or drive any external pins.
+The default firmware does not enable the modem or drive external control pins.
 
 ## Configuration and controls
 
@@ -67,21 +85,26 @@ by firmware**. All example targets are disabled until their addresses and addres
 types are known. Source settings use the typed `SourceConfig` API in
 [include/config.h](include/config.h); no JSON parser is implemented. Replace null
 identifiers with measured BLE addresses, set public/random address type, then
-enable the targets. NVS persistence comes later. The configurable registry
-capacity is 1–8 cameras, with clear validation errors above its bound; this is a
-software memory bound, not a measured BLE connection limit. See
+enable only qualified profiles through their documented commissioning API.
+[NVS persistence](docs/configuration.md) is implemented, but its owner-private
+loaded settings are not yet connected to a complete camera/control application.
+The configurable registry capacity is 1–8 cameras; the shared central currently
+admits at most four peer slots and explicitly refuses a fifth. Neither bound is
+a measured BLE connection limit. See
 [camera contracts](docs/camera_contracts.md) for lifecycle and adapter rules.
 
-Planned configurable controls: short press toggles the group recording intent;
-long press wakes/reconnects all configured cameras; optional double press
-resynchronizes state. Planned status: green ready, red recording, blinking amber
-partial availability, blue reconnecting, fast red error. None is wired yet.
+The tested button state machine produces configurable short, long and optional
+double-press events. The intended application mapping is group recording,
+wake/reconnect and state resynchronization respectively. The tested status
+renderer provides green ready, red recording, blinking amber partial availability,
+blue recovery and fast red error. Physical GPIO qualification and complete
+button-to-camera wiring remain open.
 
 ## Implementation plan
 
 The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
-contains 30 focused work packages, dependencies and acceptance criteria, tracked
-in [roadmap #16](https://github.com/llazzaro/RideSync/issues/16). See the
+contains 34 focused work packages plus maintenance fixes, dependencies and
+acceptance criteria, tracked in [roadmap #16](https://github.com/llazzaro/RideSync/issues/16). See the
 [issue review](docs/issue_review.md) for scope splits:
 
 1. Verify board/protocol evidence and build the shared camera abstraction.
@@ -92,8 +115,9 @@ in [roadmap #16](https://github.com/llazzaro/RideSync/issues/16). See the
 6. Add an IMU, raw motion logging and validated acceleration/lean estimates.
 7. Verify optional Insta360 GPS forwarding, then complete recovery and field tests.
 
-These are planned capabilities, not current implementation results. Keep each
-issue in reviewable commits and promote support only with hardware evidence.
+The roadmap includes implemented software and outstanding protocol, integration
+and hardware work. Each issue records its remaining acceptance; promote physical
+support only with hardware evidence.
 
 ## Development
 
@@ -105,10 +129,13 @@ python scripts/check_format.py
 
 GitHub Actions builds firmware and runs repository checks, native source
 configuration/lifecycle tests with fake clocks and transports, and C++ formatting.
-The native suites exercise the shared contracts; they do not validate any camera
-protocol or hardware behavior.
+Native suites exercise software contracts, schema-derived protocol packets and
+SDK fault boundaries. CI also links the opt-in BLE central and HERO12 runtime
+with activation disabled. None of those checks validates physical camera behavior.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [research sources](docs/sources.md),
 [GPS protocol](docs/gps_protocol.md), and the [original brief](docs/project_brief.md).
-RideSync-authored files are MIT licensed. Upstream sources are references only;
-no third-party implementation has been copied.
+RideSync-authored files are MIT licensed. Pinned dependencies and retained source
+fixtures have component-specific licenses/notices; see
+[sources](docs/sources.md) and [NimBLE fixture notices](test/fixtures/nimble/NOTICE-Apache-NimBLE).
+Synthetic protocol fixtures are not physical camera captures.
