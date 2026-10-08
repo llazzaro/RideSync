@@ -13,7 +13,8 @@ telemetry forwarding depend on each model's verified capabilities.
 **Software modules are implemented; hardware qualification is incomplete.**
 Native tests cover camera/group state machines, button and LED behavior, session
 time, A7670E GNSS parsing/transport, bounded GPS/raw-IMU storage, configuration
-persistence, health supervision, the shared BLE central and the HERO12 adapter.
+persistence, health supervision, the shared BLE central, the HERO12 adapter and
+correlated camera-event logging.
 The retained ESP32 builds link the real BLE host and HERO12 composition. These
 checks establish software behavior and build compatibility; they do not prove
 camera or sensor operation on the motorcycle.
@@ -25,8 +26,12 @@ The complete handlebar workflow is not yet composed or bench-validated. Estimate
 linear acceleration/lean/pitch and Insta360 control/wake/GPS forwarding still need
 their required protocol or reference evidence. Opt-in HERO12 recovery now has a
 bounded discovery/connect/query/conditional-REC software path, with physical
-sleep/wake behavior still untested; camera-event logging is tracked in
-[#37](https://github.com/llazzaro/RideSync/issues/37).
+sleep/wake behavior still untested. The retained camera/group logging route now
+records admitted requests, validated wire ACKs and accepted state observations
+as distinct facts in [CameraV3 logs](docs/log_format.md). Owner-receipt and storage
+admission times are separate; radio receipt and camera acquisition remain unknown.
+Configuration handoff, durable session IDs and complete application composition
+are tracked in [#38](https://github.com/llazzaro/RideSync/issues/38)–[#42](https://github.com/llazzaro/RideSync/issues/42).
 
 A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
 but acquired no position fix. No RideSync firmware or camera behavior has been
