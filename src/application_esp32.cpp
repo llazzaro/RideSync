@@ -246,6 +246,10 @@ void SupervisedEsp32Application::serviceReset() {
         reset_.requalification_required || result.requalification_required;
     if (result.cancelled || result.timed_out)
       revokeReset(result.timed_out);
+    // Revocation can precede our first observation of an admitted mutation.
+    // Merge that evidence before either held or final host-resource release.
+    if (reset_.finished && reset_.mutation)
+      reset_.outcome = BondOutcome::Indeterminate;
     if (!result.releasable)
       return;
     host_pending_ = false;

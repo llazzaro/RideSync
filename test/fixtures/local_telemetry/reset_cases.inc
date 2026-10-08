@@ -88,10 +88,11 @@ static void resetCases(SupervisedEsp32Application &app, const std::string &mode)
   }
   if (mode == "main-reset-retained")
     host.held = host.links[0];
-  if (mode == "main-reset-wrap")
+  if (mode == "main-reset-wrap" || mode == "main-reset-completed-late-wrap")
     raw_time.store(UINT32_MAX - 100);
   const auto at = app.telemetry()->status().at_completed;
   const auto ticks = runtime.manager.ticks(), advances = runtime.group.advancements();
+  const uint32_t reset_start = millis();
   assert(request(1, mode == "main-reset-busy-deadline" ? 100 : 1000) ==
          BondResetSubmission::Queued);
   assert(app.pairingResetStatus().epoch == settings.epoch &&
@@ -222,13 +223,15 @@ static void resetCases(SupervisedEsp32Application &app, const std::string &mode)
       mode == "main-reset-host-late" || mode == "main-reset-host-nvs" ||
       mode == "main-reset-host-supervision") {
     host.driveReset(false);
-    if (mode == "main-reset-host-late")
-      host.reset_result.mutation = true;
     assert(runtime.manager.request(1, Operation::Query) == CameraError::None);
     loop();
     assert(!runtime.manager.sealed(1));
     const auto prior_observation = runtime.manager.state(1)->last_observed_ms;
     independentProgress(false);
+    if (mode == "main-reset-host-late") {
+      assert(!app.pairingResetStatus().mutation);
+      host.reset_result.mutation = true; // First observed after explicit revocation.
+    }
     if (mode == "main-reset-host-timeout")
       raw_time.fetch_add(1000);
     else if (mode == "main-reset-host-nvs")
@@ -239,12 +242,22 @@ static void resetCases(SupervisedEsp32Application &app, const std::string &mode)
       assert(app.cancelPairingReset(1));
     loop();
     assert(app.pairingResetStatus().finished && !app.pairingResetStatus().releasable);
+    if (mode == "main-reset-host-late")
+      assert(app.pairingResetStatus().mutation &&
+             app.pairingResetStatus().outcome == BondOutcome::Indeterminate);
     host.driveReset();
     loop();
     assert(
         app.pairingResetStatus().releasable &&
         app.pairingResetStatus().outcome ==
             (mode == "main-reset-host-late" ? BondOutcome::Indeterminate : BondOutcome::Refused));
+    if (mode == "main-reset-host-late") {
+      assert(app.pairingResetStatus().mutation &&
+             app.pairingResetStatus().requalification_required);
+      assert(runtime.manager.sealed(0) &&
+             runtime.manager.state(0)->observed == RecordingState::Unknown);
+      return; // Partial mutation now faithfully faults the host; no post-fault progress claim.
+    }
     nvs_revoked = false;
     supervision_fault.store(false);
     pump();
@@ -270,13 +283,42 @@ static void resetCases(SupervisedEsp32Application &app, const std::string &mode)
   }
   if (mode == "main-reset-host-error")
     host.reset_outcome = BondOutcome::Indeterminate;
-  host.driveReset();
+  host.driveReset(); // Actual completion before the owner observes any expiry/revocation.
+  const bool completed_late = mode.find("main-reset-completed-late") == 0;
+  const bool completed_current = mode == "main-reset-completed-current";
+  if (completed_late)
+    raw_time.store(reset_start + (mode == "main-reset-completed-late-beyond" ? 1001 : 1000));
+  if (completed_current) {
+    auto changed = settings;
+    ++changed.generation;
+    assert(settings_publication.put(changed));
+  }
   loop();
   auto result = app.pairingResetStatus();
+  if (completed_late || completed_current) {
+    assert(result.finished && result.releasable && result.mutation &&
+           result.outcome == BondOutcome::Indeterminate && result.requalification_required);
+    assert(result.timed_out == completed_late && result.cancelled == completed_current);
+    assert(result.epoch == settings.epoch && result.generation == settings.generation &&
+           result.peer_id == 301 && result.slot == 0 && result.qualification_record == 42);
+    assert(runtime.manager.sealed(0) &&
+           runtime.manager.state(0)->observed == RecordingState::Unknown);
+    assert(runtime.manager.request(0, Operation::Start) == CameraError::Cancelled);
+    assert(host.reset_submissions == 1 && !app.cancelPairingReset(1));
+    return;
+  }
   assert(result.finished && result.releasable && result.proof_denied &&
          result.requalification_required);
   assert(result.outcome ==
          (mode == "main-reset-host-error" ? BondOutcome::Indeterminate : BondOutcome::Removed));
+  if (mode == "main-reset-host-error") {
+    assert(result.mutation && result.cancelled && !result.timed_out);
+    assert(runtime.manager.sealed(0) &&
+           runtime.manager.state(0)->observed == RecordingState::Unknown);
+    assert(app.requestPairingReset(1, 302, settings.epoch, settings.generation, 2, 1000) ==
+           BondResetSubmission::Refused);
+    return; // Real Store fault refuses fresh host admission; never claim live-camera progress here.
+  }
   assert(runtime.manager.request(1, Operation::Query) == CameraError::None);
   pump();
   pump();

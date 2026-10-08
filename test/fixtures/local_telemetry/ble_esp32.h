@@ -46,7 +46,8 @@ public:
     return started ? BleHostState::Ready : BleHostState::Failed;
   }
   BleHostState state() const override {
-    return host_failure ? BleHostState::Failed : BleHostState::Ready;
+    return host_failure || host_fault != BleFault::None ? BleHostState::Failed
+                                                        : BleHostState::Ready;
   }
   BleFault fault() const override { return host_fault; }
   bool admittedProof(BleStoreProof &out) const {
@@ -289,6 +290,8 @@ public:
     reset_result.cancelled = reset_cancelled;
     reset_result.timed_out = millis() - reset_deadline < 0x80000000UL;
     reset_result.finished = reset_result.releasable = true;
+    if (reset_result.outcome == BondOutcome::Indeterminate)
+      host_fault = BleFault::Store; // Actual backend faults on uncertain deletion.
     reset_phase = 3;
   }
 };
