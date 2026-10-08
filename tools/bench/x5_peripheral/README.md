@@ -4,7 +4,8 @@ This isolated diagnostic offers a documented community CE80 peripheral profile
 for the camera to discover. It is not a production camera adapter. Idle/A remain capture-only; an explicit
 serial S can now submit one source-derived CE82 shutter event to the current
 subscribed peer. It always reports recording UNKNOWN and sends no automatic
-mode, wake or handshake commands.
+mode or handshake commands. An idle-only W option instead selects one finite,
+source-derived wake advertisement; that mode cannot submit shutter events.
 Connection, subscription or successful ATT access alone does not prove that
 the X5 has paired or supports this profile. A camera-side pairing indication,
 firmware version and separately annotated private capture are still required.
@@ -42,8 +43,8 @@ Both services are primary GATT services; the example calls the additional one
 "secondary." Integer read values are explicitly represented in ESP32 little
 endian byte order. The legacy advertisement carries general-discovery/no-BR-EDR
 flags and both service UUIDs (25 bytes). Scan response carries only the complete
-source-example name `Insta360 GPS Remote` (21 bytes including the AD header). No manufacturer/wake bytes or
-camera identifier is used. Each field fits the 31-byte legacy limit.
+source-example name `Insta360 GPS Remote` (21 bytes including the AD header). Normal mode uses no manufacturer/wake bytes or camera identifier. The explicit
+wake-only option below uses a private RAM-only identifier. Each field fits the 31-byte legacy limit.
 
 The [MIT M5 fork at c76e140](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h)
 uses the vendor remote name; its exact-name comment refers to Ace Pro 2 and is
@@ -87,11 +88,24 @@ Serial is 115200 baud. Default boot is idle with no advertising. Commands:
   owner admission rechecks policy, the sticky stop latch and current time, and
   recomputes the remaining finite window immediately before start submission.
   One peer maximum; no auto-reconnect advertising.
+- `W` immediately followed by exactly six printable ASCII identifier bytes and
+  LF (`\n`): idle-only wake option. No spaces/separators are added unless they
+  are part of those six bytes; CRLF is malformed. Identifier is supplied privately
+  from the selected camera name suffix, never echoed or logged and never stored
+  in NVS/flash. W is consumed through LF even if invalid, oversized or received
+  after A; embedded A/S/X characters cannot execute. Invalid idle configuration
+  blocks A until a valid W line or reset. A partial line also blocks commands
+  until LF. Configuration is immutable after A. With a valid option, A requests
+  one wake advertisement of `min(remaining capture window, 3000 ms)` through the
+  SDK. There is no automatic retry or switch to normal advertising. Advertisement
+  completion with no connected peer ends the policy; a successful connection
+  remains capture-only up to the original 120-second cap. S is always refused in
+  wake mode, even after subscription. No wake/recording success is inferred.
 - `X`: request stop of advertising and disconnection of the observed handle.
   X before A does not consume the attempt. After an attempt, reset is required
   for another A. Actual disconnection is a separate SDK event.
 - `S`: request exactly one CE82 shutter event. Admission requires the active
-  finite window, a current connected peer, its current CE82 notify subscription,
+  finite window in normal mode, a current connected peer, its current CE82 notify subscription,
   and an idle SDK owner with no pending shutter request/stop. One pending slot;
   refused/busy requests are discarded. After preparing an SDK-owned mbuf the
   owner revalidates current time, peer, subscription and stop at submission.
@@ -147,6 +161,8 @@ Event kind numbers: 0 sync, 1 connect, 2 disconnect, 3 MTU, 4 subscribe,
 (`value` raw SDK return, or -1 local cancellation before SDK submission).
 Allocation failure is reported as SDK ENOMEM without a notify attempt. Shutter
 logs contain only connection/attribute handles and status, never payload.
+16 wake option (`value` 1 accepted, 0 refused); no identifier bytes are retained
+in events or summaries. `wake_only` reports the immutable selected mode.
 Read events include the attempted static response bytes/length; write events
 contain bounded incoming bytes. Connect `attr` is peer address type; MTU `attr`
 is channel ID; subscribe `value` encodes notify bit0, indicate bit1 and SDK
@@ -246,3 +262,42 @@ owner-only application custom-notify caller. SDK-internal standard notification
 wrappers remain linked. Clang-format 18 and whitespace checks passed. These are
 software checks; no shutter/camera observation or production integration is
 claimed.
+
+## Finite wake-only experiment
+
+The manufacturer value is sourced from the retained MIT M5 fork
+[`c76e140`, ble_handlers.h:323–353](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/ble_handlers.h#L323-L353)
+and independent MIT ESP32 example
+[`83d4748`, Insta_BLE.ino:141–162](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino#L141-L162).
+It is exactly 26 bytes: fixed `4c 00 02 15 09 4f 52 42 49 54 09 ff 0f 00`,
+six identifier bytes, fixed `00 00 00 00 e4 01`. M5 derives the identifier
+from the last six name characters (`camera.h:131–155`) and uses a three-second
+advertising interval (`commands.h:162–190`). These are documentary prototype
+facts; the generic suffix rule is not independently confirmed for X5. This
+experiment does not close production wake/recovery support or #9.
+
+The diagnostic explicitly serializes flags AD (3 bytes) plus manufacturer AD
+(28 bytes) into exactly 31 ADV bytes. Scan response contains CE80 AD (4 bytes)
+plus the complete remote name AD (21 bytes), exactly 25 bytes. D0FF is omitted
+from the wake advertisement; the unchanged GATT services remain available on
+connection. This exact AD arrangement is an experimental bench choice needed
+to fit legacy limits, not a captured on-air vendor frame. No transmit-power,
+identity, pairing, persistent storage or GPIO changes are made.
+
+SDK duration is a requested finite advertisement duration, not proof of a hard
+RF-off deadline if the SDK stalls. Existing 120-second policy expiry and retained
+owner cleanup still apply. X retains its sticky stop semantics; an operation
+already accepted before X may return later. No reset/reconnect replay occurs.
+Observe the camera display after the one advertisement; absence of a connection
+is not alone proof that wake failed, and connection is not recording proof.
+
+Wake-only source-task verification (October 9, 2026): focused host harness
+passed (final 0.838 s), including independent complete 31-byte ADV/25-byte scan
+fixtures, exact manufacturer insertion, default normal-mode behavior, malformed
+length/control/overflow consumption, immutable post-A option, finite duration,
+no-connection terminal completion and connected capture cap. The final pinned
+probe build passed (4.56 s incremental; RAM 45,420 bytes, flash 573,965 bytes).
+Extended ELF audit passed existing NVS/RAM/retained-owner protections plus raw
+wake-data preparation called only by that owner. Clang-format 18 dry-run and
+bench whitespace checks passed. No hardware action, private identifier capture,
+production wake implementation or observed wake success is part of this task.

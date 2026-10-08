@@ -2,6 +2,7 @@
 #include "capture.h"
 #include "nvs_guard.h"
 #include "protocol/insta360_codec.h"
+#include "wake.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h> // Select the pinned dependency; never call its NVS init wrapper.
 #include <esp_bt.h>
@@ -25,7 +26,7 @@ extern "C" void ble_store_config_init(void);
 
 namespace {
 using namespace x5_probe;
-constexpr char kName[] = "Insta360 GPS Remote";
+WakeOption wake;        // Identifier stays in RAM; immutable once the attempt begins.
 Capture capture;        // Boot lifetime, including stopped, blocked SDK and late callbacks.
 SdkControl sdk_control; // Sticky stop admission and retained submission/publication state.
 ShutterControl shutter;
@@ -182,6 +183,14 @@ int gap(ble_gap_event *event, void *) {
     return BLE_GAP_REPEAT_PAIRING_IGNORE; // Never delete a bond to retry.
   case BLE_GAP_EVENT_ADV_COMPLETE:
     record(Kind::AdvertisingEnd, BLE_HS_CONN_HANDLE_NONE, 0, event->adv_complete.reason);
+    {
+      Lock lock;
+      wake.advertisingEnded(capture, connection);
+      if (capture.used() && !capture.active()) {
+        sdk_control.requestStop();
+        shutter.cancel();
+      }
+    }
     break;
   default:
     break;
@@ -199,6 +208,15 @@ void sync() {
 }
 int prepareAdvertising(uint8_t &address_type) {
   int rc = ble_hs_id_infer_auto(0, &address_type);
+  if (wake.enabled()) {
+    const auto advertisement = wake.advertisement();
+    const auto response = wake.scanResponse();
+    if (!rc)
+      rc = ble_gap_adv_set_data(advertisement.data(), advertisement.size());
+    if (!rc)
+      rc = ble_gap_adv_rsp_set_data(response.data(), response.size());
+    return rc;
+  }
   // Pinned ble_hs_start() registers the queued services before invoking sync.
   ble_hs_adv_fields fields{};
   fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
@@ -211,8 +229,8 @@ int prepareAdvertising(uint8_t &address_type) {
   if (!rc)
     rc = ble_gap_adv_set_fields(&fields); // 3 + 4 + 18 = 25 bytes, within legacy 31.
   ble_hs_adv_fields response{};
-  response.name = reinterpret_cast<const uint8_t *>(kName);
-  response.name_len = sizeof(kName) - 1;
+  response.name = reinterpret_cast<const uint8_t *>(kRemoteName);
+  response.name_len = sizeof(kRemoteName) - 1;
   response.name_is_complete = 1;
   if (!rc)
     rc = ble_gap_adv_rsp_set_fields(&response); // 2 + 19 = 21 bytes.
@@ -224,7 +242,7 @@ void submitAdvertising(uint8_t address_type) {
     Lock lock;
     // Serialized acceptance boundary AFTER all preparatory SDK calls. Time,
     // policy and sticky stop are revalidated together; no SDK under this lock.
-    remaining = sdk_control.admitAdvertising(capture, uint32_t(nowMs()));
+    remaining = wake.duration(sdk_control.admitAdvertising(capture, uint32_t(nowMs())));
   }
   if (!remaining)
     return;
@@ -257,7 +275,9 @@ void submitShutter() {
   bool pending;
   {
     Lock lock;
-    pending = shutter.pending();
+    pending = wake.shutterAllowed() && shutter.pending();
+    if (!wake.shutterAllowed())
+      shutter.cancel();
   }
   if (!pending)
     return;
@@ -277,7 +297,8 @@ void submitShutter() {
   bool admitted;
   {
     Lock lock;
-    admitted = shutter.admit(capture, sdk_control, uint32_t(nowMs()), conn, attr);
+    admitted =
+        wake.shutterAllowed() && shutter.admit(capture, sdk_control, uint32_t(nowMs()), conn, attr);
   }
   if (!admitted) {
     os_mbuf_free_chain(payload);
@@ -337,7 +358,7 @@ int initializeSdk() {
   };
   ble_svc_gap_init();
   ble_svc_gatt_init();
-  rc = ble_svc_gap_device_name_set(kName);
+  rc = ble_svc_gap_device_name_set(kRemoteName);
   for (unsigned i = 0; i < sizeof(attributes) / sizeof(attributes[0]); ++i) {
     auto &definition = i < 3 ? remote_chars[i] : extra_chars[i - 3];
     definition.uuid = &attributes[i].uuid.u;
@@ -458,18 +479,27 @@ void setup() {
   esp_log_level_set("*", ESP_LOG_NONE); // No SDK peer addresses/credentials in output.
   const char banner[] =
       "X5_PROBE: A once=capture120s X=stop S=ONE shutter toggle after observation "
-      "H=private sensitive hex; recording UNKNOWN\n";
+      "W+6ASCII+LF=idle wake-only3s H=private sensitive hex; recording UNKNOWN\n";
   emit(banner, sizeof(banner) - 1);
 }
 void loop() {
   const uint32_t now = uint32_t(nowMs());
   if (Serial.available()) {
-    const int command = Serial.read();
+    int command = Serial.read();
+    WakeInput input;
+    {
+      Lock lock;
+      input = wake.feed(uint8_t(command), capture.used());
+    }
+    if (input != WakeInput::Command)
+      command = -1; // Consume malformed/private lines, never dispatch their suffix.
+    if (input == WakeInput::Accepted || input == WakeInput::Refused)
+      record(Kind::WakeOption, BLE_HS_CONN_HANDLE_NONE, 0, input == WakeInput::Accepted ? 1 : 0);
     if (command == 'A') {
       bool begin;
       {
         Lock lock;
-        begin = capture.begin(now);
+        begin = wake.allowBegin() && capture.begin(now);
         if (begin)
           sdk_control.begin(SdkAction::Startup);
       }
@@ -488,7 +518,8 @@ void loop() {
       shutter.cancel();
     } else if (command == 'S') {
       Lock lock;
-      const bool accepted = shutter.request(capture, sdk_control, uint32_t(nowMs()));
+      const bool accepted =
+          wake.shutterAllowed() && shutter.request(capture, sdk_control, uint32_t(nowMs()));
       capture.push(Kind::ShutterRequest, nowMs(), connection, attributes[1].handle,
                    accepted ? 1 : 0);
     } else if (command == 'H') {
@@ -552,7 +583,7 @@ void loop() {
         "X5_PROBE: boot_ms=%lu used=%u active=%u synced=%u advertising=%u conn=%u stop=%u hex=%u "
         "seen=%lu reported=%lu queued=%u dropped=%lu truncated=%lu "
         "sdk_stop=%u sdk_inflight=%u sdk_op=%u sdk_ops_admitted/returned=%lu/%lu "
-        "sdk_last_op/rc=%u/%d shutter_pending=%u "
+        "sdk_last_op/rc=%u/%d shutter_pending=%u wake_only=%u "
         "nvs_refused_init/open/erase=%lu/%lu/%lu recording=UNKNOWN kind_counts=",
         static_cast<unsigned long>(now), used, active, synced,
         synced ? unsigned(ble_gap_adv_active()) : 0, conn, unsigned(reason), private_hex,
@@ -560,7 +591,7 @@ void loop() {
         static_cast<unsigned long>(stats.dropped), static_cast<unsigned long>(stats.truncated),
         sdk.stop_requested, sdk.in_flight, unsigned(sdk.action),
         static_cast<unsigned long>(sdk.accepted), static_cast<unsigned long>(sdk.returned),
-        unsigned(sdk.last_returned_action), sdk.last_status, shutter_pending,
+        unsigned(sdk.last_returned_action), sdk.last_status, shutter_pending, wake.enabled(),
         static_cast<unsigned long>(nvs.init), static_cast<unsigned long>(nvs.open),
         static_cast<unsigned long>(nvs.erase));
     if (n > 0 && size_t(n) < sizeof(line)) {

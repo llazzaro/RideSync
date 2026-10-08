@@ -22,6 +22,7 @@ enum class Kind : uint8_t {
   Attribute,
   ShutterRequest,
   ShutterResult,
+  WakeOption,
   Count
 };
 enum class StopReason : uint8_t {

@@ -88,9 +88,19 @@ def inspect(nm, objdump):
     assert all('ble_gatts_' in owner for owner in callers.get('ble_gatts_notify', set())), (
         'unexpected application call to generic notification wrapper')
     assert 'ridesync::insta360::encodeShutterEvent()' in symbols, 'shared shutter encoder missing'
+    for target, wrapper in (('ble_gap_adv_set_data', 'ble_gap_adv_set_fields'),
+                            ('ble_gap_adv_rsp_set_data', 'ble_gap_adv_rsp_set_fields')):
+        observed = callers.get(target, set())
+        preparation = {owner for owner in observed if 'prepareAdvertising' in owner}
+        assert preparation, f'missing wake advertisement preparation: {target}'
+        assert observed <= preparation | {wrapper}, f'unexpected advertisement data caller: {observed}'
+        for owner in preparation:
+            assert callers.get(owner) and all('ownerTask' in caller for caller in callers[owner]), (
+                f'advertisement preparation outside retained owner: {owner}')
     print('PASS: RAM config store; empty persistent object; core/PHY refusal boundaries; no unexpected NVS callers')
     print('PASS: application advertising start/stop/terminate callers stay in retained SDK owner')
     print('PASS: shared shutter encoder linked; custom notification application caller is retained owner')
+    print('PASS: raw wake advertisement data preparation is called only by retained owner')
     print('PASS: strong Arduino Bluetooth HAL retains controller memory before setup')
     print('PHY getters/setters remain linked but are behind open refusal; source error-branch review is still required.')
 

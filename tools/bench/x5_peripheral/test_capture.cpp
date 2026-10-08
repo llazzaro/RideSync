@@ -1,10 +1,58 @@
 #include "capture.h"
 #include "protocol/insta360_codec.h"
+#include "wake.h"
 #include <cassert>
 #include <cstring>
 
 using namespace x5_probe;
 int main() {
+  {
+    WakeOption wake;
+    assert(wake.allowBegin() && !wake.enabled());
+    assert(wake.shutterAllowed() && wake.duration(120000) == 120000);
+    assert(wake.feed('A', false) == WakeInput::Command);
+    assert(wake.feed('W', false) == WakeInput::Consumed);
+    assert(!wake.allowBegin());
+    for (char c : {'A', 'B', 'C', '1', '2', '3'})
+      assert(wake.feed(c, false) == WakeInput::Consumed);
+    assert(wake.feed('\n', false) == WakeInput::Accepted);
+    assert(wake.enabled() && wake.allowBegin());
+    const uint8_t adv[] = {2,   1,  6, 27,  255, 76,  0,   2,   21,  9, 79, 82, 66, 73,  84, 9,
+                           255, 15, 0, 'A', 'B', 'C', '1', '2', '3', 0, 0,  0,  0,  228, 1};
+    const uint8_t scan[] = {3,   3,   128, 206, 20,  9,   'I', 'n', 's', 't', 'a', '3', '6',
+                            '0', ' ', 'G', 'P', 'S', ' ', 'R', 'e', 'm', 'o', 't', 'e'};
+    assert(wake.advertisement().size() == sizeof(adv));
+    assert(wake.scanResponse().size() == sizeof(scan));
+    assert(std::memcmp(wake.advertisement().data(), adv, sizeof(adv)) == 0);
+    assert(std::memcmp(wake.scanResponse().data(), scan, sizeof(scan)) == 0);
+    assert(wake.duration(120000) == 3000 && wake.duration(2999) == 2999);
+    assert(wake.duration(0) == 0 && !wake.shutterAllowed());
+    const auto before = wake.advertisement();
+    for (char c : {'W', 'S', 'S', 'A', 'A', 'X', 'X', '\n'})
+      assert(wake.feed(c, true) != WakeInput::Command);
+    assert(wake.enabled() && wake.advertisement() == before); // Immutable after A.
+    Capture capture;
+    assert(capture.begin(0));
+    capture.ready();
+    wake.advertisingEnded(capture, 7);
+    assert(capture.active()); // Connected capture remains finite, no shutter.
+    capture.tick(Capture::kWindowMs);
+    assert(!capture.active());
+  }
+  for (const char *bad : {"W\n", "W12345\n", "W1234567ASX\n", "W12345\r\n", "W12345\x7f\n"}) {
+    WakeOption wake;
+    for (const char *c = bad; *c; ++c)
+      assert(wake.feed(*c, false) != WakeInput::Command);
+    assert(!wake.enabled() && !wake.allowBegin());
+    for (char c : {'W', '1', '2', '3', '4', '5', '6', '\n'})
+      assert(wake.feed(c, false) != WakeInput::Command);
+    assert(wake.allowBegin() && wake.enabled());
+    Capture capture;
+    assert(capture.begin(0));
+    wake.advertisingEnded(capture, 0xffff);
+    assert(!capture.active() && capture.reason() == StopReason::Deadline);
+    assert(!capture.begin(1)); // No wake fallback/retry.
+  }
   const uint8_t expected[] = {0xfc, 0xef, 0xfe, 0x86, 0x00, 0x03, 0x01, 0x02, 0x00};
   const auto shutter_bytes = ridesync::insta360::encodeShutterEvent();
   assert(shutter_bytes.size() == sizeof(expected));
