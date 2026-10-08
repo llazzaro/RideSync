@@ -44,8 +44,15 @@ source; its startup behavior must not be attributed to this unit as fact.
 
 The user confirmed that a battery or external supply is connected in addition
 to USB; which of the two is fitted remains unspecified. Disconnecting USB alone
-may therefore leave the modem powered. A complete power cycle has been requested
-but has not yet been observed or confirmed. Record the
+may therefore leave the modem powered. The user subsequently confirmed completing
+the requested removal of all power and reconnection with USB only. A new
+60-second serial capture again showed the same factory ESP32 boot and ended at
+`Modem starting...`, without `Modem started`. No host AT queries were sent;
+the port was closed. Opening serial may itself restart the ESP32, so this is
+not an uninterrupted capture from initial physical power application. The
+power-cycle report does not establish measured rail discharge or supply quality.
+The stall persisted after the user-reported power cycle; its cause remains
+unproven. Record the
 actual power-cycle procedure and fitted PCB revision, then capture one continuous
 startup session. Require a timely `AT` → `OK` before identity/GNSS queries and
 measure elapsed startup time. If communication still fails, measure the supply
