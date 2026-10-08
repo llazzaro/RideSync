@@ -57,8 +57,9 @@ volume during the run; preexisting user files can remain on it.
    it in the unpowered board, and reconnect power without holding BOT/IO0.
 6. Open serial at 115200 baud using the same connection procedure. Wait for
    `SD_LOGGING: bench only` or a periodic `WAIT_W` report, then send uppercase
-   `W` once. Serial monitoring may
-   reset the ESP32, but no writes start until a new `W` is received.
+   `W` once for the normal four-row run, or `P` once for the minute-long
+   power-cut preparation mode described below. Serial monitoring may
+   reset the ESP32, but no writes start until a new `W` or `P` is received.
 
 ## Normal run and evidence
 
@@ -80,7 +81,7 @@ has a bounded message size and requires available TX space; periodic reports
 may be skipped under backpressure. Loop gaps are observations, not a latency
 qualification or an SDK IO deadline.
 
-Only `SD_LOGGING: DONE` is success: all four rows were accepted, written and
+Only `SD_LOGGING: DONE` is success for a completed normal run: all four rows were accepted, written and
 flushed; no drop/rejection/loss/terminal condition or SDK IO/close error remains;
 Storage stopped; and `owner.workerFinished()` confirms cleanup returned. The
 sketch requests graceful stop after the fourth admission. It never reports DONE
@@ -92,7 +93,7 @@ timeout emits `SD_LOGGING: FAILED`, stops admission, requests stop and cancels
 the owner. `worker_finished=0` means cleanup has not returned. All owner, clock,
 queue, and storage objects remain alive for the entire boot even if SDK IO stays
 blocked. A later `cleanup_finished` does not convert FAILED into DONE. No retry
-or second session is admitted until reset; repeated `W` is ignored.
+or second session is admitted until reset; repeated `W` and `P` are ignored.
 
 After DONE, disconnect all board power before removing the SD card. On the host,
 verify the newly created CSV with the existing
@@ -116,6 +117,53 @@ a partial final row or fewer durable rows than were accepted. Counter gaps are
 allowed when an allocated session never wrote a file. Do not erase, replace,
 rollback, or recommission the ledger between these boots.
 
+## Active-write power-cut preparation (`P`)
+
+`P` selects a fixed 60-row run with a 1000 ms row period, using the same
+production allocator, sink, worker, clock and Missing GNSS samples as `W`.
+The first actual write still has a 15000 ms deadline from the command; the
+overall deadline is 75000 ms, including allocation and cleanup. Admission
+normally lasts 60 seconds after binding, leaving about 59 seconds after the
+first row to disconnect power. Delayed passes admit only one current row;
+they can shorten that window or cause the overall deadline to fail the run.
+`START requested` emits the chosen mode, row count, period and both limits;
+periodic health also identifies the chosen mode. `WAIT_W` remains the idle
+state name and accepts either command. Neither command runs automatically.
+`W` and `P` share the single attempt per boot, including refused/failed starts.
+
+1. Preserve normal `W` run evidence first. With all board power disconnected,
+   prepare the card and a way to remove **every** power source promptly:
+   USB/serial power, battery, external supply, and any powered connection
+   that can backfeed the board. Leave the card inserted throughout the trial.
+2. Reconnect power, capture serial privately, and send uppercase `P` once.
+   Confirm `mode=P`. Wait for a periodic `RUNNING` report with `w` greater
+   than zero, and record the accepted/written/flushed counts and elapsed
+   boundary. `ROW accepted` alone does not establish an actual SD write.
+3. While still RUNNING and well before row 60/STOPPING/DONE, disconnect all
+   prepared power sources. Do not request graceful stop or press EN, and do
+   not remove the card while powered. Record how power was removed and the
+   last observed serial boundary; a serial count does not identify the exact
+   electrical cut or prove an SD transaction was in flight at that instant.
+4. After the board is fully unpowered, reconnect and send `W` for a recovery
+   run. It must allocate a fresh session; let it reach DONE. Remove all power
+   before card removal, then inspect the interrupted/recovery CSVs, ledger,
+   and preserved user files using the same private evidence procedure above.
+   Do not erase, reset, roll back, replace or recommission the ledger.
+
+If left powered, `P` requests graceful stop after row 60 and applies the same
+complete-counter, error and worker-lifetime checks before DONE. That verifies
+a longer orderly run, not a power-cut trial. EN reset restarts the ESP32 but
+does not establish loss of the SD supply. Disconnecting USB alone likewise
+does not establish supply loss if another source remains. A full supply cut
+during this active logging window is a distinct trial; its recovery/durability
+result requires physical execution and host inspection. The tooling and host
+tests do not establish electrical discharge timing, an in-flight write cut,
+or physical power-loss qualification.
+
+Refusal, startup timeout, total timeout or storage error follows the existing
+FAILED/cancellation path. Owner, clock, queue and storage retain boot lifetime
+even if SDK cleanup blocks. A late cleanup cannot turn FAILED into DONE.
+
 A normal run demonstrates the physical production write/flush/close path on
 this particular card. An observed reset and host verification provide evidence
 for that recovery boundary. They do not prove arbitrary power-loss durability,
@@ -134,3 +182,5 @@ controlled worker completion. It checks one-shot admission, first-write and
 cleanup timeouts, late allocation, refused startup, IO failure, real timestamps,
 four-row counters, and the worker lifetime barrier. It never accesses an SD
 card, commissioning receipt, or ESP32.
+It also checks `P`'s 60-row graceful completion, real timestamps, mutual W/P
+exclusion, first-write and total cleanup deadlines, and error cancellation.

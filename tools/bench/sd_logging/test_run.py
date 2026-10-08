@@ -13,7 +13,7 @@ BENCH = Path(__file__).resolve().parent
 
 
 class BenchRunTest(unittest.TestCase):
-    def test_one_shot_rows_close_barrier_refusals_and_deadlines(self):
+    def test_w_and_p_rows_mutual_exclusion_close_barrier_errors_and_deadlines(self):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / 'run'
             result = subprocess.run([

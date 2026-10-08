@@ -5,6 +5,7 @@
 #include <new>
 
 namespace sd_bench {
+enum class Mode { Normal, PowerCut };
 // Single control context only. Owner, Clock, and this object have boot lifetime.
 // After start, this object is never destroyed, including on cancellation or a
 // blocked SDK call. Only the owner worker touches the SD/filesystem.
@@ -13,10 +14,11 @@ public:
   static constexpr uint32_t kRows = 4, kRowPeriodMs = 1000;
   static constexpr uint32_t kStartupMs = 15000, kOverallMs = 30000;
   Run(Owner &owner, ridesync::Clock &clock) : owner_(owner), clock_(clock) {}
-  bool start(uint32_t now) {
+  bool start(uint32_t now, Mode mode = Mode::Normal) {
     if (used_)
       return false;
     used_ = true;
+    mode_ = mode;
     began_ = now;
     if (!owner_.start()) {
       failed_ = true;
@@ -34,7 +36,7 @@ public:
       fail("storage_error");
       return;
     }
-    if (uint32_t(now - began_) >= kOverallMs) {
+    if (uint32_t(now - began_) >= overallMs()) {
       fail("overall_timeout");
       return;
     }
@@ -64,9 +66,10 @@ public:
       // Recopy AFTER the acquire lifetime barrier, including the final close
       // error: a pre-barrier snapshot can miss writes/flush/close publication.
       const auto final = health();
-      if (rows_ == kRows && stopping_ && final.stopped && !final.terminal &&
-          final.accepted == kRows && final.written == kRows && final.flushed == kRows &&
-          !final.dropped && !final.rejected && !final.lost && !owner_.ioError())
+      if (rows_ == rowLimit() && stopping_ && final.stopped && !final.terminal &&
+          final.accepted == rowLimit() && final.written == rowLimit() &&
+          final.flushed == rowLimit() && !final.dropped && !final.rejected && !final.lost &&
+          !owner_.ioError())
         done_ = true;
       else
         fail("final_verification_failed");
@@ -90,7 +93,7 @@ public:
       ++rows_;
       last_row_ms_ = timestamp.monotonic_ms;
       next_row_ = now; // No backdating or bursts to synthesize missed periods.
-      if (rows_ == kRows) {
+      if (rows_ == rowLimit()) {
         stopping_ = true;
         storage_->requestStop();
       }
@@ -107,6 +110,11 @@ public:
   uint32_t rows() const { return rows_; }
   uint64_t lastRowMs() const { return last_row_ms_; }
   const char *reason() const { return reason_; }
+  Mode mode() const { return mode_; }
+  uint32_t rowLimit() const { return mode_ == Mode::PowerCut ? 60 : kRows; }
+  uint32_t rowPeriodMs() const { return kRowPeriodMs; }
+  uint32_t startupMs() const { return kStartupMs; }
+  uint32_t overallMs() const { return mode_ == Mode::PowerCut ? 75000 : kOverallMs; }
 
 private:
   void fail(const char *reason) {
@@ -126,5 +134,6 @@ private:
   uint64_t last_row_ms_ = 0;
   bool used_ = false, started_ = false, stopping_ = false, failed_ = false, done_ = false;
   const char *reason_ = "none";
+  Mode mode_ = Mode::Normal;
 };
 } // namespace sd_bench

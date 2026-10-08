@@ -66,6 +66,7 @@ const char *state() {
          : run.workerStarted() ? "RUNNING"
                                : "WAIT_W";
 }
+char modeCommand() { return run.mode() == sd_bench::Mode::PowerCut ? 'P' : 'W'; }
 } // namespace
 
 void setup() {
@@ -77,21 +78,29 @@ void setup() {
   delay(1000);
   last_loop = millis();
   last_report = last_loop;
-  emit("SD_LOGGING: bench only; modem/BLE/IMU disabled; send W once to allocate/write 4 "
-       "missing-GNSS rows\n");
+  emit("SD_LOGGING: bench only; modem/BLE/IMU disabled; send W (4 rows) or P (60 rows, "
+       "power-cut window) once; missing GNSS\n");
 }
 void loop() {
   const uint32_t now = millis(), gap = now - last_loop;
   last_loop = now;
   if (gap > max_gap)
     max_gap = gap;
-  // At most one serial byte per control pass; repeat W never reuses/reallocates.
-  if (Serial.available() && Serial.read() == 'W') {
-    if (run.used())
-      emit("SD_LOGGING: W ignored; one shot per boot\n");
-    else {
-      run.start(now);
-      emit("SD_LOGGING: START requested; startup=15000ms overall=30000ms\n");
+  // At most one serial byte per control pass; W/P share one allocation per boot.
+  if (Serial.available()) {
+    const int command = Serial.read();
+    if (command == 'W' || command == 'P') {
+      if (run.used())
+        emit("SD_LOGGING: %c ignored; one shot per boot\n", command);
+      else {
+        run.start(now, command == 'P' ? sd_bench::Mode::PowerCut : sd_bench::Mode::Normal);
+        emit("SD_LOGGING: START requested mode=%c rows=%lu period=%lums startup=%lums "
+             "overall=%lums\n",
+             modeCommand(), static_cast<unsigned long>(run.rowLimit()),
+             static_cast<unsigned long>(run.rowPeriodMs()),
+             static_cast<unsigned long>(run.startupMs()),
+             static_cast<unsigned long>(run.overallMs()));
+      }
     }
   }
   run.service(now);
@@ -119,14 +128,16 @@ void loop() {
     const uint32_t generation = owner.progress().generation();
     const auto outcome = owner.progress().outcome();
     const bool finished = run.workerStarted() && owner.workerFinished();
-    emit("SD_LOGGING: %s gap_ms=%lu max_gap_ms=%lu a=%lu d=%lu r=%lu w=%lu f=%lu l=%lu p=%lu t=%u "
+    emit("SD_LOGGING: %s mode=%c gap_ms=%lu max_gap_ms=%lu a=%lu d=%lu r=%lu w=%lu f=%lu l=%lu "
+         "p=%lu t=%u "
          "s=%u gen=%lu outcome=%u io=%d finished=%u\n",
-         state(), static_cast<unsigned long>(gap), static_cast<unsigned long>(max_gap),
-         static_cast<unsigned long>(h.accepted), static_cast<unsigned long>(h.dropped),
-         static_cast<unsigned long>(h.rejected), static_cast<unsigned long>(h.written),
-         static_cast<unsigned long>(h.flushed), static_cast<unsigned long>(h.lost),
-         static_cast<unsigned long>(h.progress), h.terminal, h.stopped,
-         static_cast<unsigned long>(generation), unsigned(outcome), owner.ioError(), finished);
+         state(), run.used() ? modeCommand() : '-', static_cast<unsigned long>(gap),
+         static_cast<unsigned long>(max_gap), static_cast<unsigned long>(h.accepted),
+         static_cast<unsigned long>(h.dropped), static_cast<unsigned long>(h.rejected),
+         static_cast<unsigned long>(h.written), static_cast<unsigned long>(h.flushed),
+         static_cast<unsigned long>(h.lost), static_cast<unsigned long>(h.progress), h.terminal,
+         h.stopped, static_cast<unsigned long>(generation), unsigned(outcome), owner.ioError(),
+         finished);
   }
   delay(1); // Yield while the independent production worker owns all SD IO.
 }
