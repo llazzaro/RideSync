@@ -23,8 +23,9 @@ loads configuration when SDK admission permits. Camera control, GNSS, SD, IMU an
 until wiring, identities, firmware/API and required store evidence are qualified.
 The complete handlebar workflow is not yet composed or bench-validated. Estimated
 linear acceleration/lean/pitch and Insta360 control/wake/GPS forwarding still need
-their required protocol or reference evidence. HERO12 sleep/wake recovery is
-under implementation; camera-event logging is tracked in
+their required protocol or reference evidence. Opt-in HERO12 recovery now has a
+bounded discovery/connect/query/conditional-REC software path, with physical
+sleep/wake behavior still untested; camera-event logging is tracked in
 [#37](https://github.com/llazzaro/RideSync/issues/37).
 
 A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
