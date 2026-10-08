@@ -7,8 +7,10 @@ CameraEventSession::CameraEventSession(Clock &raw, StorageSink &sink, Hero12Adap
       storage_(sink, {id, firmware, provenance, 2, 4, StorageFormat::CameraV3}),
       admission_(clock_, storage_, imu_, &camera_), logger_(camera_, raw, id, group) {}
 CameraEventSession::~CameraEventSession() {
-  if (active_)
+  if (active_) {
     manager_.detachAudit(&logger_);
+    adapter_.detachGroup(&group_);
+  }
 }
 bool CameraEventSession::configurePeer(size_t peer, uint32_t id, CameraModel model) {
   const auto *configured = manager_.configuredCamera(peer);
@@ -38,6 +40,7 @@ void CameraEventSession::service() {
   adapter_.service();
   if (stopping_ && !camera_finished_ && adapter_.canDestroy()) {
     manager_.detachAudit(&logger_);
+    adapter_.detachGroup(&group_);
     camera_.finish();
     camera_finished_ = true;
   }

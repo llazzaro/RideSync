@@ -207,6 +207,14 @@ struct Rig {
     for (unsigned n = 0; n < 8 && !adapter.canDestroy(); ++n)
       adapter.service();
   }
+  void finishBound(RecordingManager &group, CameraEventLogger &logger) {
+    adapter.stop();
+    for (unsigned n = 0; n < 8 && !adapter.canDestroy(); ++n)
+      adapter.service();
+    TEST_ASSERT_TRUE(adapter.canDestroy());
+    manager.detachAudit(&logger);
+    adapter.detachGroup(&group);
+  }
   void process(size_t n) {
     const auto &c = host.commands[n];
     auto &ctx = *host.contexts[n];
@@ -393,6 +401,7 @@ void duplicate_matching_response_records_one_wire_ack() {
     if (row[20] == "4" && row[25] == "15")
       ++query_ack;
   TEST_ASSERT_EQUAL_UINT(1, query_ack);
+  r.finishBound(group, logger);
 }
 void profile_reply_at_or_after_deadline_cannot_publish_ack() {
   for (uint32_t start : {uint32_t(100), uint32_t(UINT32_MAX - 100)}) {
@@ -427,6 +436,7 @@ void profile_reply_at_or_after_deadline_cannot_publish_ack() {
         if (row[20] == "4" && row[25] == "15")
           ++acknowledgements;
       TEST_ASSERT_EQUAL_UINT(delay < 2000 ? 1 : 0, acknowledgements);
+      r.finishBound(group, logger);
     }
   }
 }
@@ -467,6 +477,7 @@ void group_route_keeps_shutter_ack_distinct_from_recording() {
   TEST_ASSERT_EQUAL_UINT(0, recording_observed);
   TEST_ASSERT_EQUAL_UINT(0, group.status().recording);
   TEST_ASSERT_TRUE(group.status().peers[0].terminal_failure);
+  r.finishBound(group, logger);
 }
 void identical_unsolicited_encoding_observations_are_each_preserved() {
   Rig r;
@@ -502,37 +513,51 @@ void identical_unsolicited_encoding_observations_are_each_preserved() {
     if (rows[i][20] == "5" && rows[i][23] == "1")
       ++observations;
   TEST_ASSERT_EQUAL_UINT(2, observations);
+  r.finishBound(group, logger);
+}
+static void countGroupCallback(void *context, const RecordingStatus &) {
+  ++*static_cast<unsigned *>(context);
 }
 void composed_session_finishes_camera_after_final_owner_access() {
   Rig r;
-  RecordingManager group(r.manager, r.clock);
+  unsigned group_callbacks = 0;
+  RecordingManager group(r.manager, r.clock, countGroupCallback, &group_callbacks);
   CameraLogSink sink;
-  CameraEventSession session(r.clock, sink, r.adapter, r.manager, group, 42, "fw", "synthetic");
-  TEST_ASSERT_FALSE(session.configurePeer(0, 301, CameraModel::X5));
-  TEST_ASSERT_TRUE(session.configurePeer(0, 301, CameraModel::HERO12_BLACK));
-  TEST_ASSERT_TRUE(session.activate());
-  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
-  for (unsigned i = 0; i < 300; ++i) {
-    session.service();
-    while (r.handled < r.host.commands.size())
-      r.process(r.handled++);
-    ++r.clock.value;
-    session.storage().workerStep();
+  {
+    CameraEventSession session(r.clock, sink, r.adapter, r.manager, group, 42, "fw", "synthetic");
+    TEST_ASSERT_FALSE(session.configurePeer(0, 301, CameraModel::X5));
+    TEST_ASSERT_TRUE(session.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+    TEST_ASSERT_TRUE(session.activate());
+    TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+    for (unsigned i = 0; i < 300; ++i) {
+      session.service();
+      while (r.handled < r.host.commands.size())
+        r.process(r.handled++);
+      ++r.clock.value;
+      session.storage().workerStep();
+    }
+    session.requestStop();
+    session.finishImu();
+    for (unsigned i = 0; i < 500 && !session.stopped(); ++i) {
+      session.service();
+      session.storage().workerStep();
+    }
+    TEST_ASSERT_TRUE(session.stopped());
+    TEST_ASSERT_TRUE(session.storage().health().stopped);
+    TEST_ASSERT_TRUE(session.cameraInbox().stopRequested());
   }
-  session.requestStop();
-  session.finishImu();
-  for (unsigned i = 0; i < 500 && !session.stopped(); ++i) {
-    session.service();
-    session.storage().workerStep();
-  }
-  TEST_ASSERT_TRUE(session.stopped());
-  TEST_ASSERT_TRUE(session.storage().health().stopped);
-  TEST_ASSERT_TRUE(session.cameraInbox().stopRequested());
+  const unsigned stopped_callbacks = group_callbacks;
+  TEST_ASSERT_TRUE(stopped_callbacks > 0);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(stopped_callbacks, group_callbacks);
 }
 void inactive_or_refused_session_closes_storage_without_servicing_independent_adapter() {
   for (bool refused : {false, true}) {
     Rig r;
     RecordingManager group(r.manager, r.clock);
+    unsigned independent_callbacks = 0;
+    RecordingManager independent(r.manager, r.clock, countGroupCallback, &independent_callbacks);
+    r.adapter.attachGroup(independent);
     CameraLogSink sink;
     CameraEventSession session(r.clock, sink, r.adapter, r.manager, group, 42, "fw", "synthetic");
     if (refused)
@@ -549,6 +574,13 @@ void inactive_or_refused_session_closes_storage_without_servicing_independent_ad
     TEST_ASSERT_TRUE(session.storage().health().stopped);
     TEST_ASSERT_EQUAL_UINT(commands, r.host.commands.size());
     TEST_ASSERT_EQUAL_INT(Lifecycle::Connecting, r.manager.state(0)->lifecycle);
+    r.adapter.service();
+    TEST_ASSERT_TRUE(independent_callbacks > 0); // Refused session did not unbind this owner.
+    r.adapter.stop();
+    for (unsigned n = 0; n < 8 && !r.adapter.canDestroy(); ++n)
+      r.adapter.service();
+    TEST_ASSERT_TRUE(r.adapter.canDestroy());
+    r.adapter.detachGroup(&independent);
   }
 }
 void missing_management_service_refuses_pairing() {

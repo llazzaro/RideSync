@@ -64,6 +64,10 @@ public:
   Hero12Adapter &operator=(const Hero12Adapter &) = delete;
   void attach(CameraManager &);
   void attachGroup(RecordingManager &group) { group_ = &group; }
+  void detachGroup(const RecordingManager *expected) {
+    if (group_ == expected)
+      group_ = nullptr;
+  }
   bool start(bool enabled, bool source_qualified);
   bool configurePeer(uint8_t peer, const Hero12Qualification &);
   void service(); // Central faults, profile, manager events, then manager.tick().
