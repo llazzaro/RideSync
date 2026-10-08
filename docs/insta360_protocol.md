@@ -124,7 +124,9 @@ serialized advertisement, which must account for AD lengths, flags, services,
 name placement and the legacy payload limit in the pinned SDK. The
 [October 9 wake-only bench trial](hardware-results/2026-10-09-x5-wake.md)
 transmitted a manufacturer value derived from the observed X5 name; a passive
-Mac scan matched the exact expected value. Camera wake is not yet confirmed.
+Mac scan matched the exact expected value. On an explicitly requested repeat
+with the same settings, the owner confirmed the X5 woke. This is an observed
+bench result with firmware still unrecorded, not a general compatibility claim.
 #9 still needs its actual bounded shared advertising/reconnect route; #22 owns
 physical per-model wake confirmation. Do not add wake data to normal pairing
 or infer recording state from a wake or connection response.
