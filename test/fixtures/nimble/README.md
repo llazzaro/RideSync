@@ -64,3 +64,12 @@ remain removable and preserved.
 
 Duplicated durable target members hiding a different live target member also
 refuse before mutation: target membership must be a durable/live bijection.
+
+Modes83..87 cover identical target duplicates followed by a foreign record in each
+of our-security, peer-security, CCCD, CSFC and RPA. Actual SDK membership selection
+previously erased the foreign key; the backend now refuses before any mutation.
+Modes88..92 retain unique targets with equal foreign duplicates. Modes93..97
+refuse durable target duplicates hiding distinct live target values;98..102
+allow the corresponding bijective distinct targets. Every refusal checks all
+live arrays, durable records and foreign resolving entries unchanged, no SDK
+deletes, no mutation flag and no global Store fault. SDK helper bodies are unchanged.

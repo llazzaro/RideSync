@@ -216,6 +216,28 @@ int main(int argc,char**argv){
   std::swap(rl[1],rl[2]);
  }
  if(scenario==25){sec.peer_addr=target;sec.peer_addr.type=1;populate(1,&sec);}
+ // All five membership-selected schemas: duplicate target, equal foreign,
+ // non-bijective target payloads, then distinct/bijective target controls.
+ if(scenario>=83&&scenario<=102){
+  const unsigned schemas[]={2,0,1,3,5};const unsigned schema=schemas[(scenario-83)%5];const int type=sdk_types[schema];const size_t size=sdk_sizes[schema];auto *records=static_cast<uint8_t*>(reset_sdk_values(type));
+  std::vector<uint8_t> foreign_copy(records,records+size),target_copy(records+size,records+2*size);
+  if(schema<2){auto *f=reinterpret_cast<ble_store_value_sec*>(foreign_copy.data());auto *a=reinterpret_cast<ble_store_value_sec*>(target_copy.data());f->key_size=a->key_size=16;f->ltk_present=a->ltk_present=1;f->ltk[0]=0xaa;a->ltk[0]=0xbb;}
+  const bool target_duplicate=scenario<88;
+  const auto &first=target_duplicate?target_copy:foreign_copy;
+  const auto &last=target_duplicate?foreign_copy:target_copy;
+  std::memcpy(records,first.data(),size);std::memcpy(records+size,first.data(),size);std::memcpy(records+2*size,last.data(),size);*reset_sdk_count(type)=3;
+  if(scenario>=93){
+   std::memcpy(records,target_copy.data(),size);std::memcpy(records+size,target_copy.data(),size);std::memcpy(records+2*size,foreign_copy.data(),size);
+   if(schema<2)reinterpret_cast<ble_store_value_sec*>(records+size)->ltk[0]^=1;
+   else if(schema==2)reinterpret_cast<ble_store_value_cccd*>(records+size)->chr_val_handle+=10;
+   else if(schema==3)reinterpret_cast<ble_store_value_csfc*>(records+size)->csfc[0]^=1;
+   else reinterpret_cast<ble_store_value_rpa_rec*>(records+size)->peer_rpa_addr.val[0]^=1;
+  }
+  const std::string prefix=sdk_prefixes[schema];nvs_entries.erase(std::remove_if(nvs_entries.begin(),nvs_entries.end(),[&](const std::pair<std::string,std::vector<uint8_t>>&e){return e.first.find(prefix)==0;}),nvs_entries.end());
+  for(int i=0;i<3;++i)nvs_entries.push_back({prefix+std::to_string(i+1),std::vector<uint8_t>(records+i*size,records+(i+1)*size)});
+  if(scenario>=93&&scenario<=97){for(auto &entry:nvs_entries)if(entry.first==prefix+"2")std::memcpy(entry.second.data(),records,size);}
+  unrelated[schema]={prefix+((target_duplicate||scenario>=93)?"3":"1"),foreign_copy};if(!target_duplicate&&scenario<93)unrelated.push_back({prefix+"2",foreign_copy});
+ }
  if(scenario==79){auto *records=static_cast<ble_hs_dev_records*>(reset_sdk_values(4));dev=records[1];dev.rand_addr[0]=9;populate(4,&dev);}
  if(scenario==80){auto *records=static_cast<ble_hs_dev_records*>(reset_sdk_values(4));records[0].peer_sec=records[1].peer_sec;std::memcpy(nvs_entries[6].second.data(),&records[0],sizeof dev);}
  if(scenario==81){auto *records=static_cast<ble_hs_dev_records*>(reset_sdk_values(4));dev=records[0];dev.identity_addr[0]=3;dev.rand_addr[0]=9;populate(4,&dev);unrelated.push_back(nvs_entries.back());}
@@ -243,6 +265,8 @@ int main(int argc,char**argv){
  if(scenario==53){BleCommand c;c.phase=BlePhase::Connect;c.identity=id;assert(host.submit(c,link)==0);ble_gap_event e;e.type=BLE_GAP_EVENT_CONNECT;e.connect.conn_handle=10;gap_callbacks[0](&e,gap_args[0]);c.phase=BlePhase::Read;c.connection=10;c.handle=3;assert(host.submit(c,retained)==0);disconnectEvent(0);pump();assert(host.releaseContext(link));}
  if(scenario==13)queue_full=true;
  auto store_before=nvs_entries;
+ std::vector<std::vector<uint8_t>> live_before;
+ for(unsigned schema=0;schema<7;++schema){auto *records=static_cast<uint8_t*>(reset_sdk_values(sdk_types[schema]));live_before.push_back(std::vector<uint8_t>(records,records+*reset_sdk_count(sdk_types[schema])*sdk_sizes[schema]));}
  std::vector<ble_hs_resolv_entry> foreign_resolving;
  for(unsigned i=0;i<5;++i){ble_hs_resolv_entry entry{};if(ridesync_ble_resolv_read(i,&entry)==BLE_HS_ENOENT)break;if(entry.rl_addr_type!=target.type||std::memcmp(entry.rl_identity_addr,target.val,6))foreign_resolving.push_back(entry);}
  auto submitted=host.requestBondReset(id,1,reset_deadline,reset_now);
@@ -327,7 +351,7 @@ int main(int argc,char**argv){
  if(scenario==14||scenario==15||scenario==16||scenario==17||scenario==18||scenario==33||scenario==34||scenario==37){assert(result.outcome==BondOutcome::Refused&&deleted==0);return 0;}
  if(scenario==19||scenario==20||scenario==21||scenario==23||scenario==35||scenario==56){assert(result.outcome==BondOutcome::Indeterminate&&result.mutation&&result.requalification_required);return 0;}
  if(scenario==22||scenario==36||(scenario>=62&&scenario<=64)){assert(result.outcome==BondOutcome::Error&&deleted==0);return 0;}
- if((scenario>=67&&scenario<=72)||scenario==79||scenario==80||scenario==82){assert(result.outcome==BondOutcome::Refused&&!result.mutation&&host.fault()==BleFault::None&&store_before==nvs_entries);for(const auto &entry:foreign_resolving){bool found=false;for(unsigned i=0;i<5;++i){ble_hs_resolv_entry after{};if(ridesync_ble_resolv_read(i,&after)==BLE_HS_ENOENT)break;if(!std::memcmp(&entry,&after,sizeof entry))found=true;}assert(found);}return 0;}
+ if((scenario>=67&&scenario<=72)||scenario==79||scenario==80||scenario==82||(scenario>=83&&scenario<=87)||(scenario>=93&&scenario<=97)){assert(result.outcome==BondOutcome::Refused&&!result.mutation&&host.fault()==BleFault::None&&store_before==nvs_entries&&deleted==0);for(unsigned schema=0;schema<7;++schema){auto *records=static_cast<uint8_t*>(reset_sdk_values(sdk_types[schema]));assert(live_before[schema]==std::vector<uint8_t>(records,records+*reset_sdk_count(sdk_types[schema])*sdk_sizes[schema]));}for(const auto &entry:foreign_resolving){bool found=false;for(unsigned i=0;i<5;++i){ble_hs_resolv_entry after{};if(ridesync_ble_resolv_read(i,&after)==BLE_HS_ENOENT)break;if(!std::memcmp(&entry,&after,sizeof entry))found=true;}assert(found);}return 0;}
  if(scenario==24||scenario==39){assert((result.outcome==BondOutcome::Refused||result.outcome==BondOutcome::Indeterminate)&&deleted==0);return 0;}
  if(scenario>=57&&scenario<=59){for(const auto &entry:unrelated)if(entry.first.find("p_dev_rec_")==0){bool found=false;for(const auto &after:nvs_entries)if(after==entry)found=true;assert(found&&"foreign private record must survive actual SDK helper");}}
  assert(result.outcome==(scenario==0?BondOutcome::Absent:BondOutcome::Removed));
@@ -364,9 +388,10 @@ class PairingResetEsp32(unittest.TestCase):
             subprocess.run(['clang++', '-std=c++11', '-DARDUINO_ARCH_ESP32', '-fsanitize=address,undefined',
                             '-fno-sanitize-recover=all', '-ffunction-sections', '-g', '-O0', '-I', str(temp), '-I', str(ROOT / 'include'),
                             '-I', str(ROOT), str(source), str(ROOT / 'src/pairing_reset.cpp'), str(ROOT/'src/health_supervisor.cpp'), str(temp/'sdk.o'), '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections', '-o', str(binary)], check=True)
-            for scenario in list(range(83)):
+            for scenario in list(range(103)):
                 result = subprocess.run([str(binary),str(scenario)], capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, f'scenario {scenario}: {result.stderr}')
+                if scenario>=83:print(f'membership scenario={scenario} exit={result.returncode}: {result.stderr.strip()}')
             original=sdk_source.replace(patch.PRIVATE_FIXED,patch.PRIVATE_ORIGINAL)
             (temp/'sdk.c').write_text(original)
             subprocess.run(['clang','-fno-common','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-c',str(temp/'sdk.c'),'-o',str(temp/'sdk.o')],check=True)

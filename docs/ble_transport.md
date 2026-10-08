@@ -279,3 +279,11 @@ again after removal. Durable NVS key indices are canonical one based/inclusive;
 RAM bounds stay zero based. Private-device persistence uses the qualified SDK
 member comparison with the correct enclosing record stride, so a later target
 cannot cause an earlier foreign durable key to be erased.
+
+Before mutation, every durable target value must have exactly one matching owned
+live value, and every live target must have one durable counterpart. Equality
+matches the pinned persistence selector: whole security/CCCD/CSFC/RPA values, or
+private `peer_sec` members. Duplicate target membership or non-bijective target
+payloads refuse unchanged, because the SDK's membership selector can otherwise
+fall back to a count and erase a foreign durable key. Equal foreign duplicates
+remain supported, as do distinct target values within the fixed schema bounds.

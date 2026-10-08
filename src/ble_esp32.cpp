@@ -609,7 +609,20 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
               return std::strncmp(a.data(), b.data(), 16) < 0;
             });
   unsigned foreign_count = 0;
-  std::array<unsigned, CONFIG_BT_NIMBLE_MAX_BONDS + 1> private_matches{};
+  // The pinned NVS selector uses byte membership, not multiplicity. A deleted
+  // target value must become absent from RAM, and every durable target member
+  // must map bijectively to an owned live member before any mutation. Foreign
+  // duplicates are harmless: they remain represented throughout target removal.
+  static_assert(CONFIG_BT_NIMBLE_MAX_CCCDS <= 32, "target membership bitmap capacity");
+  std::array<uint32_t, 7> target_matches{};
+  const void *tables[] = {ble_store_config_our_secs,     ble_store_config_peer_secs,
+                          ble_store_config_cccds,        ble_store_config_csfcs,
+                          ble_store_config_local_irks,   ble_store_config_rpa_recs,
+                          ble_rpa_get_peer_dev_records()};
+  const int live_counts[] = {ble_store_config_num_our_secs,     ble_store_config_num_peer_secs,
+                             ble_store_config_num_cccds,        ble_store_config_num_csfcs,
+                             ble_store_config_num_local_irks,   ble_store_config_num_rpa_recs,
+                             ble_rpa_get_num_peer_dev_records()};
   auto digestRecord = [&](unsigned schema, const uint8_t *bytes, size_t length) {
     if (foreign_count == reset_.digests.size())
       return false;
@@ -674,28 +687,36 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
       break;
     }
     if (classification == 1) {
-      if (schema == 6) {
-        // Persistence identifies a missing device record by peer_sec alone.
-        // Its target member must name exactly one owned live record before any
-        // delete, otherwise membership cannot select a safe durable key.
-        const auto &record = *reinterpret_cast<const ble_hs_dev_records *>(reset_.bytes.data());
-        const int total = ble_rpa_get_num_peer_dev_records();
-        const auto *entries = ble_rpa_get_peer_dev_records();
-        unsigned matches = 0, matched_index = 0;
-        if (total < 0 || total > CONFIG_BT_NIMBLE_MAX_BONDS + 1)
-          valid = false;
-        for (int i = 0; valid && i < total; ++i)
-          if (!std::memcmp(&record.peer_sec, &entries[i].peer_sec, sizeof record.peer_sec)) {
-            ++matches;
-            matched_index = unsigned(i);
-            valid = resetClassify(6, &entries[i]) == 1;
-          }
-        if (!valid || matches != 1 || ++private_matches[matched_index] != 1) {
-          reset_.ambiguous = true;
-          valid = false;
-          break;
+      const int total = live_counts[schema];
+      const unsigned bound = schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
+                                         : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0);
+      unsigned matches = 0, matched_index = 0;
+      if (total < 0 || unsigned(total) > bound)
+        valid = false;
+      for (int i = 0; valid && i < total; ++i) {
+        const auto *entry = static_cast<const uint8_t *>(tables[schema]) + i * sizes[schema];
+        const void *durable_member = reset_.bytes.data(), *live_member = entry;
+        size_t member_size = sizes[schema];
+        if (schema == 6) {
+          // Private persistence compares peer_sec, with the corrected enclosing
+          // record stride; every other deleted schema compares its entire value.
+          durable_member = &reinterpret_cast<const ble_hs_dev_records *>(durable_member)->peer_sec;
+          live_member = &reinterpret_cast<const ble_hs_dev_records *>(entry)->peer_sec;
+          member_size = sizeof(ble_hs_peer_sec);
+        }
+        if (!std::memcmp(durable_member, live_member, member_size)) {
+          ++matches;
+          matched_index = unsigned(i);
+          valid = resetClassify(schema, entry) == 1;
         }
       }
+      const uint32_t bit = uint32_t(1) << matched_index;
+      if (!valid || matches != 1 || (target_matches[schema] & bit)) {
+        reset_.ambiguous = true;
+        valid = false;
+        break;
+      }
+      target_matches[schema] |= bit;
       ++target_records;
       continue;
     }
@@ -704,14 +725,6 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
   valid &= finish(foreign);
   foreign_count = 0;
   unsigned live_targets = 0;
-  const void *tables[] = {ble_store_config_our_secs,     ble_store_config_peer_secs,
-                          ble_store_config_cccds,        ble_store_config_csfcs,
-                          ble_store_config_local_irks,   ble_store_config_rpa_recs,
-                          ble_rpa_get_peer_dev_records()};
-  const int live_counts[] = {ble_store_config_num_our_secs,     ble_store_config_num_peer_secs,
-                             ble_store_config_num_cccds,        ble_store_config_num_csfcs,
-                             ble_store_config_num_local_irks,   ble_store_config_num_rpa_recs,
-                             ble_rpa_get_num_peer_dev_records()};
   for (unsigned schema = 0; schema < 7 && valid; ++schema) {
     const unsigned bound = schema == 2 ? CONFIG_BT_NIMBLE_MAX_CCCDS
                                        : CONFIG_BT_NIMBLE_MAX_BONDS + (schema == 6 ? 1 : 0);
@@ -727,7 +740,7 @@ bool Esp32BleHost::resetInventory(std::array<uint8_t, 32> &foreign, unsigned &ta
         reset_.ambiguous = true;
         valid = false;
       } else if (classification == 1) {
-        if (schema == 6 && private_matches[unsigned(n)] != 1) {
+        if (!(target_matches[schema] & (uint32_t(1) << unsigned(n)))) {
           reset_.ambiguous = true;
           valid = false;
           break;

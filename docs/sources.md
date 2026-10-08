@@ -265,3 +265,14 @@ target member, are refused before any deletion. Equal members among unrelated
 foreign records remain admissible when the target member is unique. This guards
 the SDK membership-based durable selection without treating every multi-peer
 store as ambiguous.
+
+The same pre-mutation target bijection applies to the five generic SDK-deleted
+schemas (our-security, peer-security, CCCD, CSFC and RPA), using the selector's
+whole-value byte equality. `get_nvs_db_attribute` checks membership without
+consuming multiplicity and falls back to count when no value is missing; duplicate
+target values can therefore select a foreign durable key after RAM deletion.
+The backend refuses such ambiguity before any mutation, rather than changing the
+generic SDK selector. Equal foreign duplicates remain admissible because they stay
+represented during target deletion. Distinct target values remain supported;
+durable duplicates hiding a different live target value also refuse unchanged.
+Actual-source fixture modes83..102 exercise all five schemas for these four cases.
