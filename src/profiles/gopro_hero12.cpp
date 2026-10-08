@@ -111,6 +111,78 @@ bool Hero12Adapter::configurePeer(uint8_t i, const Hero12Qualification &q) {
 Hero12Fault Hero12Adapter::fault(uint8_t i) const {
   return i < kBlePeers ? peers_[i].fault : Hero12Fault::Capacity;
 }
+Hero12RecoveryState Hero12Adapter::recoveryState(uint8_t i) const {
+  return i < kBlePeers ? recovery_[i].state : Hero12RecoveryState{};
+}
+CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
+                                           Hero12PowerCondition condition) {
+  if (i >= kBlePeers || !manager_ || i >= manager_->size())
+    return CameraError::InvalidPeer;
+  if (!enabled_)
+    return CameraError::Disabled;
+  if (!peers_[i].qualified || !validQualification(peers_[i].qualification))
+    return CameraError::Unsupported;
+  auto &r = recovery_[i];
+  if (r.state.phase == Hero12RecoveryPhase::Pending ||
+      r.state.phase == Hero12RecoveryPhase::Scanning ||
+      r.state.phase == Hero12RecoveryPhase::Connecting ||
+      r.state.phase == Hero12RecoveryPhase::Observing ||
+      r.state.phase == Hero12RecoveryPhase::Starting)
+    return CameraError::Busy;
+  const auto *state = manager_->state(i);
+  if (!state || (state->lifecycle != Lifecycle::Ready && state->lifecycle != Lifecycle::Idle &&
+                 state->lifecycle != Lifecycle::Failed))
+    return CameraError::Busy;
+  r = Recovery{};
+  if (condition == Hero12PowerCondition::PowerRemoved) {
+    r.state.phase = Hero12RecoveryPhase::Unsupported;
+    return CameraError::Unsupported;
+  }
+  r.ensure_recording = ensure_recording;
+  r.deadline = clock_.now() + 140000;
+  r.source_connection = state->token.connection;
+  // A live RideSync link is queried in place; no discovery or replacement link.
+  r.state.phase = state->lifecycle == Lifecycle::Ready ? Hero12RecoveryPhase::Observing
+                                                       : Hero12RecoveryPhase::Pending;
+  return CameraError::None;
+}
+CameraError Hero12Adapter::cancelRecovery(uint8_t i) {
+  if (i >= kBlePeers || !manager_ || i >= manager_->size())
+    return CameraError::InvalidPeer;
+  auto &r = recovery_[i];
+  if (r.state.phase == Hero12RecoveryPhase::Scanning && scan_owner_ == i) {
+    central_.cancelScan();
+    scan_owner_ = kBlePeers;
+  }
+  if ((r.state.phase == Hero12RecoveryPhase::Connecting ||
+       r.state.phase == Hero12RecoveryPhase::Observing ||
+       r.state.phase == Hero12RecoveryPhase::Starting) &&
+      r.operation && manager_->state(i)->token.operation == r.operation &&
+      (manager_->state(i)->lifecycle == Lifecycle::Connecting ||
+       manager_->state(i)->lifecycle == Lifecycle::Operating))
+    manager_->cancel(i);
+  r.state.phase = Hero12RecoveryPhase::Cancelled;
+  return CameraError::None;
+}
+bool Hero12Adapter::hasFea6(const BleEvent &e) {
+  bool found = false;
+  for (size_t offset = 0; offset < e.size;) {
+    const uint8_t length = e.bytes[offset++];
+    if (!length)
+      return found;
+    if (length > e.size - offset)
+      return false;
+    const uint8_t type = e.bytes[offset];
+    if ((type == 0x02 || type == 0x03) && (!(length & 1) || length < 3))
+      return false;
+    if (type == 0x02 || type == 0x03)
+      for (size_t n = offset + 1; n + 1 < offset + length; n += 2)
+        if (e.bytes[n] == 0xa6 && e.bytes[n + 1] == 0xfe)
+          found = true;
+    offset += length;
+  }
+  return found;
+}
 bool Hero12Adapter::begin(size_t index, const CameraConfig &camera, Operation op, Token token) {
   if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::GoPro ||
       camera.model != CameraModel::HERO12_BLACK) {
@@ -167,6 +239,10 @@ void Hero12Adapter::close(size_t index, Token token) {
     retire(index, Hero12Fault::DeliveryUncertain);
 }
 void Hero12Adapter::stop() {
+  if (scan_owner_ < kBlePeers)
+    scan_owner_ = kBlePeers;
+  for (auto &r : recovery_)
+    r.state.phase = Hero12RecoveryPhase::Cancelled;
   for (uint8_t i = 0; i < kBlePeers; ++i)
     if (peers_[i].connecting || peers_[i].ready)
       retire(i, Hero12Fault::Transport);
@@ -536,6 +612,33 @@ void Hero12Adapter::advance(uint8_t i) {
     retire(i, Hero12Fault::DeliveryUncertain);
 }
 void Hero12Adapter::result(const BleResult &r) {
+  if (r.kind == BleResultKind::Advertisement && scan_owner_ < kBlePeers &&
+      r.event.generation == scan_generation_) {
+    auto &recovery = recovery_[scan_owner_];
+    const auto &identity = peers_[scan_owner_].qualification.identity;
+    if (recovery.state.phase == Hero12RecoveryPhase::Scanning &&
+        r.event.identity.type == identity.type && r.event.identity.address == identity.address &&
+        hasFea6(r.event)) {
+      recovery.observed_advertisement = true;
+      central_.cancelScan();
+    }
+    return;
+  }
+  if (r.kind == BleResultKind::ScanComplete && scan_owner_ < kBlePeers &&
+      r.event.generation == scan_generation_) {
+    auto &recovery = recovery_[scan_owner_];
+    scan_owner_ = kBlePeers;
+    if (recovery.state.phase == Hero12RecoveryPhase::Scanning) {
+      if (recovery.observed_advertisement)
+        recovery.state.phase = Hero12RecoveryPhase::Connecting;
+      else if (r.fault == BleFault::Host || r.fault == BleFault::Overflow)
+        recovery.state.phase = Hero12RecoveryPhase::Failed;
+      else
+        recovery.state.phase = recovery.state.scans == 2 ? Hero12RecoveryPhase::Unavailable
+                                                         : Hero12RecoveryPhase::Pending;
+    }
+    return;
+  }
   const uint8_t i = r.event.peer;
   if (i >= kBlePeers)
     return;
@@ -620,6 +723,120 @@ void Hero12Adapter::result(const BleResult &r) {
     }
   }
 }
+void Hero12Adapter::advanceRecovery() {
+  for (uint8_t i = 0; i < kBlePeers; ++i) {
+    auto &r = recovery_[i];
+    const auto phase = r.state.phase;
+    if (phase != Hero12RecoveryPhase::Pending && phase != Hero12RecoveryPhase::Scanning &&
+        phase != Hero12RecoveryPhase::Connecting && phase != Hero12RecoveryPhase::Observing &&
+        phase != Hero12RecoveryPhase::Starting)
+      continue;
+    if (reached(clock_.now(), r.deadline)) {
+      cancelRecovery(i);
+      r.state.phase = Hero12RecoveryPhase::Timeout;
+      continue;
+    }
+    const auto *state = manager_->state(i);
+    if (!r.operation && phase != Hero12RecoveryPhase::Starting &&
+        state->token.connection != r.source_connection) {
+      cancelRecovery(i);
+      r.state.phase = Hero12RecoveryPhase::Failed;
+      continue;
+    }
+    if (phase == Hero12RecoveryPhase::Connecting) {
+      if (!r.operation) {
+        if (manager_->request(i, Operation::Connect) != CameraError::None) {
+          r.state.phase = Hero12RecoveryPhase::Failed;
+          continue;
+        }
+        state = manager_->state(i);
+        r.operation = state->token.operation;
+        r.connection = state->token.connection;
+      } else if (state->token.connection != r.connection || state->token.operation != r.operation ||
+                 state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed) {
+        r.state.phase =
+            peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
+                ? Hero12RecoveryPhase::Timeout
+                : Hero12RecoveryPhase::Failed;
+      } else if (state->lifecycle == Lifecycle::Ready) {
+        if (!state->has_observation) {
+          r.state.phase = Hero12RecoveryPhase::Unavailable;
+        } else if (!r.ensure_recording) {
+          r.state.phase = Hero12RecoveryPhase::Ready;
+        } else if (state->observed == RecordingState::Recording) {
+          r.state.phase = Hero12RecoveryPhase::Recording;
+        } else {
+          r.state.phase = Hero12RecoveryPhase::Starting;
+          r.operation = 0;
+        }
+      }
+    } else if (phase == Hero12RecoveryPhase::Observing) {
+      if (!r.operation) {
+        if (manager_->request(i, Operation::Query) != CameraError::None) {
+          r.state.phase = Hero12RecoveryPhase::Failed;
+          continue;
+        }
+        r.operation = manager_->state(i)->token.operation;
+        r.connection = manager_->state(i)->token.connection;
+      } else if (state->token.connection != r.connection || state->token.operation != r.operation ||
+                 state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed) {
+        r.state.phase =
+            peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
+                ? Hero12RecoveryPhase::Timeout
+                : Hero12RecoveryPhase::Failed;
+      } else if (state->lifecycle == Lifecycle::Ready && state->token.operation == r.operation) {
+        if (!state->has_observation || state->observed == RecordingState::Unknown)
+          r.state.phase = Hero12RecoveryPhase::Unavailable;
+        else if (!r.ensure_recording)
+          r.state.phase = Hero12RecoveryPhase::Ready;
+        else if (state->observed == RecordingState::Recording)
+          r.state.phase = Hero12RecoveryPhase::Recording;
+        else {
+          r.state.phase = Hero12RecoveryPhase::Starting;
+          r.operation = 0;
+        }
+      }
+    } else if (phase == Hero12RecoveryPhase::Starting) {
+      if (!r.operation) {
+        if (manager_->request(i, Operation::Start) != CameraError::None) {
+          r.state.phase = Hero12RecoveryPhase::Failed;
+          continue;
+        }
+        r.operation = manager_->state(i)->token.operation;
+        r.connection = manager_->state(i)->token.connection;
+      } else if (state->token.connection != r.connection || state->token.operation != r.operation ||
+                 state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed) {
+        r.state.phase =
+            peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
+                ? Hero12RecoveryPhase::Timeout
+                : Hero12RecoveryPhase::Failed;
+      } else if (state->lifecycle == Lifecycle::Ready && state->token.operation == r.operation) {
+        r.state.phase = state->has_observation && state->observed == RecordingState::Recording
+                            ? Hero12RecoveryPhase::Recording
+                            : Hero12RecoveryPhase::Unavailable;
+      }
+    }
+  }
+  if (scan_owner_ == kBlePeers)
+    for (uint8_t n = 0; n < kBlePeers; ++n) {
+      const uint8_t i = (scan_cursor_ + n) % kBlePeers;
+      auto &r = recovery_[i];
+      if (r.state.phase != Hero12RecoveryPhase::Pending)
+        continue;
+      const auto link = central_.phase(i);
+      if (link != BlePhase::Empty && link != BlePhase::Closed)
+        continue; // A retired connection must release its host lease before rediscovery.
+      if (central_.scan(3000, clock_.now())) {
+        r.state.phase = Hero12RecoveryPhase::Scanning;
+        ++r.state.scans;
+        r.observed_advertisement = false;
+        scan_owner_ = i;
+        scan_generation_ = central_.scanGeneration();
+        scan_cursor_ = (i + 1) % kBlePeers;
+      }
+      break;
+    }
+}
 void Hero12Adapter::service() {
   central_.service(clock_.now());
   for (uint8_t n = 0; n < kBlePeers; ++n) {
@@ -647,5 +864,7 @@ void Hero12Adapter::service() {
   drain(); // Connection-scoped Disconnected precedes every manager tick.
   if (manager_)
     manager_->tick();
+  if (manager_ && enabled_)
+    advanceRecovery();
 }
 } // namespace ridesync

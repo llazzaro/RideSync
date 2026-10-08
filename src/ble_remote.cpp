@@ -144,6 +144,14 @@ bool BleCentral::scan(uint32_t duration, uint32_t now) {
   }
   return true;
 }
+bool BleCentral::cancelScan() {
+  if (!scanning_ || scan_.sealed.load() || scan_.terminal.load())
+    return false;
+  scan_.sealed.store(true);
+  scan_.fault.store(BleFault::Stopped);
+  cancelScanOnce();
+  return true;
+}
 bool BleCentral::admissionOpen(uint8_t i) const {
   if (!enabled_ || stopping_ || startup_failed_ || i >= kBlePeers ||
       host_.fault() != BleFault::None)

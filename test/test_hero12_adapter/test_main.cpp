@@ -89,6 +89,11 @@ struct ScriptHost : SilentHost {
     deliver(ctx, e, true);
     return 0;
   }
+  int cancelScan(BleContext &ctx) override {
+    ctx.terminal.store(true);
+    quiet.push_back(&ctx);
+    return 0;
+  }
   bool quiescent(const BleContext &ctx) const override {
     return ctx.terminal.load() && std::find(quiet.begin(), quiet.end(), &ctx) != quiet.end();
   }
@@ -672,6 +677,176 @@ void wrong_register_element_cannot_complete_setup() {
     TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size());
   }
 }
+void recovery_without_advertising_is_bounded_and_power_removal_is_unsupported() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT(
+      (int)CameraError::Unsupported,
+      (int)r.adapter.requestRecovery(0, true, Hero12PowerCondition::PowerRemoved));
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Unsupported,
+                        (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  for (unsigned attempt = 0; attempt < 2; ++attempt) {
+    r.adapter.service();
+    auto &scan = *r.host.contexts.back();
+    TEST_ASSERT_EQUAL_INT((int)BlePhase::Scan, (int)scan.phase);
+    BleEvent done;
+    done.kind = BleEventKind::ScanComplete;
+    r.host.deliver(scan, done, true);
+    r.adapter.service();
+  }
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Unavailable,
+                        (int)r.adapter.recoveryState(0).phase);
+  for (const auto &c : r.host.commands)
+    TEST_ASSERT_EQUAL_INT((int)BlePhase::Scan, (int)c.phase);
+}
+void recovery_connects_only_matching_fea6_and_records_after_observation() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.adapter.service();
+  auto &scan = *r.host.contexts.back();
+  BleEvent unrelated;
+  unrelated.kind = BleEventKind::Advertisement;
+  unrelated.identity.type = IdentityType::Public;
+  unrelated.identity.address[0] = 1;
+  unrelated.size = 4;
+  unrelated.bytes = {{3, 3, 0x0f, 0x18}};
+  r.host.deliver(scan, unrelated);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning, (int)r.adapter.recoveryState(0).phase);
+  unrelated.size = 9;
+  unrelated.bytes = {{4, 3, 0xa6, 0xfe, 0xff, 3, 3, 0xa6, 0xfe}};
+  r.host.deliver(scan, unrelated);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning, (int)r.adapter.recoveryState(0).phase);
+  unrelated.size = 4;
+  unrelated.bytes = {{3, 3, 0xa6, 0xfe}};
+  unrelated.identity.type = IdentityType::UnresolvedPrivate;
+  r.host.deliver(scan, unrelated);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning, (int)r.adapter.recoveryState(0).phase);
+  unrelated.identity.type = IdentityType::Public;
+  r.host.deliver(scan, unrelated);
+  r.adapter.service();
+  r.pump();
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Recording, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)RecordingState::Recording, (int)r.manager.state(0)->observed);
+  unsigned shutter_on = 0;
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3 && c.bytes[2] == 1 && c.bytes[4] == 1)
+      ++shutter_on;
+  TEST_ASSERT_EQUAL_UINT(1, shutter_on);
+}
+void recovery_on_existing_recording_link_queries_without_scan_or_shutter() {
+  Rig r;
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  const auto commands_before = r.host.commands.size();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Recording, (int)r.adapter.recoveryState(0).phase);
+  for (size_t i = commands_before; i < r.host.commands.size(); ++i)
+    if (r.host.commands[i].phase == BlePhase::Write)
+      TEST_ASSERT_FALSE(r.host.commands[i].handle == 3 && r.host.commands[i].bytes[2] == 1);
+}
+void cancelled_recovery_ignores_late_advertisement_and_preserves_other_link() {
+  Rig r(Hero12Adapter::managerPolicy(), 2);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(1, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.adapter.service();
+  auto &scan = *r.host.contexts.back();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.cancelRecovery(0));
+  BleEvent late;
+  late.kind = BleEventKind::Advertisement;
+  late.identity.type = IdentityType::Public;
+  late.identity.address[0] = 1;
+  late.size = 4;
+  late.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.host.deliver(scan, late);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Cancelled, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Ready, (int)r.manager.state(1)->lifecycle);
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Connect)
+      TEST_ASSERT_TRUE(c.identity.address[0] != 1);
+}
+void recovery_connection_readiness_timeout_is_reported_without_rec() {
+  Rig r;
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.adapter.service();
+  auto &scan = *r.host.contexts.back();
+  BleEvent ad;
+  ad.kind = BleEventKind::Advertisement;
+  ad.identity.type = IdentityType::Public;
+  ad.identity.address[0] = 1;
+  ad.size = 4;
+  ad.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.host.deliver(scan, ad);
+  r.adapter.service();
+  r.pump(100);
+  r.clock.value += 2001;
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Timeout, (int)r.adapter.recoveryState(0).phase);
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3)
+      TEST_ASSERT_TRUE(c.bytes[2] != 1);
+}
+void recovery_claim_refusal_never_replays_rec() {
+  Rig r;
+  r.host.reject_claim = true;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.adapter.service();
+  auto &scan = *r.host.contexts.back();
+  BleEvent ad;
+  ad.kind = BleEventKind::Advertisement;
+  ad.identity.type = IdentityType::Public;
+  ad.identity.address[0] = 1;
+  ad.size = 4;
+  ad.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.host.deliver(scan, ad);
+  r.adapter.service();
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Failed, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)Hero12Fault::SetupRejected, (int)r.adapter.fault(0));
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3)
+      TEST_ASSERT_TRUE(c.bytes[2] != 1);
+}
+void recovery_scans_pending_peers_fairly_after_absence() {
+  Rig r(Hero12Adapter::managerPolicy(), 2);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, false));
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(1, false));
+  r.adapter.service();
+  BleEvent done;
+  done.kind = BleEventKind::ScanComplete;
+  r.host.deliver(*r.host.contexts.back(), done, true);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning, (int)r.adapter.recoveryState(1).phase);
+  TEST_ASSERT_EQUAL_UINT8(1, r.adapter.recoveryState(0).scans);
+  TEST_ASSERT_EQUAL_UINT8(1, r.adapter.recoveryState(1).scans);
+}
+void recovery_does_not_connect_after_manager_generation_reset() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.adapter.service();
+  auto &scan = *r.host.contexts.back();
+  r.manager.reset();
+  BleEvent late;
+  late.kind = BleEventKind::Advertisement;
+  late.identity.type = IdentityType::Public;
+  late.identity.address[0] = 1;
+  late.size = 4;
+  late.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.host.deliver(scan, late);
+  r.adapter.service();
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Failed, (int)r.adapter.recoveryState(0).phase);
+  for (const auto &c : r.host.commands)
+    TEST_ASSERT_TRUE(c.phase != BlePhase::Connect);
+}
 int main() {
   UNITY_BEGIN();
   RUN_TEST(default_disabled_never_starts_host_or_admits_connect);
@@ -699,5 +874,13 @@ int main() {
   RUN_TEST(wrong_route_or_missing_requested_status_cannot_complete_transaction);
   RUN_TEST(empty_register_ack_cannot_complete_setup);
   RUN_TEST(wrong_register_element_cannot_complete_setup);
+  RUN_TEST(recovery_without_advertising_is_bounded_and_power_removal_is_unsupported);
+  RUN_TEST(recovery_connects_only_matching_fea6_and_records_after_observation);
+  RUN_TEST(recovery_on_existing_recording_link_queries_without_scan_or_shutter);
+  RUN_TEST(cancelled_recovery_ignores_late_advertisement_and_preserves_other_link);
+  RUN_TEST(recovery_connection_readiness_timeout_is_reported_without_rec);
+  RUN_TEST(recovery_claim_refusal_never_replays_rec);
+  RUN_TEST(recovery_scans_pending_peers_fairly_after_absence);
+  RUN_TEST(recovery_does_not_connect_after_manager_generation_reset);
   return UNITY_END();
 }

@@ -174,6 +174,9 @@ public:
   bool begin(bool enabled, bool source_qualified, uint32_t now);
   bool connect(uint8_t peer, uint32_t generation, const BondIdentity &, const BleProfileSpec &);
   bool scan(uint32_t duration_ms, uint32_t now);
+  // Cancels only the shared discovery lease; existing peer links remain open.
+  // The lease is reusable only after its terminal callback and host barrier.
+  bool cancelScan();
   bool read(uint8_t peer, uint8_t endpoint, uint32_t now);
   bool write(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now);
   void disconnect(uint8_t peer);
@@ -184,6 +187,7 @@ public:
   int error(uint8_t peer) const;
   // Result of the single cancellation attempt; retained until the next scan.
   int scanCancelError() const { return scan_cancel_error_; }
+  uint32_t scanGeneration() const { return scan_.generation; }
   bool admissionOpen(uint8_t peer) const;
   bool stopped() const { return stopping_; }
   bool canDestroy() const; // All callbacks retired/quiescent; caller must check.

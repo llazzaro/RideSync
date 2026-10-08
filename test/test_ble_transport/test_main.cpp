@@ -778,6 +778,28 @@ void failed_scan_cancellation_is_submitted_once_and_cleanup_stays_quarantined() 
     TEST_ASSERT_TRUE(owner.canDestroy());
   }
 }
+void scoped_scan_cancel_keeps_existing_link_and_waits_for_release() {
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  ready(h, owner);
+  TEST_ASSERT_TRUE(owner.scan(100, 10));
+  h.allow_release = false;
+  TEST_ASSERT_TRUE(owner.cancelScan());
+  TEST_ASSERT_FALSE(owner.cancelScan());
+  owner.service(11);
+  TEST_ASSERT_EQUAL(1, h.scan_cancellations);
+  TEST_ASSERT_FALSE(owner.scan(100, 12));
+  TEST_ASSERT_TRUE(owner.admissionOpen(0));
+  h.allow_release = true;
+  owner.service(13);
+  TEST_ASSERT_TRUE(owner.scan(100, 14));
+  owner.stop();
+  owner.service(15);
+  closed(h, owner, 0, 16);
+  TEST_ASSERT_TRUE(owner.canDestroy());
+}
 void scan_completion_at_absolute_deadline_loses_to_timeout_even_if_terminal() {
   for (uint32_t lag = 0; lag < 2; ++lag) {
     FakeHost h;
@@ -840,6 +862,7 @@ int main() {
   RUN_TEST(peer_failure_reports_device_health_only_after_a_completed_owner_pass);
   RUN_TEST(later_security_loss_retires_ready_and_active_links_without_restarting_discovery);
   RUN_TEST(failed_scan_cancellation_is_submitted_once_and_cleanup_stays_quarantined);
+  RUN_TEST(scoped_scan_cancel_keeps_existing_link_and_waits_for_release);
   RUN_TEST(scan_completion_at_absolute_deadline_loses_to_timeout_even_if_terminal);
   return UNITY_END();
 }
