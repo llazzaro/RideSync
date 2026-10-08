@@ -90,7 +90,8 @@ start #21 from assumptions; resume this protocol when hardware is available.
 manager, codec and shared central using a deterministic fake host. It covers
 synthetic pairing/control/identity/status setup, missing Management/CCCD,
 Busy gating, Encoding confirmation, dropped shutter ACK, fragmentation,
-oversized notifications and fragment expiry.
+oversized notifications and fragment expiry. It also rejects empty or wrong
+status elements in all three successful Register replies.
 The fake packets are authored from published protocol structure and are not
 HERO12 captures. `pio run -e hero12_adapter_compile` links the opt-in ESP32
 composition against the pinned real backend without starting BLE. It proves

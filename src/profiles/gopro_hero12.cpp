@@ -405,6 +405,10 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
         return; // A same-ID query without its requested status cannot complete.
       if (p.step == Step::RegisterBusy || p.step == Step::RegisterEncoding ||
           p.step == Step::RegisterReady) {
+        if ((p.expected_status == 8 && !r.busy_known) ||
+            (p.expected_status == 10 && !r.encoding_known) ||
+            (p.expected_status == 82 && !r.ready_known))
+          return; // Successful Register must echo the requested status element.
         if ((r.busy_known && p.expected_status != 8) ||
             (r.encoding_known && p.expected_status != 10) ||
             (r.ready_known && p.expected_status != 82))

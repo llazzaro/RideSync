@@ -149,8 +149,10 @@ store refusal; the adapter cannot bypass those checks.
 On each connection the shared central discovers FEA6 and GP-0090, checks eight
 endpoint properties and reads back all four response CCCDs after subscribing.
 The adapter then sends Management pairing-finish, Command external-control
-claim, bounded Hardware Info readiness polling/API, three status registrations and fresh Busy, Encoding,
-Ready queries. ATT completion, setup protobuf success 1, classic ACK 0,
+claim, bounded Hardware Info readiness polling/API, three status registrations
+and fresh Busy, Encoding, Ready queries. Each successful Register reply must
+contain the requested status ID, one-byte length and boolean value; `53 00`
+alone cannot establish registration. ATT completion, setup protobuf success 1, classic ACK 0,
 camera Ready and observed Encoding remain separate facts. Setup ACKs never
 become recording observations. A Start queries fresh Encoding, Busy and Ready;
 if stopped/available it loads video mode, sends explicit shutter on, then

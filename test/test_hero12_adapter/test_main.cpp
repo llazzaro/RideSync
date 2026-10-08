@@ -67,6 +67,7 @@ struct ScriptHost : SilentHost {
   uint8_t hardware_model = 62, api_major = 1;
   bool reject_pair = false, wrong_pair_route = false, wrong_query_status = false;
   bool fragment_hardware = false;
+  uint8_t empty_register_target = 0, wrong_register_target = 0;
   BleBondAdmission bond;
   ScriptHost() {
     bond.stack_ready = bond.restore_verified = bond.refusal_installed = true;
@@ -255,7 +256,14 @@ struct Rig {
       } else if (c.handle == 15) {
         notify_handle = 18;
         if (payload[0] == 0x53)
-          reply = {0x53, 0};
+          reply = host.empty_register_target == payload[1]
+                      ? std::vector<uint8_t>{0x53, 0}
+                      : std::vector<uint8_t>{
+                            0x53, 0,
+                            static_cast<uint8_t>(host.wrong_register_target == payload[1]
+                                                     ? (payload[1] == 8 ? 10 : 8)
+                                                     : payload[1]),
+                            1, 1};
         else
           reply = {0x13, 0, static_cast<uint8_t>(host.wrong_query_status ? 82 : payload[1]), 1,
                    static_cast<uint8_t>(payload[1] == 10   ? host.encoding
@@ -590,6 +598,46 @@ void wrong_route_or_missing_requested_status_cannot_complete_transaction() {
     TEST_ASSERT_EQUAL_INT((int)Lifecycle::Idle, (int)r.manager.state(0)->lifecycle);
   }
 }
+void empty_register_ack_cannot_complete_setup() {
+  for (uint8_t target : {uint8_t(8), uint8_t(10), uint8_t(82)}) {
+    RetryPolicy policy = Hero12Adapter::managerPolicy();
+    policy.max_attempts = 3;
+    Rig r(policy);
+    r.host.empty_register_target = target;
+    TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+    r.pump(100);
+    TEST_ASSERT_EQUAL_INT((int)Lifecycle::Connecting, (int)r.manager.state(0)->lifecycle);
+    const size_t sent = r.host.commands.size();
+    r.clock.value += 2001;
+    r.adapter.service();
+    r.clock.value += 1000;
+    r.adapter.service();
+    TEST_ASSERT_EQUAL_INT((int)Lifecycle::Idle, (int)r.manager.state(0)->lifecycle);
+    TEST_ASSERT_EQUAL_INT((int)CapabilityState::Unknown,
+                          (int)r.manager.state(0)->capabilities.start);
+    TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size());
+  }
+}
+void wrong_register_element_cannot_complete_setup() {
+  for (uint8_t target : {uint8_t(8), uint8_t(10), uint8_t(82)}) {
+    RetryPolicy policy = Hero12Adapter::managerPolicy();
+    policy.max_attempts = 3;
+    Rig r(policy);
+    r.host.wrong_register_target = target;
+    TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+    r.pump(100);
+    TEST_ASSERT_EQUAL_INT((int)Lifecycle::Connecting, (int)r.manager.state(0)->lifecycle);
+    const size_t sent = r.host.commands.size();
+    r.clock.value += 2001;
+    r.adapter.service();
+    r.clock.value += 1000;
+    r.adapter.service();
+    TEST_ASSERT_EQUAL_INT((int)Lifecycle::Idle, (int)r.manager.state(0)->lifecycle);
+    TEST_ASSERT_EQUAL_INT((int)CapabilityState::Unknown,
+                          (int)r.manager.state(0)->capabilities.start);
+    TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size());
+  }
+}
 int main() {
   UNITY_BEGIN();
   RUN_TEST(default_disabled_never_starts_host_or_admits_connect);
@@ -614,5 +662,7 @@ int main() {
   RUN_TEST(cancellation_retires_query_and_discards_late_same_id_reply);
   RUN_TEST(setup_and_keepalive_deadlines_survive_millis_rollover);
   RUN_TEST(wrong_route_or_missing_requested_status_cannot_complete_transaction);
+  RUN_TEST(empty_register_ack_cannot_complete_setup);
+  RUN_TEST(wrong_register_element_cannot_complete_setup);
   return UNITY_END();
 }
