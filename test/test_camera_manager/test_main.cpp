@@ -503,8 +503,33 @@ void command_observations_reject_retired_operation_generations() {
   m.reset();
   TEST_ASSERT_FALSE(m.event(persistent));
 }
+void target_maintenance_rejects_late_observation_and_commands() {
+  FakeClock clock;
+  FakeTransport transport;
+  CameraManager m(clock, transport);
+  TEST_ASSERT_TRUE(m.configure(config()).ok());
+  connect(m, 0);
+  connect(m, 1);
+  TEST_ASSERT_EQUAL((int)CameraError::None, (int)m.request(0, Operation::Start));
+  TEST_ASSERT_EQUAL((int)CameraError::None, (int)m.request(0, Operation::Stop));
+  const auto old = m.state(0)->token;
+  TEST_ASSERT_EQUAL((int)CameraError::None, (int)m.seal(0));
+  Event late(0, old.connection, EventKind::RecordingObserved);
+  late.recording = RecordingState::Recording;
+  TEST_ASSERT_FALSE_MESSAGE(m.event(late), "maintenance must reject old connection observations");
+  TEST_ASSERT_FALSE(m.state(0)->has_observation);
+  TEST_ASSERT_EQUAL((int)RecordingState::Unknown, (int)m.state(0)->desired);
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)m.request(0, Operation::Connect));
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)m.request(0, Operation::Start));
+  TEST_ASSERT_EQUAL((int)CameraError::None, (int)m.request(1, Operation::Query));
+  m.reset();
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)m.request(0, Operation::Connect));
+  TEST_ASSERT_TRUE(m.configure(config()).ok());
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)m.request(0, Operation::Connect));
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(target_maintenance_rejects_late_observation_and_commands);
   RUN_TEST(command_observations_reject_retired_operation_generations);
   RUN_TEST(captured_connection_events_survive_ready_cancel);
   RUN_TEST(captured_disconnect_during_timeout_prevents_lost_link_retry);

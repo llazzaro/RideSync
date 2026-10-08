@@ -1,6 +1,7 @@
 #include "application_startup.h"
 #include "health_supervisor.h"
 #include "nvs_boot_guard.h"
+#include "pairing_proof_esp32.h"
 #include "status_led.h"
 #include <Arduino.h>
 #include <cstring>
@@ -50,10 +51,12 @@ ApplicationWorkers *workers = nullptr;
 bool policy_fixed = false, workers_launched = false;
 SettingsSnapshot received_settings; // loop-only scratch; no large loop stack envelope
 void configTask(void *) {
+  pairingProofMaintenance().beginOwner(); // Existing exclusive NVS owner, before publication.
   config_bootstrap->start(safe_mode.load(), config_store.allowed());
   TickType_t next = xTaskGetTickCount();
   for (;;) {
     config_bootstrap->service(millis(), safe_mode.load(), config_store.allowed());
+    pairingProofMaintenance().service();
     vTaskDelayUntil(&next, pdMS_TO_TICKS(100));
   }
 }

@@ -116,7 +116,7 @@ static int ble_gap_conn_active(){return gap_connect;}
 struct ble_gap_conn_desc;
 static int ble_gap_conn_find_by_addr(const ble_addr_t*,ble_gap_conn_desc*);
 static ble_hs_resolv_entry *ble_hs_resolv_list_find(uint8_t*){return nullptr;}
-static int ridesync_ble_resolv_read(unsigned,ble_hs_resolv_entry*){return BLE_HS_ENOENT;}
+extern "C" inline int ridesync_ble_resolv_read(unsigned,ble_hs_resolv_entry*){return BLE_HS_ENOENT;}
 static int ble_hs_resolv_list_rmv(uint8_t,uint8_t*){return BLE_HS_ENOENT;}
 static int ble_rpa_remove_peer_dev_rec(ble_hs_dev_records*){return 0;}
 
@@ -264,22 +264,34 @@ static int ble_gattc_write_flat(uint16_t,uint16_t,const void*,uint16_t,int(*cb)(
 using nvs_handle_t=unsigned;
 using nvs_iterator_t=void*;
 #define NVS_READONLY 0
+#define NVS_READWRITE 1
 #define NVS_TYPE_ANY 0
 #define NVS_TYPE_BLOB 1
 struct nvs_entry_info_t { int type; char key[16]; };
+static std::vector<uint8_t> proof_marker;
+static int proof_open_error=0,proof_read_error=0,proof_set_error=0,proof_commit_error=0;
+static unsigned proof_reads=0,proof_sets=0,proof_commits=0,proof_closes=0;
+static bool proof_readback_bad=false;
+static std::function<void()> proof_set_hook,proof_commit_hook,proof_read_hook,proof_close_hook;
 static int nvs_error=ESP_ERR_NVS_NOT_FOUND;
-static int nvs_open(const char*,int,nvs_handle_t*p){*p=1;return nvs_entries.empty()?nvs_error:0;}
+static int nvs_open(const char*name,int mode,nvs_handle_t*p){
+ if(!std::strcmp(name,"ridesync_maint")){*p=2;if(proof_open_error)return proof_open_error;return !mode&&proof_marker.empty()?ESP_ERR_NVS_NOT_FOUND:0;}
+ *p=1;return nvs_entries.empty()?nvs_error:0;
+}
 static nvs_iterator_t nvs_entry_find(const char*,const char*,int){return nvs_entries.empty()?nullptr:reinterpret_cast<void*>(1);}
 static void nvs_entry_info(void*it,nvs_entry_info_t*info){info->type=NVS_TYPE_BLOB;std::strncpy(info->key,nvs_entries[reinterpret_cast<uintptr_t>(it)-1].first.c_str(),16);}
 static nvs_iterator_t nvs_entry_next(void*it){auto next=reinterpret_cast<uintptr_t>(it)+1;return next>nvs_entries.size()?nullptr:reinterpret_cast<void*>(next);}
 static void nvs_release_iterator(void*){}
-static int nvs_get_blob(unsigned,const char*name,void*value,size_t*size){
+static int nvs_get_blob(unsigned handle,const char*name,void*value,size_t*size){
+ if(handle==2){++proof_reads;auto hook=proof_read_hook;if(hook)hook();if(proof_read_error)return proof_read_error;if(proof_marker.empty())return ESP_ERR_NVS_NOT_FOUND;if(*size<proof_marker.size())return 99;if(value)std::memcpy(value,proof_marker.data(),proof_marker.size());*size=proof_marker.size();if(proof_readback_bad&&value)static_cast<uint8_t*>(value)[0]^=1;return 0;}
  for(auto &entry:nvs_entries)if(entry.first==name){
   if(*size<entry.second.size())return 99;
   std::memcpy(value,entry.second.data(),entry.second.size());*size=entry.second.size();return 0;
  }return ESP_ERR_NVS_NOT_FOUND;
 }
-static void nvs_close(unsigned){}
+static int nvs_set_blob(unsigned h,const char*,const void*value,size_t size){assert(h==2);++proof_sets;proof_marker.assign(static_cast<const uint8_t*>(value),static_cast<const uint8_t*>(value)+size);auto hook=proof_set_hook;if(hook)hook();return proof_set_error;}
+static int nvs_commit(unsigned h){assert(h==2);++proof_commits;auto hook=proof_commit_hook;if(hook)hook();return proof_commit_error;}
+static void nvs_close(unsigned h){if(h==2){++proof_closes;auto hook=proof_close_hook;if(hook)hook();}}
 // SHA library is checked by real SDK compile; this deterministic boundary double
 // lets wrong snapshot/readback admission be tested without platform crypto.
 struct mbedtls_sha256_context { uint8_t hash[32]{}; };
@@ -295,6 +307,7 @@ HARNESS = r'''
 static ridesync::NvsBootStatus boot_status;
 namespace ridesync { NvsBootStatus nvsBootStatus(){return boot_status;} }
 #include "src/ble_esp32.cpp"
+#include "src/pairing_proof_esp32.cpp"
 using namespace ridesync;
 struct Receiver:BleCallbacks { unsigned copies=0; BleEvent latest;
  void copied(BleContext &ctx,BleEvent e) override {++copies;latest=e;
@@ -304,6 +317,7 @@ int main(int argc,char**argv){
  int scenario=argc>1?std::atoi(argv[1]):0;
  auto &host=Esp32BleHost::instance();
  boot_status.init_observed=true;
+ if(scenario!=24)pairingProofMaintenance().beginOwner();
  if(scenario==0){
   assert(host.start(false,true)==BleHostState::Disabled);
   assert(host.start(true,false)==BleHostState::Disabled);
@@ -335,6 +349,7 @@ int main(int argc,char**argv){
  if(scenario==4) readback_error=79;
  if(scenario==5) task_error=1;
  auto state=host.start(true,true);
+ if(scenario==24){assert(state==BleHostState::Failed&&controller_init==0&&"pending proof owner must refuse before SDK init");return 0;}
  if(scenario==12||scenario==14||scenario==15||scenario==16||scenario==18){
   assert(state==BleHostState::Failed&&host.fault()==BleFault::Store&&deleted==0);
   assert(create_tasks==0);return 0;
@@ -452,6 +467,6 @@ class BleEsp32(unittest.TestCase):
                             "-fno-sanitize-recover=all", "-g", "-O0", "-I", str(temp), "-I", str(ROOT / "include"),
                             "-I", str(ROOT), str(temp / "harness.cpp"), str(ROOT / "src/pairing_reset.cpp"),
                             "-o", str(binary)], check=True)
-            for scenario in range(24):
+            for scenario in range(25):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")

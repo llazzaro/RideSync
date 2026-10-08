@@ -1828,8 +1828,32 @@ void composed_pass_publishes_group_once_after_all_transport_events() {
   TEST_ASSERT_EQUAL_UINT32(advances + 1, group.advancements());
   TEST_ASSERT_EQUAL_UINT32(ticks + 1, r.manager.ticks());
 }
+void maintenance_retires_actual_target_context_and_keeps_foreign_ready() {
+  Rig r(Hero12Adapter::managerPolicy(), 2);
+  r.manager.request(0, Operation::Connect);
+  r.manager.request(1, Operation::Connect);
+  r.pump();
+  TEST_ASSERT_TRUE(r.adapter.commandReady(0));
+  TEST_ASSERT_TRUE(r.adapter.commandReady(1));
+  auto *held = r.links[0];
+  r.host.held = held;
+  TEST_ASSERT_TRUE(r.adapter.sealForMaintenance(0));
+  TEST_ASSERT_FALSE_MESSAGE(r.adapter.commandReady(0),
+                            "maintenance must retire actual adapter link");
+  r.adapter.service();
+  TEST_ASSERT_FALSE(r.adapter.linkReleased(0));
+  TEST_ASSERT_TRUE(r.adapter.commandReady(1));
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)r.adapter.requestRecovery(0, true));
+  r.host.held = nullptr;
+  r.adapter.service();
+  TEST_ASSERT_TRUE(r.adapter.linkReleased(0));
+  TEST_ASSERT_EQUAL((int)CameraError::None, (int)r.manager.request(1, Operation::Query));
+  r.pump();
+  TEST_ASSERT_TRUE(r.manager.state(1)->has_observation);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(maintenance_retires_actual_target_context_and_keeps_foreign_ready);
   RUN_TEST(stop_waits_for_actual_host_release_and_rejects_late_query_without_blocking_peer);
   RUN_TEST(cancellation_retirement_wait_times_out_without_fabricated_stop_or_forced_release);
   RUN_TEST(reset_during_cancellation_retirement_discards_reconnect_and_rec);

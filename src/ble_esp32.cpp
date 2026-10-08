@@ -1,4 +1,5 @@
 #include "ble_esp32.h"
+#include "pairing_proof_esp32.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include "nvs_boot_guard.h"
 #include <algorithm>
@@ -195,6 +196,13 @@ bool Esp32BleHost::configureRestore(const BleStoreProof &proof) {
   expected_ = proof;
   return true;
 }
+bool Esp32BleHost::admittedProof(BleStoreProof &out) const {
+  if (state() != BleHostState::Ready || fault() != BleFault::None || !restore_verified_ ||
+      !refusal_installed_ || !nvsBootStatus().persistenceAllowed())
+    return false;
+  out = expected_;
+  return true;
+}
 BleStoreObservation Esp32BleHost::inspectStore(bool compare_stack) {
   BleStoreObservation out;
   if (host_started_ || !nvsBootStatus().persistenceAllowed()) {
@@ -323,7 +331,7 @@ BleHostState Esp32BleHost::start(bool enabled, bool qualified) {
   leased_ = true; // Irreversible boot lease even on partial init failure.
   if (!nvsBootStatus().persistenceAllowed() || NimBLEDevice::isInitialized() ||
       esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE ||
-      expected_.qualification_record == 0) {
+      !pairingProofMaintenance().restorationAllowed(expected_.qualification_record)) {
     fail(BleFault::Admission, BLE_HS_EDISABLED);
     return state();
   }

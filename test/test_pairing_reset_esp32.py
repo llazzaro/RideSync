@@ -101,7 +101,7 @@ def sdk_standin():
     for name,replacement in replacements.items():source=replace_function(source,name,replacement)
     for name,type in [('ble_store_read_our_sec',1),('ble_store_read_peer_sec',2),('ble_store_read_cccd',3),('ble_store_read_csfc',8),('ble_store_read_local_irk',7),('ble_store_read_rpa_rec',6)]:
         source=replace_function(source,name,f'static int {name}(const void*k,void*v){{return actual_read({type},static_cast<const ble_store_key*>(k),static_cast<ble_store_value*>(v));}}')
-    source=source.replace('static int nvs_get_blob(unsigned,const char*name,void*value,size_t*size){','static int blob_error=0;\nstatic std::function<void()> read_hook;\nstatic int nvs_get_blob(unsigned,const char*name,void*value,size_t*size){\n auto hook=read_hook;if(hook)hook();if(blob_error)return blob_error;')
+    source=source.replace('static int nvs_get_blob(unsigned handle,const char*name,void*value,size_t*size){','static int blob_error=0;\nstatic std::function<void()> read_hook;\nstatic int nvs_get_blob(unsigned handle,const char*name,void*value,size_t*size){\n if(handle!=2){auto hook=read_hook;if(hook)hook();if(blob_error)return blob_error;}')
     source += r'''
 extern "C" {
 extern ble_store_value_sec ble_store_config_our_secs[5],ble_store_config_peer_secs[5];
@@ -120,6 +120,7 @@ HARNESS = r'''
 static ridesync::NvsBootStatus boot_status;
 namespace ridesync { NvsBootStatus nvsBootStatus(){return boot_status;} }
 #include "src/ble_esp32.cpp"
+#include "src/pairing_proof_esp32.cpp"
 using namespace ridesync;
 #include "src/ble_remote.cpp"
 struct Receiver:BleCallbacks{void copied(BleContext&,BleEvent)override{}};
@@ -141,9 +142,9 @@ static void ready(BleCentral&central){
 int main(int argc,char**argv){
  static_assert(sizeof(ble_hs_peer_sec)==24&&sizeof(ble_hs_dev_records)==44&&offsetof(ble_hs_dev_records,peer_sec)==20,"actual pinned private ABI");
  const int scenario=argc>1?std::atoi(argv[1]):0;
- auto &host=Esp32BleHost::instance();boot_status.init_observed=true;
+ auto &host=Esp32BleHost::instance();boot_status.init_observed=true;pairingProofMaintenance().beginOwner();
  BleStoreProof proof;proof.qualification_record=42;proof.digest[0]=1;proof.digest[1]=2;proof.digest[2]=3;proof.digest[3]=6;
- if(scenario!=38&&scenario!=61&&scenario!=65){assert(host.configureRestore(proof));assert(host.start(true,true)==BleHostState::Starting);
+ if(scenario!=38&&scenario!=61&&scenario!=65&&scenario!=103){assert(host.configureRestore(proof));assert(host.start(true,true)==BleHostState::Starting);
  ble_hs_cfg.sync_cb();assert(host.state()==BleHostState::Ready);}
  BondIdentity id;id.type=IdentityType::Public;id.verified=true;id.address[0]=1;
  ble_addr_t target;target.val[0]=1;
@@ -188,7 +189,7 @@ int main(int argc,char**argv){
   dev.peer_sec.peer_addr.val[0]=6;dev.identity_addr[0]=6;dev.rand_addr[0]=16;populate(4,&dev);unrelated.push_back(nvs_entries.back());
  }
  if(scenario==65){nvs_entries[0].first="our_sec_5";unrelated[0].first="our_sec_5";}
- if(scenario==61||scenario==65){auto observed=host.inspectStore(false);assert(observed.complete);proof=observed.snapshot;proof.qualification_record=42;assert(host.configureRestore(proof));assert(host.start(true,true)==BleHostState::Starting);ble_hs_cfg.sync_cb();assert(host.state()==BleHostState::Ready);}
+ if(scenario==61||scenario==65||scenario==103){auto observed=host.inspectStore(false);assert(observed.complete);proof=observed.snapshot;proof.qualification_record=42;assert(host.configureRestore(proof));assert(host.start(true,true)==BleHostState::Starting);ble_hs_cfg.sync_cb();assert(host.state()==BleHostState::Ready);}
  if(scenario==62)nvs_entries[0].first="our_sec_0";
  if(scenario==63)nvs_entries[0].first="our_sec_6";
  if(scenario==64)nvs_entries[0].first="our_sec_01";
@@ -269,6 +270,14 @@ int main(int argc,char**argv){
  for(unsigned schema=0;schema<7;++schema){auto *records=static_cast<uint8_t*>(reset_sdk_values(sdk_types[schema]));live_before.push_back(std::vector<uint8_t>(records,records+*reset_sdk_count(sdk_types[schema])*sdk_sizes[schema]));}
  std::vector<ble_hs_resolv_entry> foreign_resolving;
  for(unsigned i=0;i<5;++i){ble_hs_resolv_entry entry{};if(ridesync_ble_resolv_read(i,&entry)==BLE_HS_ENOENT)break;if(entry.rl_addr_type!=target.type||std::memcmp(entry.rl_identity_addr,target.val,6))foreign_resolving.push_back(entry);}
+ if(scenario==103){
+  BleStoreProof admitted;assert(host.admittedProof(admitted));
+  assert(pairingProofMaintenance().request(1,admitted,1000,0)==BondResetSubmission::Queued);
+  pairingProofMaintenance().service();auto denial=pairingProofMaintenance().result(1);
+  assert(denial.durable&&denial.releasable&&proof_sets==1&&proof_commits==1);
+  assert(!pairingProofMaintenance().restorationAllowed(admitted.qualification_record));
+  assert(pairingProofMaintenance().release(1));
+ }
  auto submitted=host.requestBondReset(id,1,reset_deadline,reset_now);
  if(scenario==13){assert(submitted==BondResetSubmission::Busy);assert(host.bondResetResult(1,0).releasable);assert(deleted==0&&queue_wait==0);return 0;}
  assert(submitted==BondResetSubmission::Queued);
@@ -278,7 +287,7 @@ int main(int argc,char**argv){
  if(scenario==15)fake_time=1000;
  if(scenario==16){auto early=host.bondResetResult(1,1000);assert(early.finished&&!early.releasable&&early.timed_out);}
  if(scenario==17)read_hook=[&](){host.cancelBondReset(1);};
- if(scenario==19)erase_error=77;
+ if(scenario==19||scenario==103)erase_error=77;
  if(scenario==20||scenario==56)commit_error=77;
  if(scenario==21)delete_error_type=2;
  if(scenario==22)blob_error=77;
@@ -349,6 +358,7 @@ int main(int argc,char**argv){
  auto result=host.bondResetResult(1,0);assert(result.finished&&result.releasable);std::fprintf(stderr,"outcome=%d error=%d deleted=%d\n",int(result.outcome),result.error,deleted);
  if((scenario>=8&&scenario<=12)||scenario==52||scenario==53){assert(result.outcome==BondOutcome::Busy&&deleted==0);return 0;}
  if(scenario==14||scenario==15||scenario==16||scenario==17||scenario==18||scenario==33||scenario==34||scenario==37){assert(result.outcome==BondOutcome::Refused&&deleted==0);return 0;}
+ if(scenario==103){assert(result.outcome==BondOutcome::Indeterminate&&result.mutation&&store_before==nvs_entries&&!pairingProofMaintenance().restorationAllowed(42));return 0;}
  if(scenario==19||scenario==20||scenario==21||scenario==23||scenario==35||scenario==56){assert(result.outcome==BondOutcome::Indeterminate&&result.mutation&&result.requalification_required);return 0;}
  if(scenario==22||scenario==36||(scenario>=62&&scenario<=64)){assert(result.outcome==BondOutcome::Error&&deleted==0);return 0;}
  if((scenario>=67&&scenario<=72)||scenario==79||scenario==80||scenario==82||(scenario>=83&&scenario<=87)||(scenario>=93&&scenario<=97)){assert(result.outcome==BondOutcome::Refused&&!result.mutation&&host.fault()==BleFault::None&&store_before==nvs_entries&&deleted==0);for(unsigned schema=0;schema<7;++schema){auto *records=static_cast<uint8_t*>(reset_sdk_values(sdk_types[schema]));assert(live_before[schema]==std::vector<uint8_t>(records,records+*reset_sdk_count(sdk_types[schema])*sdk_sizes[schema]));}for(const auto &entry:foreign_resolving){bool found=false;for(unsigned i=0;i<5;++i){ble_hs_resolv_entry after{};if(ridesync_ble_resolv_read(i,&after)==BLE_HS_ENOENT)break;if(!std::memcmp(&entry,&after,sizeof entry))found=true;}assert(found);}return 0;}
@@ -388,7 +398,7 @@ class PairingResetEsp32(unittest.TestCase):
             subprocess.run(['clang++', '-std=c++11', '-DARDUINO_ARCH_ESP32', '-fsanitize=address,undefined',
                             '-fno-sanitize-recover=all', '-ffunction-sections', '-g', '-O0', '-I', str(temp), '-I', str(ROOT / 'include'),
                             '-I', str(ROOT), str(source), str(ROOT / 'src/pairing_reset.cpp'), str(ROOT/'src/health_supervisor.cpp'), str(temp/'sdk.o'), '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections', '-o', str(binary)], check=True)
-            for scenario in list(range(103)):
+            for scenario in list(range(104)):
                 result = subprocess.run([str(binary),str(scenario)], capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, f'scenario {scenario}: {result.stderr}')
                 if scenario>=83:print(f'membership scenario={scenario} exit={result.returncode}: {result.stderr.strip()}')

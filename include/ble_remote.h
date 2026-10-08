@@ -193,6 +193,8 @@ public:
   // Cancels only the shared discovery lease; existing peer links remain open.
   // The lease is reusable only after its terminal callback and host barrier.
   bool cancelScan();
+  // True only after terminal delivery, quiescence and actual host context release.
+  bool scanReleased() const { return !scanning_ && !scan_.receiver; }
   bool read(uint8_t peer, uint8_t endpoint, uint32_t now);
   bool write(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now);
   void disconnect(uint8_t peer);

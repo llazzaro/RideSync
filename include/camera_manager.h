@@ -126,6 +126,9 @@ public:
   ConfigResult configure(const SourceConfig &config);
   CameraError request(size_t peer, Operation operation);
   CameraError cancel(size_t peer);
+  // Permanent for this manager lifetime; configuration/reset cannot reopen it.
+  CameraError seal(size_t peer);
+  bool sealed(size_t peer) const { return peer < kMaxCameras && maintenance_[peer]; }
   void reset();
   void tick();
   uint32_t ticks() const { return ticks_; }
@@ -171,6 +174,7 @@ private:
   CameraAudit *audit_ = nullptr;
   uint32_t ticks_ = 0, resets_ = 0;
   std::array<Peer, kMaxCameras> peers_;
+  std::array<bool, kMaxCameras> maintenance_{};
   bool validPolicy() const;
   void start(size_t peer, Operation op, uint32_t intent_id);
   void attempt(size_t peer);

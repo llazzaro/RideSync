@@ -56,6 +56,8 @@ CameraError CameraManager::request(size_t i, Operation op) {
     error = CameraError::InvalidPolicy;
   else if (!config_.cameras[i].enabled)
     error = CameraError::Disabled;
+  else if (sealed(i))
+    error = CameraError::Cancelled;
   if (error != CameraError::None) {
     if (audit_)
       audit_->request(i, op, error, false, 0);
@@ -183,6 +185,25 @@ CameraError CameraManager::cancel(size_t i) {
   p.state.lifecycle = link ? Lifecycle::Ready : Lifecycle::Idle;
   return CameraError::None;
 }
+CameraError CameraManager::seal(size_t i) {
+  if (i >= size())
+    return CameraError::InvalidPeer;
+  if (!config_.cameras[i].enabled)
+    return CameraError::Disabled;
+  if (sealed(i))
+    return CameraError::None;
+  maintenance_[i] = true; // Before cancel/close: no old callback can admit work.
+  const auto token = peers_[i].state.token;
+  cancel(i);
+  transport_.close(i, token);
+  auto &state = peers_[i].state;
+  Token::advance(state.token.connection);
+  state.lifecycle = Lifecycle::Idle;
+  state.desired = state.observed = RecordingState::Unknown;
+  state.has_observation = false;
+  state.capabilities = Capabilities{};
+  return CameraError::None;
+}
 void CameraManager::reset() {
   Token::advance(resets_);
   for (size_t i = 0; i < kMaxCameras; ++i) {
@@ -217,7 +238,7 @@ void CameraManager::tick() {
   }
 }
 bool CameraManager::event(const Event &e) {
-  if (e.peer >= size())
+  if (e.peer >= size() || sealed(e.peer))
     return false;
   auto &p = peers_[e.peer];
   if (!p.state.token.valid())

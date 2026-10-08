@@ -69,10 +69,30 @@ void RecordingManager::cancel() {
   ++generation_;
   notify();
 }
+CameraError RecordingManager::seal(size_t i) {
+  if (i >= cameras_.size())
+    return CameraError::InvalidPeer;
+  const auto error = cameras_.seal(i);
+  if (error != CameraError::None)
+    return error;
+  if (preparation_)
+    preparation_->retire(i);
+  peers_[i] = Peer{};
+  peers_[i].stage = Stage::Error;
+  peers_[i].error = CameraError::Cancelled;
+  notify();
+  return CameraError::None;
+}
 void RecordingManager::begin(bool query) {
   // This coordinator owns command admission. Retire previous work instead of
   // filling the per-camera FIFO with superseded group requests.
   for (size_t i = 0; i < cameras_.size(); ++i) {
+    if (cameras_.sealed(i)) {
+      peers_[i] = Peer{};
+      peers_[i].stage = Stage::Error;
+      peers_[i].error = CameraError::Cancelled;
+      continue;
+    }
     if (preparation_)
       preparation_->retire(i);
     const auto l = cameras_.state(i)->lifecycle;
@@ -89,7 +109,7 @@ void RecordingManager::begin(bool query) {
   ++generation_;
   for (size_t i = 0; i < cameras_.size(); ++i) {
     auto l = cameras_.state(i)->lifecycle;
-    if (l == Lifecycle::Disabled)
+    if (l == Lifecycle::Disabled || cameras_.sealed(i))
       continue;
     if (preparation_ && preparation_->retiring(i)) {
       peers_[i].stage = Stage::Retiring;

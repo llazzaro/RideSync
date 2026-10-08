@@ -1,5 +1,8 @@
 #include "application_esp32.h"
 #if defined(ARDUINO_ARCH_ESP32)
+#include "ble_esp32.h"
+#include "nvs_boot_guard.h"
+#include "pairing_proof_esp32.h"
 #include <new>
 namespace ridesync {
 SupervisedEsp32Application::SupervisedEsp32Application(
@@ -9,7 +12,7 @@ SupervisedEsp32Application::SupervisedEsp32Application(
 SupervisedEsp32Application::~SupervisedEsp32Application() {
   // No waits or filesystem access. Boot-lifetime caller retains this object and
   // all its resources until the actual worker barriers permit destruction.
-  if (telemetry_ && telemetry_->canRelease()) {
+  if (telemetry_ && canRelease()) {
     if (control_)
       control_->~Esp32HandlebarControl();
     telemetry_->~Esp32LocalTelemetry();
@@ -109,8 +112,211 @@ void SupervisedEsp32Application::current(const SettingsSnapshot &s, bool safe, b
   // a fresh owner is required. No remap or replay in an active session.
   camera_allowed_ = camera_allowed_ && s.completed && s.effective && s.peers_valid &&
                     s.epoch == epoch_ && s.generation == generation_ && !safe && nvs;
+  reset_current_ = camera_allowed_;
+  if (!reset_current_)
+    revokeReset();
   if (telemetry_)
     telemetry_->owner().currentAdmission(camera_allowed_, safe);
+}
+bool SupervisedEsp32Application::resetNow(uint32_t &now) {
+  if (!telemetry_ || !telemetry_->owner().session())
+    return false;
+  return telemetry_->owner().session()->clock().snapshotWithRaw(now).monotonic_quality ==
+         MonotonicQuality::Valid;
+}
+bool SupervisedEsp32Application::resetAdmitted() const {
+  return launched_ && camera_allowed_ && reset_current_ && ble_started_ && !safe_mode_ &&
+         telemetry_ && telemetry_->status().phase == TelemetryPhase::Running &&
+         nvsBootStatus().persistenceAllowed() &&
+         Esp32BleHost::instance().state() == BleHostState::Ready &&
+         Esp32BleHost::instance().fault() == BleFault::None;
+}
+BondResetSubmission SupervisedEsp32Application::requestPairingReset(uint8_t slot, uint32_t peer_id,
+                                                                    uint32_t epoch,
+                                                                    uint64_t generation,
+                                                                    uint32_t operation,
+                                                                    uint32_t timeout_ms) {
+  if (!reset_.releasable)
+    return BondResetSubmission::Busy;
+  if (!operation || operation <= last_reset_)
+    return BondResetSubmission::Stale;
+  uint32_t now = 0;
+  if (!resetAdmitted() || epoch != epoch_ || generation != generation_ || !peer_id ||
+      slot >= kMaxCameras || !timeout_ms || timeout_ms > 5000 || !resetNow(now) ||
+      host_operation_ == UINT32_MAX || hero12Runtime().manager.sealed(slot))
+    return BondResetSubmission::Refused;
+  const auto &q = cameras_[slot];
+  if (!q.source_qualified || !q.classic_profile_confirmed || !q.firmware_size ||
+      !q.identity.verified ||
+      (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic))
+    return BondResetSubmission::Refused;
+  unsigned matched = 0;
+  for (size_t i = 0; i < qualification_.runtime.peers.count; ++i) {
+    const auto &p = qualification_.runtime.peers.entries[i];
+    if (p.slot == slot && p.id == peer_id && p.model == CameraModel::HERO12_BLACK)
+      ++matched;
+    if (p.slot != slot && p.slot < kMaxCameras && cameras_[p.slot].identity.verified &&
+        cameras_[p.slot].identity.type == q.identity.type &&
+        cameras_[p.slot].identity.address == q.identity.address)
+      return BondResetSubmission::Refused;
+  }
+  BleStoreProof proof;
+  if (matched != 1 || !Esp32BleHost::instance().admittedProof(proof) ||
+      proof.qualification_record == UINT32_MAX)
+    return BondResetSubmission::Refused;
+  reset_ = {};
+  reset_.operation = last_reset_ = operation;
+  reset_.slot = slot;
+  reset_.peer_id = peer_id;
+  reset_.epoch = epoch;
+  reset_.generation = generation;
+  reset_.identity = q.identity;
+  reset_.qualification_record = proof.qualification_record;
+  reset_.releasable = false;
+  reset_.phase = ApplicationResetPhase::Retiring;
+  reset_identity_ = q.identity;
+  reset_proof_ = proof;
+  reset_deadline_ = now + timeout_ms;
+  proof_pending_ = host_pending_ = retried_ = retry_wait_ = host_cancelled_ = false;
+  hero12Runtime().group.seal(slot);
+  hero12Runtime().adapter.sealForMaintenance(slot);
+  return BondResetSubmission::Queued;
+}
+void SupervisedEsp32Application::revokeReset(bool timeout) {
+  if (reset_.releasable)
+    return;
+  reset_.finished = true;
+  reset_.timed_out = reset_.timed_out || timeout;
+  reset_.cancelled = reset_.cancelled || !timeout;
+  reset_.outcome = reset_.mutation ? BondOutcome::Indeterminate : BondOutcome::Refused;
+  if (proof_pending_)
+    pairingProofMaintenance().cancel(reset_.operation);
+  if (host_pending_ && !host_cancelled_) {
+    Esp32BleHost::instance().cancelBondReset(reset_host_operation_);
+    host_cancelled_ = true;
+  }
+}
+bool SupervisedEsp32Application::cancelPairingReset(uint32_t operation) {
+  if (reset_.releasable || reset_.operation != operation)
+    return false;
+  revokeReset();
+  return true;
+}
+void SupervisedEsp32Application::finishReset() {
+  if (proof_pending_ || host_pending_ || !hero12Runtime().adapter.maintenanceReleased(reset_.slot))
+    return;
+  reset_.finished = reset_.releasable = true;
+  reset_.phase = ApplicationResetPhase::Finished;
+  hero12Runtime().adapter.finishMaintenanceDrain();
+}
+void SupervisedEsp32Application::serviceReset() {
+  if (reset_.releasable)
+    return;
+  uint32_t now = 0;
+  if (!resetNow(now) || !resetAdmitted())
+    revokeReset();
+  else if (now - reset_deadline_ < 0x80000000UL)
+    revokeReset(true);
+  if (proof_pending_) {
+    const auto result = pairingProofMaintenance().result(reset_.operation);
+    if (!result.releasable)
+      return;
+    reset_.proof_denied = result.durable;
+    reset_.proof_write_attempted = result.write_attempted;
+    reset_.requalification_required = result.durable || result.write_attempted;
+    reset_.error = result.error;
+    pairingProofMaintenance().release(reset_.operation);
+    proof_pending_ = false;
+    if (result.cancelled || result.timed_out || !result.durable) {
+      if (result.cancelled || result.timed_out)
+        revokeReset(result.timed_out);
+      else {
+        reset_.finished = true;
+        reset_.outcome = BondOutcome::Refused;
+      }
+      finishReset();
+      return;
+    }
+    reset_.phase = ApplicationResetPhase::Submitting;
+  }
+  if (host_pending_) {
+    const auto result = Esp32BleHost::instance().bondResetResult(reset_host_operation_, now);
+    reset_.mutation = reset_.mutation || result.mutation;
+    reset_.requalification_required =
+        reset_.requalification_required || result.requalification_required;
+    if (result.cancelled || result.timed_out)
+      revokeReset(result.timed_out);
+    if (!result.releasable)
+      return;
+    host_pending_ = false;
+    reset_.error = result.error;
+    if (!reset_.finished && result.outcome == BondOutcome::Busy && !retried_) {
+      retried_ = true;
+      retry_wait_ = true;
+      retry_at_ = now + 100;
+      reset_.phase = ApplicationResetPhase::Submitting;
+    } else {
+      if (!reset_.finished)
+        reset_.outcome = result.outcome;
+      reset_.finished = true;
+      finishReset();
+      return;
+    }
+  }
+  if (reset_.finished) {
+    finishReset();
+    return;
+  }
+  if (retry_wait_) {
+    if (now - retry_at_ >= 0x80000000UL)
+      return;
+    retry_wait_ = false;
+  }
+  if (reset_.phase == ApplicationResetPhase::Retiring) {
+    if (!hero12Runtime().adapter.maintenanceReleased(reset_.slot))
+      return;
+    const auto result =
+        pairingProofMaintenance().request(reset_.operation, reset_proof_, reset_deadline_, now);
+    if (result == BondResetSubmission::Queued) {
+      proof_pending_ = true;
+      reset_.phase = ApplicationResetPhase::RevokingProof;
+      return;
+    }
+    if (result == BondResetSubmission::Busy && !retried_) {
+      retried_ = true;
+      retry_wait_ = true;
+      retry_at_ = now + 100;
+      return;
+    }
+    reset_.outcome = result == BondResetSubmission::Busy ? BondOutcome::Busy : BondOutcome::Refused;
+    reset_.finished = true;
+    finishReset();
+    return;
+  }
+  if (reset_.phase == ApplicationResetPhase::Submitting) {
+    if (host_operation_ == UINT32_MAX) {
+      revokeReset();
+      finishReset();
+      return;
+    }
+    reset_host_operation_ = ++host_operation_;
+    const auto result = Esp32BleHost::instance().requestBondReset(
+        reset_identity_, reset_host_operation_, reset_deadline_, now);
+    if (result == BondResetSubmission::Queued) {
+      host_pending_ = true;
+      reset_.phase = ApplicationResetPhase::WaitingHost;
+      return;
+    }
+    if (result == BondResetSubmission::Busy && !retried_) {
+      retried_ = true;
+      retry_wait_ = true;
+      retry_at_ = now + 100;
+      return;
+    }
+    reset_.outcome = result == BondResetSubmission::Busy ? BondOutcome::Busy : BondOutcome::Refused;
+    reset_.finished = true;
+    finishReset();
+  }
 }
 void SupervisedEsp32Application::publish(Worker w, uint32_t n, DeviceHealth outcome, bool done,
                                          bool refused) {
@@ -129,6 +335,11 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
   telemetry_->owner().supervision(stalls, refused, fault);
   if (stalls || refused || fault)
     telemetry_->owner().currentAdmission(false, safe_mode_);
+  if (stalls || refused || fault) {
+    reset_current_ = false;
+    revokeReset();
+  }
+  serviceReset();
   telemetry_->service(); // Exactly one bound application/camera/admission pass.
   const auto s = telemetry_->status();
   const bool no_session =
@@ -160,4 +371,16 @@ extern "C" ridesync::SupervisedEsp32Application &ridesync_supervised_application
   static ridesync::SupervisedEsp32Application application(uart, spi, wire, q, h, c);
   return application;
 }
+#endif
+#if defined(ARDUINO_ARCH_ESP32)
+struct ApplicationPairingResetSymbols {
+  decltype(&ridesync::SupervisedEsp32Application::requestPairingReset) request;
+  decltype(&ridesync::SupervisedEsp32Application::cancelPairingReset) cancel;
+  decltype(&ridesync::SupervisedEsp32Application::pairingResetStatus) result;
+};
+// Data-only opt-in link proof; no default activation or operation is performed.
+extern "C" const ApplicationPairingResetSymbols ridesync_application_pairing_reset_backend = {
+    &ridesync::SupervisedEsp32Application::requestPairingReset,
+    &ridesync::SupervisedEsp32Application::cancelPairingReset,
+    &ridesync::SupervisedEsp32Application::pairingResetStatus};
 #endif

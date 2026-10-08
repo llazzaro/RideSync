@@ -1,32 +1,11 @@
 #pragma once
-#include "ble_remote.h"
+#include "ble_pairing_reset.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include <NimBLEDevice.h>
 #include <nimble/nimble/host/include/host/ble_gatt.h>
 #include <nimble/nimble/include/nimble/nimble_npl.h>
 
 namespace ridesync {
-// Digest is SHA256 of sorted NVS key names, explicit lengths and exact pinned-ABI
-// blobs. Keep independent durable commissioning evidence; never self-authorize
-// restoration from a snapshot taken during the boot being admitted.
-struct BleStoreProof {
-  uint32_t qualification_record = 0;
-  std::array<uint8_t, 32> digest{};
-  std::array<unsigned, 7> counts{};
-};
-struct BleStoreObservation {
-  bool complete = false;
-  int error = 0;
-  BleStoreProof snapshot;
-};
-enum class BondResetSubmission { Queued, Busy, Refused, Stale };
-struct BleBondResetResult {
-  uint32_t operation = 0;
-  BondOutcome outcome = BondOutcome::Busy;
-  int error = 0;
-  bool finished = false, releasable = false, mutation = false;
-  bool requalification_required = false, cancelled = false, timed_out = false;
-};
 class Esp32BleHost final : public BleHost, public NimBLEDeviceCallbacks {
 public:
   // One boot-lifetime instance, also the future raw peripheral host/store owner.
@@ -36,6 +15,8 @@ public:
   Esp32BleHost(Esp32BleHost &&) = delete;
   Esp32BleHost &operator=(Esp32BleHost &&) = delete;
   bool configureRestore(const BleStoreProof &);
+  // Copy only the EXACT proof admitted at startup; no NVS reads on this owner.
+  bool admittedProof(BleStoreProof &) const;
   // Commissioning readback only: no keys/addresses exposed. Caller must serialize
   // configuration NVS owner and BLE lifecycle; never init/deinit/erase concurrently.
   BleStoreObservation inspectStore(bool compare_stack);

@@ -44,6 +44,15 @@ constexpr int INPUT=0, INPUT_PULLUP=1, INPUT_PULLDOWN=2, LOW=0;
 static void pinMode(int,int) { throw std::logic_error("unexpected GPIO enable"); }
 static int digitalRead(int) { throw std::logic_error("unexpected GPIO read"); }
 static uint32_t millis() { return time_now; }
+static int64_t esp_timer_get_time(){return int64_t(time_now)*1000;}
+using nvs_handle_t=unsigned;
+constexpr int NVS_READONLY=0,NVS_READWRITE=1,ESP_ERR_NVS_NOT_FOUND=100;
+static int nvs_open(const char *,int mode,nvs_handle_t *){if(mode!=NVS_READONLY)throw std::logic_error("unexpected proof write");return ESP_ERR_NVS_NOT_FOUND;}
+static int nvs_get_blob(nvs_handle_t,const char *,void *,size_t *){throw std::logic_error("unexpected proof read");}
+static int nvs_set_blob(nvs_handle_t,const char *,const void *,size_t){throw std::logic_error("unexpected proof write");}
+static int nvs_commit(nvs_handle_t){throw std::logic_error("unexpected proof commit");}
+static void nvs_close(nvs_handle_t){}
+
 static void delay(int) { ++loops; }
 static TickType_t xTaskGetTickCount() { return time_now; }
 static void vTaskDelayUntil(TickType_t *last, TickType_t interval) {
@@ -79,6 +88,7 @@ StoreResult NvsConfigStore::read(unsigned slot, ConfigRecord &out) {
 }
 StoreResult NvsConfigStore::write(unsigned, const ConfigRecord &) { throw std::logic_error("unexpected startup write"); }
 }
+#include "src/pairing_proof_esp32.cpp"
 #include "src/main.cpp"
 #include <cassert>
 int main(int argc, char **argv) {
@@ -175,10 +185,20 @@ class HealthStartup(unittest.TestCase):
             temp = Path(directory)
             (temp / "standin.h").write_text(STUB)
             for name in ("Arduino.h", "esp_task_wdt.h", "esp_system.h", "esp_attr.h",
-                         "freertos/FreeRTOS.h", "freertos/task.h"):
+                         "freertos/FreeRTOS.h", "freertos/task.h", "esp_timer.h", "nvs.h"):
                 p = temp / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text('#include "standin.h"\n')
+            # This startup-only fixture has no commissioned BLE application.
+            # Execute the real marker owner; any reset/host proof request is a bug.
+            (temp / "ble_esp32.h").write_text('''#pragma once
+#include "ble_pairing_reset.h"
+#include <stdexcept>
+namespace ridesync { struct Esp32BleHost {
+ static Esp32BleHost &instance(){static Esp32BleHost h;return h;}
+ bool admittedProof(BleStoreProof &)const{throw std::logic_error("unexpected BLE reset");}
+}; }
+''')
             (temp / "driver").mkdir()
             (temp / "driver/gpio.h").write_text(r'''
 #pragma once

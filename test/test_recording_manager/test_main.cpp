@@ -363,8 +363,34 @@ void late_resync_observation_does_not_launch_policy_without_prior_tick() {
     TEST_ASSERT_EQUAL(calls, f.transport.calls.size());
   }
 }
+void target_maintenance_survives_later_group_intents() {
+  Fixture f(2);
+  f.ready(0);
+  f.ready(1);
+  TEST_ASSERT_EQUAL((int)GroupError::None, (int)f.group.request(RecordingState::Recording));
+  const auto unrelated = f.transport.last(1);
+  TEST_ASSERT_EQUAL((int)CameraError::None, (int)f.group.seal(0));
+  TEST_ASSERT_TRUE(f.group.event(complete(unrelated)));
+  observe(f.group, unrelated, RecordingState::Recording, true);
+  const auto count = f.transport.calls.size();
+  TEST_ASSERT_EQUAL((int)GroupError::None, (int)f.group.request(RecordingState::Stopped));
+  for (size_t i = count; i < f.transport.calls.size(); ++i)
+    TEST_ASSERT_EQUAL_MESSAGE(1, f.transport.calls[i].peer,
+                              "sealed target must not reenter group FIFO");
+  auto status = f.group.status();
+  TEST_ASSERT_EQUAL((int)CameraError::Cancelled, (int)status.peers[0].error);
+  TEST_ASSERT_FALSE(status.peers[0].pending);
+  TEST_ASSERT_FALSE(status.peers[0].acknowledged);
+  TEST_ASSERT_EQUAL((int)RecordingState::Unknown, (int)status.peers[0].observed);
+  f.group.resync();
+  f.group.shortPress();
+  f.group.tick();
+  for (size_t i = count; i < f.transport.calls.size(); ++i)
+    TEST_ASSERT_EQUAL(1, f.transport.calls[i].peer);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(target_maintenance_survives_later_group_intents);
   RUN_TEST(new_matching_request_retires_completed_command_response);
   RUN_TEST(confirmation_at_or_after_deadline_is_timeout_without_prior_tick);
   RUN_TEST(late_resync_observation_does_not_launch_policy_without_prior_tick);

@@ -1,5 +1,6 @@
 #include "handlebar_control_esp32.h"
 #include "local_telemetry_esp32.h"
+#include "pairing_proof_esp32.h"
 #include "profiles/gopro_hero12_esp32.h"
 #include <array>
 #include <cassert>
@@ -7,12 +8,18 @@
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 using namespace ridesync;
 SerialPort Serial;
+std::vector<uint8_t> proof_marker;
+unsigned proof_sets = 0, proof_commits = 0, proof_reads = 0, proof_closes = 0;
+int proof_set_error = 0, proof_commit_error = 0, proof_read_error = 0;
+std::function<void()> proof_set_hook, proof_commit_hook, proof_close_hook;
+bool nvs_revoked = false;
 std::atomic<uint32_t> raw_time{100};
 unsigned led_configs = 0, led_writes = 0, button_configs = 0;
 int gpio_failure = 0, button_level = 1;
@@ -180,6 +187,7 @@ int main(int argc, char **argv) {
   TwoWire wire;
   auto q = qualified();
   commission();
+  pairingProofMaintenance().beginOwner();
   wire.payload[0] = 0x8c;
   wire.payload[1] = 7;
   wire.payload[7] = 6;

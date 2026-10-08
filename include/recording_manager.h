@@ -46,6 +46,8 @@ public:
   GroupError shortPress();
   GroupError resync();
   void cancel();
+  // Target-only maintenance; all later group intent keeps this peer sealed.
+  CameraError seal(size_t peer);
   // Adapter brackets event/action ingestion; standalone APIs still advance immediately.
   void beginServicePass() { deferred_ = true; }
   void tick();

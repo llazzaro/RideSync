@@ -349,15 +349,59 @@ separate outcomes. Partial deletion has no rollback promise. No second host,
 global delete, SDK/NVS restart, eviction, automatic pairing/reconnect or recording
 replay is introduced. Remote camera-side forget may still be required.
 
-`requalification_required` flags any attempted mutation. It is an obligation for
-the dependent application/operator integration (#44), not a durable proof
-revocation record. This backend never rewrites or self-authorizes `BleStoreProof`.
-Changed durable bytes fail the existing next-boot digest/count admission against
-an old proof. A failed write can leave the old durable bytes unchanged, so the
-flag must still be consumed by the application owner and independent commissioning
-must requalify the next boot; a copied flag alone cannot enforce that policy.
-Application maintenance/current-configuration admission and user operation remain
-pending #44. This API is not activated by default firmware.
+The sole `SupervisedEsp32Application` exposes serialized explicit
+`requestPairingReset(slot, peer_id, epoch, generation, operation, timeout_ms)`,
+`cancelPairingReset` and copied `pairingResetStatus`. Requests use the exact saved
+slot/model/peer mapping and independent typed HERO12 qualification. Operations
+increase without wrap, and the original deadline is 1..5000 ms. Missing/stale or
+ambiguous evidence, unavailable host/restoration/NVS, safe mode, supervision
+failure or an inactive telemetry session refuses admission. Generic authentication
+failure and handlebar actions never request reset.
+
+Accepted maintenance permanently seals only the target manager/group/recovery
+route for this owner lifetime, discards queued/delayed recording work and makes
+observed state Unknown. Actual target connection/ATT and shared-scan final release
+must precede deletion. Shared scan admission is paused during the transaction;
+unrelated live camera commands and independently qualified GPS/SD/IMU continue.
+Host reservation defers SDK-dependent camera work until the bounded transaction
+releases it. There is one Busy retry total; retry never restarts the original
+deadline. Cancellation/configuration revocation/timeouts finish intent but retain
+all storage until actual worker/host final access. Callers retain the boot-lifetime
+application and buses until `canRelease()`, including maintenance resources.
+No result reopens the target, restores queued intent or reconnects automatically.
+
+Before host deletion can be submitted, the existing configuration task commits,
+reads back and closes a separate denial marker in NVS namespace `ridesync_maint`,
+key `ble_proof`. This is a fixed 16-byte `RBPR` version-1 record: four magic bytes,
+version byte, three zero reserved bytes, little-endian uint32 high-water record,
+and IEEE CRC32 of the first twelve bytes. It contains no credential or settings
+schema data. Its floor is `max(previous, exact host-admitted qualification_record)`;
+the caller cannot supply a higher record. Records are nonzero, strictly increasing
+independent commissioning identifiers; UINT32_MAX is exhausted for maintenance,
+and identifiers must never wrap. The owner refuses valid-looking rollback or
+missing data after a published denial, malformed/version/CRC/read errors, and
+uncertain writes. It never clears or repairs the marker or manufactures a proof.
+
+The configuration task loads the marker before configuration publication; host
+startup checks the published gate before controller/SDK initialization, including
+proofs staged earlier by commissioning. Pending/error never means legacy absence.
+Genuine legacy absence permits the previous independent proof policy. Once a
+floor is committed, a fresh boot refuses every proof record at or below it even
+if a failed host deletion left all bond bytes unchanged. A separately supplied
+independent proof with a strictly higher record must still match actual restored
+store digest/counts and every existing host gate. This implementation supplies
+only denial, never replacement qualification or remote camera-side forget proof.
+
+Copied status retains the accepted epoch/generation, peer/slot, typed identity and
+qualification record. `proof_denied` means committed+verified denial; attempted
+marker writes conservatively set `requalification_required` even on uncertain
+failure. A failed set/commit cannot be laundered into success by matching cached
+bytes later in the same boot. Any failed/uncertain marker transaction admits NO
+host deletion. An admitted write may finish after cancellation and retain durable
+denial; no late host submission follows. Current-boot unrelated peers remain
+admitted. Settings reset cannot clear the marker. Physical power-cut durability,
+flash latency and installed-device stack high-water still require #18 evidence.
+This explicit API is not activated by default firmware.
 
 The host installs a capacity-refusal callback and never invokes NimBLE's default
 oldest-peer eviction. The proved schema is five bonds/connections, 32 CCCDs,

@@ -36,12 +36,72 @@ static esp_reset_reason_t test_reset_reason=ESP_RST_POWERON;
 inline esp_reset_reason_t esp_reset_reason() { return test_reset_reason; }
 ''',
             'esp_task_wdt.h': '''#pragma once
-constexpr int ESP_OK=0,ESP_ERR_NOT_FOUND=1,ESP_ERR_INVALID_STATE=2;
+#include <nvs.h>
+constexpr int ESP_ERR_NOT_FOUND=1,ESP_ERR_INVALID_STATE=2;
 extern int sdk_add_error;
 inline int esp_task_wdt_status(void *) { return ESP_ERR_NOT_FOUND; }
 inline int esp_task_wdt_add(void *) { return sdk_add_error; }
 inline int esp_task_wdt_reset() { return 0; }
 inline int esp_task_wdt_delete(void *) { return 0; }
+''',
+            'esp_timer.h': '#pragma once\n#include <Arduino.h>\ninline int64_t esp_timer_get_time(){return int64_t(millis())*1000;}\n',
+            'nvs.h': r'''#pragma once
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <vector>
+using nvs_handle_t = unsigned;
+constexpr int ESP_OK = 0, ESP_ERR_NVS_NOT_FOUND = 100, NVS_READONLY = 0, NVS_READWRITE = 1;
+extern std::vector<uint8_t> proof_marker;
+extern unsigned proof_sets, proof_commits, proof_reads, proof_closes;
+extern int proof_set_error, proof_commit_error, proof_read_error;
+extern std::function<void()> proof_set_hook, proof_commit_hook, proof_close_hook;
+inline int nvs_open(const char *name, int mode, nvs_handle_t *h) {
+  if (std::strcmp(name, "ridesync_maint"))
+    return 101;
+  if (mode == NVS_READONLY && proof_marker.empty())
+    return ESP_ERR_NVS_NOT_FOUND;
+  *h = 2;
+  return 0;
+}
+inline int nvs_get_blob(nvs_handle_t h, const char *, void *out, size_t *size) {
+  if (h != 2)
+    return 101;
+  ++proof_reads;
+  if (proof_read_error)
+    return proof_read_error;
+  if (proof_marker.empty())
+    return ESP_ERR_NVS_NOT_FOUND;
+  if (*size < proof_marker.size())
+    return 102;
+  *size = proof_marker.size();
+  if (*size)
+    std::memcpy(out, proof_marker.data(), *size);
+  return 0;
+}
+inline int nvs_set_blob(nvs_handle_t h, const char *, const void *in, size_t size) {
+  if (h != 2)
+    return 101;
+  ++proof_sets;
+  auto p = static_cast<const uint8_t *>(in);
+  proof_marker.assign(p, p + size);
+  if (proof_set_hook)
+    proof_set_hook();
+  return proof_set_error;
+}
+inline int nvs_commit(nvs_handle_t h) {
+  if (h != 2)
+    return 101;
+  ++proof_commits;
+  if (proof_commit_hook)
+    proof_commit_hook();
+  return proof_commit_error;
+}
+inline void nvs_close(nvs_handle_t) {
+  ++proof_closes;
+  if (proof_close_hook)
+    proof_close_hook();
+}
 ''',
             'SPI.h': '#pragma once\nstruct SPIClass {};\n',
             'vfs_api.h': '#pragma once\n#include <memory>\nstruct VFSImpl {}; namespace fs { using FSImplPtr=std::shared_ptr<VFSImpl>; }\n',
@@ -112,7 +172,7 @@ int test_close(int);
                    str(folder / 'storage_sd.cpp'), str(folder / 'bmi270_imu.cpp'), *map(str, portable), '-o', str(exe)]
             build = subprocess.run(cmd, capture_output=True)
             self.assertEqual(0, build.returncode, build.stderr.decode())
-            for mode in ('main-terminal-at', 'main-ble-refusal', 'main-runtime-safe-mode', 'main-button-unqualified', 'main-delayed-config', 'main-late-config', 'main-config-timeout', 'main-config-task-refusal',
+            for mode in ('main-reset-busy-deadline','main-reset-terminal-busy','main-reset-scan','main-reset-host-late','main-reset-host-nvs','main-reset-host-supervision','main-reset-success','main-reset-query','main-reset-rec','main-reset-stop','main-reset-recovery','main-reset-retained','main-reset-cancel','main-reset-timeout','main-reset-wrap','main-reset-stale','main-reset-ambiguous','main-reset-admission','main-reset-config','main-reset-safe','main-reset-proof-set-error','main-reset-proof-commit-error','main-reset-proof-read-error','main-reset-proof-blocked','main-reset-proof-final','main-reset-busy','main-reset-host-blocked','main-reset-host-timeout','main-reset-host-error','main-reset-seal', 'main-terminal-at', 'main-ble-refusal', 'main-runtime-safe-mode', 'main-button-unqualified', 'main-delayed-config', 'main-late-config', 'main-config-timeout', 'main-config-task-refusal',
                          'main-supervisor-refusal', 'main-health-task-refusal', 'main-qualification',
                          'main-sd-refusal', 'main-imu-refusal', 'main-blocked-allocation',
                          'main-blocked-close', 'main-current-gate', 'main-supervisor-timeout',

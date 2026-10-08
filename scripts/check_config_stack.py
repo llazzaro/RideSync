@@ -27,7 +27,7 @@ def frame(fragment):
     if not values:
         raise RuntimeError("Missing compiled function: " + fragment)
     # GCC's $part$ split helpers execute under their public wrapper frame.
-    normal = [size for name, size in frames.items() if fragment in name and "lambda" not in name and "$" not in name]
+    normal = [size for name, size in frames.items() if fragment in name and "lambda" not in name and "$part$" not in name]
     parts = [size for name, size in frames.items() if fragment in name and "$part$" in name]
     return max(normal or [0]) + sum(parts)
 
@@ -52,6 +52,9 @@ paths = {
     "request/encode": service + frame("ConfigPersistence::request(") + frame("encodeConfig("),
     # Reset/retry are persistence API budgets only: the bootstrap exposes neither.
     "reset/request/encode": worker + frame("ConfigPersistence::reset(") + frame("ConfigPersistence::request(") + frame("encodeConfig("),
+    "proof boot read": worker + frame("PairingProofMaintenance::beginOwner(") + frame("readFloor("),
+    "proof service read": worker + frame("PairingProofMaintenance::service(") + frame("PairingProofMaintenance::perform(") + frame("readFloor("),
+    "proof service write": worker + frame("PairingProofMaintenance::service(") + frame("PairingProofMaintenance::perform("),
     "retry": worker + frame("ConfigPersistence::retry("),
     "service/read SDK boundary": service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::read("),
     "service/write SDK boundary": service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::write("),

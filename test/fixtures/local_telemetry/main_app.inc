@@ -7,6 +7,7 @@ namespace ridesync {
 NvsBootStatus nvsBootStatus() {
   NvsBootStatus s;
   s.init_observed = true;
+  s.format_refused = nvs_revoked;
   return s;
 }
 bool NvsConfigStore::allowed() const { return true; }
@@ -32,6 +33,7 @@ static void taskPass(void (*fn)(void *)) {
   } catch (const std::runtime_error &) {
   }
 }
+#include "reset_cases.inc"
 int mainApplication(const std::string &mode) {
   HardwareSerial uart;
   SPIClass spi;
@@ -51,6 +53,18 @@ int mainApplication(const std::string &mode) {
   source.button_gpio.enabled = source.button_gpio.board_qualified = true;
   source.button_gpio.pin = 32;
   source.button_gpio.pull = ButtonPull::Up;
+  const bool reset_case = mode.find("main-reset-") == 0 && mode != "main-reset-seal";
+  if (reset_case) {
+    uart.auto_reply = true;
+    source.count = 2;
+    source.cameras[1] = source.cameras[0];
+    source.cameras[1].name = "other";
+    source.cameras[1].identifier = "02:02:03:04:05:06";
+    q.runtime.peers.count = 2;
+    q.runtime.peers.entries[1].id = 302;
+    q.runtime.peers.entries[1].slot = 1;
+    q.runtime.peers.entries[1].model = CameraModel::HERO12_BLACK;
+  }
   assert(encodeConfig(source, 1, saved_config).status == PersistStatus::Encoded);
   QualifiedHandlebar handlebar;
   handlebar.opt_in = handlebar.acknowledge_qualification = true;
@@ -64,6 +78,12 @@ int mainApplication(const std::string &mode) {
   proof[0].identity.address = {{1, 2, 3, 4, 5, 6}};
   proof[0].firmware_size = 1;
   proof[0].firmware[0] = 'x';
+  if (reset_case) {
+    proof[1] = proof[0];
+    proof[1].identity.address[0] = 2;
+  }
+  if (mode == "main-reset-ambiguous")
+    proof[1].identity = proof[0].identity;
   commission();
   wire.payload[0] = 0x8c;
   wire.payload[1] = 7;
@@ -227,6 +247,19 @@ int mainApplication(const std::string &mode) {
       loop();
       assert(hero12Runtime().manager.ticks() == ticks + 1 &&
              hero12Runtime().group.advancements() == advances + 1);
+      if (reset_case)
+        resetCases(application, mode);
+      if (mode == "main-reset-seal") {
+        const auto snapshot = application_settings.snapshot();
+        assert(application.requestPairingReset(0, 301, snapshot.epoch, snapshot.generation, 1,
+                                               1000) == BondResetSubmission::Queued);
+        assert(hero12Runtime().manager.sealed(0));
+        assert(hero12Runtime().manager.request(0, Operation::Query) == CameraError::Cancelled);
+        assert(application.cancelPairingReset(1));
+        loop();
+        loop();
+        assert(application.pairingResetStatus().releasable);
+      }
       if (mode == "main-terminal-at") {
         assert(application.telemetry()->owner().session()->clock().reset(42));
         loop();
@@ -320,6 +353,10 @@ int mainApplication(const std::string &mode) {
   }
   for (unsigned i = 0; i < 1000 && !application.telemetry()->canRelease() && !close_entered.load();
        ++i) {
+    if (reset_case) {
+      Esp32BleHost::instance().driveRetirements();
+      Esp32BleHost::instance().driveProcedures();
+    }
     loop();
     std::this_thread::sleep_for(std::chrono::microseconds(100));
   }
@@ -341,7 +378,7 @@ int mainApplication(const std::string &mode) {
     loop();
     std::this_thread::sleep_for(std::chrono::microseconds(100));
   }
-  assert(application.telemetry()->canRelease());
+  assert(application.canRelease());
   for (auto &t : worker_threads)
     t.join();
   const auto old_id = application.telemetry()->status().identity.id;

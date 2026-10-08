@@ -101,7 +101,7 @@ bool Hero12Adapter::start(bool enabled, bool qualified) {
   return enabled_;
 }
 bool Hero12Adapter::configurePeer(uint8_t i, const Hero12Qualification &q) {
-  if (i >= kBlePeers ||
+  if (i >= kBlePeers || maintenance_[i] ||
       (central_.phase(i) != BlePhase::Empty && central_.phase(i) != BlePhase::Closed) ||
       peers_[i].connecting || peers_[i].ready || disconnect_pending_[i])
     return false;
@@ -125,6 +125,23 @@ bool Hero12Adapter::linkReleased(uint8_t i) const {
   const auto phase = central_.phase(i);
   return phase == BlePhase::Empty || phase == BlePhase::Closed;
 }
+bool Hero12Adapter::sealForMaintenance(uint8_t i) {
+  if (i >= kBlePeers || !manager_ || i >= manager_->size())
+    return false;
+  maintenance_[i] = true; // Before cancelling any queued/delayed recording work.
+  maintenance_scan_ = true;
+  if (scan_owner_ < kBlePeers)
+    cancelRecovery(scan_owner_);
+  central_.cancelScan();
+  recovery_[i] = Recovery{};
+  recovery_[i].state.phase = Hero12RecoveryPhase::Cancelled;
+  manager_->seal(i);
+  retire(i, Hero12Fault::DeliveryUncertain);
+  return true;
+}
+bool Hero12Adapter::maintenanceReleased(uint8_t i) const {
+  return i < kBlePeers && maintenance_[i] && linkReleased(i) && central_.scanReleased();
+}
 bool Hero12Adapter::commandReady(uint8_t i) const {
   return i < kBlePeers && peers_[i].ready && !peers_[i].sealed && peers_[i].step == Step::None &&
          central_.admissionOpen(i);
@@ -143,6 +160,8 @@ CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
                                            Hero12PowerCondition condition) {
   if (i >= kBlePeers || !manager_ || i >= manager_->size())
     return CameraError::InvalidPeer;
+  if (maintenance_[i])
+    return CameraError::Cancelled;
   if (!enabled_)
     return CameraError::Disabled;
   if (!peers_[i].qualified || !validQualification(peers_[i].qualification))
@@ -218,7 +237,7 @@ bool Hero12Adapter::begin(size_t index, const CameraConfig &camera, Operation op
   }
   const auto i = static_cast<uint8_t>(index);
   auto &p = peers_[i];
-  if (!p.qualified || !validQualification(p.qualification)) {
+  if (maintenance_[i] || !p.qualified || !validQualification(p.qualification)) {
     p.fault = Hero12Fault::Qualification;
     return false;
   }
@@ -930,7 +949,7 @@ void Hero12Adapter::advanceRecovery() {
       }
     }
   }
-  if (scan_owner_ == kBlePeers)
+  if (!maintenance_scan_ && scan_owner_ == kBlePeers)
     for (uint8_t n = 0; n < kBlePeers; ++n) {
       const uint8_t i = (scan_cursor_ + n) % kBlePeers;
       auto &r = recovery_[i];

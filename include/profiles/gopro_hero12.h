@@ -88,6 +88,11 @@ public:
   // Sealed links require replacement; Closed proves final per-peer host release.
   bool linkRetiring(uint8_t peer) const;
   bool linkReleased(uint8_t peer) const;
+  // Permanent target seal, plus temporary shared-discovery drain. Existing
+  // unrelated links continue; an interrupted shared scan has explicit Cancelled outcome.
+  bool sealForMaintenance(uint8_t peer);
+  bool maintenanceReleased(uint8_t peer) const;
+  void finishMaintenanceDrain() { maintenance_scan_ = false; }
   const HealthProgress &progress() const { return progress_; }
   const BleCentral &central() const { return central_; }
   static BleProfileSpec profileSpec();
@@ -155,6 +160,8 @@ private:
   gopro::Reassembler reassembler_;
   std::array<Peer, kBlePeers> peers_{};
   std::array<bool, kBlePeers> disconnect_pending_{};
+  std::array<bool, kBlePeers> maintenance_{};
+  bool maintenance_scan_ = false;
   std::array<PendingEvent, kBlePeers * 2> events_{};
   std::array<Recovery, kBlePeers> recovery_{};
   uint8_t scan_owner_ = kBlePeers, scan_cursor_ = 0;
