@@ -52,3 +52,10 @@ retains complete HERO12 setup, explicit recording/state and twenty-cycle bench
 acceptance. #17 retains live roles/routing/capacity evidence; no original camera
 or hardware scope was narrowed. There are now 32 planned work packages, plus
 separately tracked maintenance fixes #32/#33.
+
+2026-10-08 follow-up: [#36](https://github.com/llazzaro/RideSync/issues/36) extracts
+pure HERO12 pairing/control setup codecs from #4, separately from transport #35
+and adapter lifecycle. Official published model-specific data supports HERO12
+classic queries; newer-model capability/two-byte operations are outside its scope.
+Full initial pairing remains in #4, with no paired-only fallback or invented
+camera evidence. The plan now has 33 work packages plus maintenance #32/#33.
