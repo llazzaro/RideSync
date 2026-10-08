@@ -1,3 +1,4 @@
+#include "handlebar_control.h"
 #include "local_telemetry_runtime.h"
 #include "session_storage_owner.h"
 #include <algorithm>
@@ -692,8 +693,110 @@ void runtime_stop_during_settling_or_ready_does_not_restart_or_repeat_gpio() {
 }
 void setUp() {}
 void tearDown() {}
+struct ControlInput : ButtonInput {
+  bool pressed() override { return false; }
+};
+struct ControlLed : LedSink {
+  unsigned writes = 0;
+  int write(LedFrame) override {
+    ++writes;
+    return 0;
+  }
+};
+void runtime_control_reuses_one_camera_pass_and_copied_local_observations() {
+  Rig f;
+  SourceConfig cameras;
+  cameras.count = 1;
+  cameras.cameras[0].name = "hero";
+  cameras.cameras[0].family = CameraFamily::GoPro;
+  cameras.cameras[0].model = CameraModel::HERO12_BLACK;
+  cameras.cameras[0].identifier = "01:02:03:04:05:06";
+  cameras.cameras[0].address_type = AddressType::Public;
+  TEST_ASSERT_TRUE(f.manager.configure(cameras).ok());
+  auto c = qualified();
+  c.cameras_qualified = true;
+  c.peers.count = 1;
+  c.peers.entries[0].slot = 0;
+  c.peers.entries[0].id = 300;
+  c.peers.entries[0].model = CameraModel::HERO12_BLACK;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  ControlInput input;
+  ControlLed sink;
+  HandlebarControl control(f.raw, f.adapter, f.manager, f.group, input, sink);
+  TEST_ASSERT_TRUE(control.begin({}));
+  TEST_ASSERT_TRUE(r.attachControl(control));
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Inactive, control.submit(ButtonAction::RecordingIntent));
+  TEST_ASSERT_TRUE(r.start());
+  f.pass(r);
+  f.pass(r);
+  TEST_ASSERT_EQUAL_INT(CameraAdmission::Admitted, r.status().camera);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Admitted, control.submit(ButtonAction::RecordingIntent));
+  const auto ticks = f.manager.ticks(), advances = f.group.advancements();
+  f.pass(r);
+  TEST_ASSERT_EQUAL_UINT32(ticks + 1, f.manager.ticks());
+  TEST_ASSERT_EQUAL_UINT32(advances + 1, f.group.advancements());
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, control.status().group.intent);
+  TEST_ASSERT_EQUAL_INT(CameraError::Disabled, control.status().group.peers[0].error);
+  TEST_ASSERT_EQUAL_UINT64(r.status().timestamp.session_id,
+                           control.status().local.timestamp.session_id);
+  TEST_ASSERT_EQUAL_UINT32(r.status().storage.accepted, control.status().local.storage.accepted);
+  TEST_ASSERT_TRUE(sink.writes > 0);
+  const auto logged = r.status().storage.accepted;
+  for (unsigned n = 0; n < 40; ++n)
+    f.pass(r);
+  TEST_ASSERT_TRUE(r.status().storage.accepted > logged);
+  control.submit(ButtonAction::RecordingIntent);
+  f.finish(r);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Inactive, control.submit(ButtonAction::RecordingIntent));
+  TEST_ASSERT_EQUAL_INT(TelemetryPhase::Finished, control.status().local.phase);
+  r.detachControl(control);
+}
+void local_camera_refusal_keeps_control_ineligible_and_local_storage_running() {
+  Rig f;
+  auto c = qualified();
+  c.safe_mode = true;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  ControlInput input;
+  ControlLed sink;
+  HandlebarControl control(f.raw, f.adapter, f.manager, f.group, input, sink);
+  TEST_ASSERT_TRUE(control.begin({}));
+  TEST_ASSERT_TRUE(r.attachControl(control));
+  TEST_ASSERT_TRUE(r.start());
+  f.pass(r);
+  f.pass(r);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Refused, control.submit(ButtonAction::RecordingIntent));
+  const auto ticks = f.manager.ticks();
+  for (unsigned n = 0; n < 40; ++n)
+    f.pass(r);
+  TEST_ASSERT_EQUAL_UINT32(ticks, f.manager.ticks());
+  TEST_ASSERT_TRUE(r.status().storage.accepted > 0);
+  TEST_ASSERT_EQUAL_INT(SensorAdmission::SafeModeRefused, control.status().local.imu);
+  f.finish(r);
+  r.detachControl(control);
+}
+void control_copies_terminal_startup_refusal_even_without_worker() {
+  Rig f;
+  auto c = qualified();
+  c.gps_qualified = false;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  ControlInput input;
+  ControlLed sink;
+  HandlebarControl control(f.raw, f.adapter, f.manager, f.group, input, sink);
+  TEST_ASSERT_TRUE(control.begin({}));
+  TEST_ASSERT_TRUE(r.attachControl(control));
+  TEST_ASSERT_FALSE(r.start());
+  r.service();
+  const auto status = control.status();
+  r.detachControl(control);
+  TEST_ASSERT_EQUAL_INT(TelemetryPhase::Refused, status.local.phase);
+  TEST_ASSERT_EQUAL_INT(TelemetryFault::Qualification, status.local.fault);
+  TEST_ASSERT_EQUAL_INT(LedState::Error, status.led);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(control_copies_terminal_startup_refusal_even_without_worker);
+  RUN_TEST(runtime_control_reuses_one_camera_pass_and_copied_local_observations);
+  RUN_TEST(local_camera_refusal_keeps_control_ineligible_and_local_storage_running);
   RUN_TEST(runtime_stop_before_gps_startup_never_touches_power_or_uart);
   RUN_TEST(manual_stop_releases_key_before_imu_and_sd_barriers);
   RUN_TEST(collision_stop_releases_key_before_imu_and_sd_barriers);

@@ -155,6 +155,8 @@ void setup() {
     config_bootstrap.unavailable({PersistStatus::ReadError, -1});
     Serial.println("RideSync: config task creation failed; settings unavailable.");
   }
+  // The retained #41 handlebar + #40 telemetry owners stay inactive pending
+  // #42 supervised admission. QualifiedHandlebar defaults to no GPIO/control.
   // The retained opt-in HERO12 owner stays disabled until qualified settings,
   // identity, storage and a serialized application owner are supplied.
   // NVS failure is device/config health, never a fabricated worker stall. Qualified

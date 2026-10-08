@@ -5,6 +5,12 @@
 #include <string>
 #define SERIAL_8N1 0
 #define OUTPUT 1
+#define INPUT 0
+#define INPUT_PULLUP 2
+#define INPUT_PULLDOWN 3
+#define LOW 0
+extern int button_level;
+inline int digitalRead(int) { return button_level; }
 extern std::atomic<uint32_t> raw_time;
 inline uint32_t millis() { return raw_time.load(); }
 inline void delayMicroseconds(uint32_t) {}

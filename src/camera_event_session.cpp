@@ -39,14 +39,14 @@ bool CameraEventSession::binds(const Hero12Adapter &adapter, const CameraManager
                                const RecordingManager &group) const {
   return &adapter_ == &adapter && &manager_ == &manager && &group_ == &group;
 }
-void CameraEventSession::service() {
+void CameraEventSession::service(CameraServiceAction *action) {
   if (!route_owned_) {
     // Local mode advances only telemetry; a refused session drains only on stop.
     if (active_ || stopping_)
       admission_.tick();
     return;
   }
-  adapter_.service();
+  adapter_.service(action);
   if (stopping_ && !camera_finished_ && adapter_.canDestroy()) {
     manager_.detachAudit(&logger_);
     adapter_.detachGroup(&group_);

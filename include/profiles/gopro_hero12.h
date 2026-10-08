@@ -6,6 +6,11 @@
 
 namespace ridesync {
 class RecordingManager;
+class CameraServiceAction {
+public:
+  virtual ~CameraServiceAction() = default;
+  virtual void beforeAdvance() = 0;
+};
 // Commissioning supplies independent evidence. A configured BLE address and the
 // published minimum firmware are not observations of this camera.
 struct Hero12Qualification {
@@ -70,7 +75,7 @@ public:
   }
   bool start(bool enabled, bool source_qualified);
   bool configurePeer(uint8_t peer, const Hero12Qualification &);
-  void service(); // Central faults, profile, manager events, then manager.tick().
+  void service(CameraServiceAction *action = nullptr);
   void stop();
   bool canDestroy() const;
   Hero12Fault fault(uint8_t peer) const;
@@ -78,6 +83,11 @@ public:
                               Hero12PowerCondition condition = Hero12PowerCondition::Unknown);
   CameraError cancelRecovery(uint8_t peer);
   Hero12RecoveryState recoveryState(uint8_t peer) const;
+  bool recoveryReady(uint8_t peer) const;
+  bool commandReady(uint8_t peer) const;
+  // Sealed links require replacement; Closed proves final per-peer host release.
+  bool linkRetiring(uint8_t peer) const;
+  bool linkReleased(uint8_t peer) const;
   const BleCentral &central() const { return central_; }
   static BleProfileSpec profileSpec();
   static RetryPolicy managerPolicy();
@@ -148,7 +158,7 @@ private:
   uint8_t scan_owner_ = kBlePeers, scan_cursor_ = 0;
   uint32_t scan_generation_ = 0;
   uint8_t event_count_ = 0, cursor_ = 0;
-  bool enabled_ = false, started_ = false;
+  bool enabled_ = false, started_ = false, servicing_ = false;
   void retire(uint8_t, Hero12Fault);
   void enqueue(Event);
   void drain();

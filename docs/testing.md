@@ -394,3 +394,36 @@ blocked final close without control waits. Full native/Python/format and all
 three pinned ESP32 environments remain the integration gates. See
 [local telemetry](local_telemetry.md) for lifetime, qualification and physical
 limits. Default startup remains inactive pending #42.
+
+## Handlebar owner software checks (#41)
+
+See [control ownership and cancellation policy](handlebar_control.md). Native
+workflow tests execute the actual button manager, CameraEventSession, HERO12
+adapter/central/codecs and recording coordinator with synthetic radio/filesystem
+boundaries. They assert actual CameraManager tick and RecordingManager advancement
+counters for each composed pass, connection faults before action admission, no
+recursive dispatch, fresh-token preparation, REC/STOP, partial/unavailable peers,
+already-recording startup, scan/query cancellation, reset/revocation, four-action
+pressure/refusal, custom short/long/double mappings and copied storage/LED errors.
+Local telemetry tests cover the same owner seam and local-only/refused admission.
+
+`python -m unittest discover -s test -v` also executes the actual ESP32 handlebar
+and telemetry composition behind synthetic SDK/UART/I2C/filesystem/RTOS boundaries:
+qualified button GPIO polling drives explicit intent through the exclusive global
+service, defaults perform no GPIO admission, LED SDK failure remains visible, and
+late control attachment refuses without taking group preparation ownership.
+Attached qualified control also receives concrete GPS/IMU/power/UART/task/route
+startup refusals with no camera advancement, including while a separate legacy
+route is bound. Unanswered live-query STOP coverage holds final radio-context
+release, injects late evidence while that context remains valid, proves another
+peer can stop, and exercises reset and retirement timeout across clock wrap.
+
+The `hero12_adapter_compile` target retains callable handlebar factory/begin/service
+symbols and the existing shared telemetry/global routes. Target fixed ABI sizes
+are ControlStatus 848 bytes, HandlebarControl 1016 bytes and the retained GPIO
+facade 1216 bytes. Individual GCC stack-usage frames are 32 bytes for control
+beforeAdvance, 272 for control observe, 880 for facade status, 592 for local
+telemetry service, 224 for group advance and 48 for adapter service. These are
+individual compiler frames and fixed storage, not measured complete call-chain
+stack, high-water margin, heap, latency or radio capacity. Default firmware remains
+inactive pending #42; #22/#31 and all physical/protocol/reference gates stay open.

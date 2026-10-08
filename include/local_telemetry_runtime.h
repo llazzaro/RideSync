@@ -6,6 +6,7 @@
 #include "session_identity.h"
 #include <type_traits>
 namespace ridesync {
+class HandlebarControl;
 // Worker boundaries, not additional loggers. All control methods below run on
 // the application owner. Only worker implementations access filesystem/IMU IO.
 class TelemetryStorageWorker {
@@ -58,6 +59,7 @@ struct LocalTelemetryConfig {
 };
 struct LocalTelemetryStatus {
   TelemetryPhase phase = TelemetryPhase::Inactive;
+  bool safe_mode = false;
   TelemetryFault fault = TelemetryFault::None;
   SensorAdmission imu = SensorAdmission::Disabled;
   CameraAdmission camera = CameraAdmission::Disabled;
@@ -95,6 +97,8 @@ public:
   // Control-owner access for #41. Never tick managers/admission again after
   // service(). Null before allocation; resources are retained through Finished.
   CameraEventSession *session();
+  bool attachControl(HandlebarControl &);
+  void detachControl(HandlebarControl &);
 
 private:
   struct Active {
@@ -115,9 +119,10 @@ private:
   GnssPowerControl *power_;
   typename std::aligned_storage<sizeof(Active), alignof(Active)>::type memory_;
   Active *active_ = nullptr;
+  HandlebarControl *control_ = nullptr;
   LocalTelemetryStatus status_;
   bool started_ = false, sd_started_ = false, bound_ = false, imu_started_ = false;
-  bool imu_finished_ = false, logged_ = false, anchored_ = false;
+  bool imu_finished_ = false, logged_ = false, anchored_ = false, servicing_ = false;
   uint64_t logged_ms_ = 0, anchored_receipt_ = 0;
   void observe();
 };

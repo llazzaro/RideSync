@@ -184,6 +184,7 @@ CameraError CameraManager::cancel(size_t i) {
   return CameraError::None;
 }
 void CameraManager::reset() {
+  Token::advance(resets_);
   for (size_t i = 0; i < kMaxCameras; ++i) {
     auto &p = peers_[i];
     if (audit_ && p.active)
@@ -204,6 +205,7 @@ void CameraManager::reset() {
   }
 }
 void CameraManager::tick() {
+  ++ticks_;
   for (size_t i = 0; i < size(); ++i) {
     auto &p = peers_[i];
     if (!p.active || !reached(clock_.now(), p.state.deadline_ms))

@@ -1,11 +1,21 @@
 #include "recording_manager.h"
 namespace ridesync {
 namespace {
-bool pending(int stage) { return stage >= 1 && stage <= 3; }
+bool pending(int stage) { return stage >= 1 && stage <= 6; }
 bool reached(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL; }
 } // namespace
 RecordingManager::RecordingManager(CameraManager &m, Clock &c, RecordingCallback cb, void *ctx)
     : cameras_(m), clock_(c), callback_(cb), context_(ctx) {}
+bool RecordingManager::attachPreparation(RecordingPreparation &p) {
+  if (preparation_ && preparation_ != &p)
+    return false;
+  preparation_ = &p;
+  return true;
+}
+void RecordingManager::detachPreparation(RecordingPreparation &p) {
+  if (preparation_ == &p)
+    preparation_ = nullptr;
+}
 RecordingStatus RecordingManager::status() const {
   RecordingStatus s;
   s.intent = intent_;
@@ -45,6 +55,8 @@ void RecordingManager::notify() {
 }
 void RecordingManager::cancel() {
   for (size_t i = 0; i < cameras_.size(); ++i) {
+    if (preparation_)
+      preparation_->retire(i);
     if (cameras_.state(i)->lifecycle != Lifecycle::Disabled) {
       cameras_.cancel(i);
       peers_[i].error = CameraError::Cancelled;
@@ -61,6 +73,8 @@ void RecordingManager::begin(bool query) {
   // This coordinator owns command admission. Retire previous work instead of
   // filling the per-camera FIFO with superseded group requests.
   for (size_t i = 0; i < cameras_.size(); ++i) {
+    if (preparation_)
+      preparation_->retire(i);
     const auto l = cameras_.state(i)->lifecycle;
     const auto retired = cameras_.state(i)->token;
     if (pending(static_cast<int>(peers_[i].stage)) || l == Lifecycle::Operating ||
@@ -77,25 +91,45 @@ void RecordingManager::begin(bool query) {
     auto l = cameras_.state(i)->lifecycle;
     if (l == Lifecycle::Disabled)
       continue;
-    if (l == Lifecycle::Ready)
-      command(i);
-    else {
-      peers_[i].stage = Stage::Connect;
-      auto e = cameras_.request(i, Operation::Connect);
-      if (e != CameraError::None) {
-        peers_[i].stage = Stage::Error;
-        peers_[i].error = e;
-      }
+    if (preparation_ && preparation_->retiring(i)) {
+      peers_[i].stage = Stage::Retiring;
+      peers_[i].deadline = clock_.now() + 140000;
+    } else {
+      admit(i);
     }
   }
-  advance();
-  notify();
+  update();
+}
+void RecordingManager::admit(size_t i) {
+  auto &p = peers_[i];
+  if (preparation_ && (syncing_ || intent_ == RecordingState::Recording)) {
+    const bool retiring = p.stage == Stage::Retiring;
+    const auto e = preparation_->prepare(i);
+    p.stage = e == CameraError::None ? Stage::Prepare : Stage::Error;
+    p.error = e;
+    if (!retiring)
+      p.deadline = clock_.now() + 140000;
+  } else if (cameras_.state(i)->lifecycle == Lifecycle::Ready) {
+    command(i);
+  } else {
+    p.stage = Stage::Connect;
+    const auto e = cameras_.request(i, Operation::Connect);
+    if (e != CameraError::None) {
+      p.stage = Stage::Error;
+      p.error = e;
+    }
+  }
 }
 void RecordingManager::command(size_t i) {
   auto &p = peers_[i];
   const auto &c = *cameras_.state(i);
   if (!syncing_ && c.has_observation && c.observed == intent_) {
     p.stage = Stage::Done;
+    return;
+  }
+  if (preparation_ && !preparation_->commandReady(i)) {
+    p.stage = Stage::Admission;
+    p.deadline = clock_.now() + 2000;
     return;
   }
   p.stage = Stage::Command;
@@ -149,7 +183,14 @@ GroupError RecordingManager::shortPress() {
   }
   return request(s.recording == s.enabled ? RecordingState::Stopped : RecordingState::Recording);
 }
+void RecordingManager::update() {
+  if (!deferred_) {
+    advance();
+    notify();
+  }
+}
 void RecordingManager::advance() {
+  ++advancements_;
   for (size_t i = 0; i < cameras_.size(); ++i) {
     auto &p = peers_[i];
     const auto &c = *cameras_.state(i);
@@ -161,9 +202,46 @@ void RecordingManager::advance() {
     }
     if (!pending(static_cast<int>(p.stage)))
       continue;
+    if (p.stage == Stage::Retiring) {
+      if (reached(clock_.now(), p.deadline)) {
+        p.stage = Stage::Error;
+        p.error = CameraError::Timeout;
+      } else if ((c.lifecycle == Lifecycle::Idle || c.lifecycle == Lifecycle::Failed) &&
+                 preparation_->released(i)) {
+        // The actual Disconnected observation and host lease barrier have both
+        // completed. Only now admit replacement work using current generations.
+        admit(i);
+      }
+      continue;
+    }
+    if (p.stage == Stage::Prepare) {
+      if (reached(clock_.now(), p.deadline)) {
+        preparation_->retire(i);
+        p.stage = Stage::Error;
+        p.error = CameraError::Timeout;
+        continue;
+      }
+      const auto result = preparation_->prepared(i);
+      if (result.pending)
+        continue;
+      if (result.error != CameraError::None) {
+        p.stage = Stage::Error;
+        p.error = result.error;
+      } else {
+        command(i);
+      }
+      continue;
+    }
     if (c.lifecycle == Lifecycle::Failed || c.lifecycle == Lifecycle::Idle) {
       p.stage = Stage::Error;
       p.error = c.error == CameraError::None ? CameraError::NotConnected : c.error;
+    } else if (p.stage == Stage::Admission) {
+      if (reached(clock_.now(), p.deadline)) {
+        p.stage = Stage::Error;
+        p.error = CameraError::Timeout;
+      } else if (c.lifecycle == Lifecycle::Ready && preparation_->commandReady(i)) {
+        command(i);
+      }
     } else if (p.stage == Stage::Connect && c.lifecycle == Lifecycle::Ready)
       command(i);
     else if (p.stage == Stage::Confirm) {
@@ -210,8 +288,7 @@ bool RecordingManager::event(const Event &e) {
   // A new request can use a confirmed-state shortcut without dispatching an
   // operation. Retire that prior response token here without losing observation.
   if (retiredResponse || !cameras_.event(e)) {
-    advance();
-    notify();
+    update();
     return false;
   }
   auto &p = peers_[e.peer];
@@ -224,13 +301,12 @@ bool RecordingManager::event(const Event &e) {
     p.confirm = e.token;
     p.deadline = clock_.now() + 1000;
   }
-  advance();
-  notify();
+  update();
   return true;
 }
 void RecordingManager::tick() {
   cameras_.tick();
-  advance();
-  notify();
+  deferred_ = false;
+  update();
 }
 } // namespace ridesync

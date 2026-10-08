@@ -94,6 +94,10 @@ void Esp32LocalTelemetry::service() {
       hero12UnbindTelemetry(runtime_);
       route_bound_ = false;
     }
+  } else if (runtime_.canRelease()) {
+    // Inactive/refused/finished owner has no producers to advance. Publish its
+    // own copied status; the global route may belong to an unrelated owner.
+    runtime_.service();
   }
 }
 } // namespace ridesync

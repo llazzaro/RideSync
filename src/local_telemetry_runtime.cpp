@@ -1,4 +1,5 @@
 #include "local_telemetry_runtime.h"
+#include "handlebar_control.h"
 #include <new>
 namespace ridesync {
 LocalTelemetryRuntime::Active::Active(Clock &raw, StorageSink &sink, ModemUart &uart,
@@ -14,7 +15,9 @@ LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
                                              const LocalTelemetryConfig &config,
                                              GnssPowerControl *power)
     : raw_(raw), uart_(uart), sd_(sd), imu_(imu), adapter_(adapter), manager_(manager),
-      group_(group), config_(config), power_(power) {}
+      group_(group), config_(config), power_(power) {
+  status_.safe_mode = config.safe_mode;
+}
 LocalTelemetryRuntime::~LocalTelemetryRuntime() {
   // Caller must observe canRelease first; never wait or touch a filesystem here.
   if (active_)
@@ -53,8 +56,15 @@ bool LocalTelemetryRuntime::start() {
   return true;
 }
 void LocalTelemetryRuntime::service() {
-  if (!sd_started_ || status_.phase == TelemetryPhase::Finished)
+  if (servicing_)
     return;
+  servicing_ = true;
+  if (!sd_started_ || status_.phase == TelemetryPhase::Finished) {
+    if (control_)
+      control_->observe(status_);
+    servicing_ = false;
+    return;
+  }
   status_.identity = sd_.allocation();
   if (status_.phase == TelemetryPhase::Allocating &&
       status_.identity.status != IdentityStatus::Pending) {
@@ -141,15 +151,21 @@ void LocalTelemetryRuntime::service() {
         imu_finished_ = true;
       }
     }
-    s.service(); // Sole adapter/group/manager/admission advancement this pass.
+    if (control_)
+      control_->admission(status_);
+    s.service(status_.phase == TelemetryPhase::Running ? control_ : nullptr);
+    // Sole adapter/group/manager/admission advancement this pass.
   }
   observe();
+  servicing_ = false;
 }
 void LocalTelemetryRuntime::requestStop() {
   if (!sd_started_ || status_.phase == TelemetryPhase::Finished ||
       status_.phase == TelemetryPhase::Stopping)
     return;
   status_.phase = TelemetryPhase::Stopping;
+  if (control_)
+    control_->revoke();
   if (active_)
     active_->gps.cancel();
   if (imu_started_)
@@ -158,6 +174,16 @@ void LocalTelemetryRuntime::requestStop() {
     active_->session.requestStop();
   else
     sd_.cancel(); // Unbound owner only; no producer or Storage queue exists.
+}
+bool LocalTelemetryRuntime::attachControl(HandlebarControl &c) {
+  if (control_ || started_ || !c.binds(adapter_, manager_, group_))
+    return false;
+  control_ = &c;
+  return true;
+}
+void LocalTelemetryRuntime::detachControl(HandlebarControl &c) {
+  if (control_ == &c && canRelease())
+    control_ = nullptr;
 }
 void LocalTelemetryRuntime::observe() {
   status_.storage_error = sd_.ioError();
@@ -176,6 +202,8 @@ void LocalTelemetryRuntime::observe() {
     status_.phase = TelemetryPhase::Finished;
     status_.releasable = true;
   }
+  if (control_)
+    control_->observe(status_);
 }
 CameraEventSession *LocalTelemetryRuntime::session() {
   return active_ ? &active_->session : nullptr;

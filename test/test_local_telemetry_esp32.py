@@ -17,6 +17,18 @@ FIXTURE = ROOT / 'test/fixtures/local_telemetry'
 class LocalTelemetryEsp32Test(unittest.TestCase):
     def test_actual_composition_admission_route_and_final_close(self):
         files = {
+            'driver/gpio.h': r'''
+#pragma once
+#include <cstdint>
+using gpio_num_t=int;
+constexpr int GPIO_MODE_OUTPUT=1, GPIO_PULLUP_DISABLE=0;
+constexpr int GPIO_PULLDOWN_DISABLE=0, GPIO_INTR_DISABLE=0;
+struct gpio_config_t { uint64_t pin_bit_mask; int mode,pull_up_en,pull_down_en,intr_type; };
+extern unsigned led_configs,led_writes;
+extern int gpio_failure;
+inline int gpio_config(const gpio_config_t *) { ++led_configs;return gpio_failure; }
+inline int gpio_set_level(gpio_num_t,uint32_t) { ++led_writes;return gpio_failure; }
+''',
             'SPI.h': '#pragma once\nstruct SPIClass {};\n',
             'vfs_api.h': '#pragma once\n#include <memory>\nstruct VFSImpl {}; namespace fs { using FSImplPtr=std::shared_ptr<VFSImpl>; }\n',
             'SD.h': r'''
@@ -67,7 +79,7 @@ int test_close(int);
             portable = [p for p in (ROOT / 'src').rglob('*.cpp')
                         if p.name not in ('main.cpp', 'storage_sd.cpp', 'ble_esp32.cpp',
                                           'nvs_boot_guard.cpp', 'config_storage_nvs.cpp',
-                                          'status_led.cpp', 'button_manager.cpp',
+
                                           'config_storage.cpp', 'config_bootstrap.cpp')]
             exe = folder / 'runtime'
             cmd = ['c++', '-std=c++11', '-DARDUINO', '-DARDUINO_ARCH_ESP32',
@@ -78,7 +90,10 @@ int test_close(int);
             build = subprocess.run(cmd, capture_output=True)
             self.assertEqual(0, build.returncode, build.stderr.decode())
             for mode in ('default', 'uart-unqualified', 'imu-unqualified', 'power-unqualified',
-                         'sd-task', 'imu-task', 'safe-mode', 'local', 'camera', 'close-barrier'):
+                         'sd-task', 'imu-task', 'safe-mode', 'local', 'camera', 'close-barrier',
+                         'control-default', 'control', 'control-gpio-fault',
+                         'control-gps-refusal', 'control-uart-refusal', 'control-task-refusal',
+                         'control-imu-refusal', 'control-power-refusal', 'control-route-refusal'):
                 with self.subTest(mode=mode):
                     run = subprocess.run([str(exe), mode], capture_output=True, timeout=10)
                     self.assertEqual(0, run.returncode, run.stderr.decode())

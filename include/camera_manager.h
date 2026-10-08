@@ -128,6 +128,8 @@ public:
   CameraError cancel(size_t peer);
   void reset();
   void tick();
+  uint32_t ticks() const { return ticks_; }
+  uint32_t resets() const { return resets_; }
   bool event(const Event &event);
   bool attachAudit(CameraAudit &audit) {
     if (audit_ && audit_ != &audit)
@@ -167,6 +169,7 @@ private:
   RetryPolicy policy_;
   SourceConfig config_;
   CameraAudit *audit_ = nullptr;
+  uint32_t ticks_ = 0, resets_ = 0;
   std::array<Peer, kMaxCameras> peers_;
   bool validPolicy() const;
   void start(size_t peer, Operation op, uint32_t intent_id);

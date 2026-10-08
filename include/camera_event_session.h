@@ -19,7 +19,7 @@ public:
   bool binds(const Hero12Adapter &adapter, const CameraManager &manager,
              const RecordingManager &group) const;
   bool active() const { return active_; }
-  void service();
+  void service(CameraServiceAction *action = nullptr);
   void requestStop();
   void finishImu(); // Call only after the IMU producer's final publication.
   bool stopped() const;

@@ -115,6 +115,29 @@ Hero12Fault Hero12Adapter::fault(uint8_t i) const {
 Hero12RecoveryState Hero12Adapter::recoveryState(uint8_t i) const {
   return i < kBlePeers ? recovery_[i].state : Hero12RecoveryState{};
 }
+bool Hero12Adapter::linkRetiring(uint8_t i) const {
+  return i < kBlePeers && (peers_[i].sealed || disconnect_pending_[i]);
+}
+bool Hero12Adapter::linkReleased(uint8_t i) const {
+  if (i >= kBlePeers || disconnect_pending_[i])
+    return false;
+  const auto phase = central_.phase(i);
+  return phase == BlePhase::Empty || phase == BlePhase::Closed;
+}
+bool Hero12Adapter::commandReady(uint8_t i) const {
+  return i < kBlePeers && peers_[i].ready && !peers_[i].sealed && peers_[i].step == Step::None &&
+         central_.admissionOpen(i);
+}
+bool Hero12Adapter::recoveryReady(uint8_t i) const {
+  if (i >= kBlePeers || !manager_ || i >= manager_->size())
+    return false;
+  const auto &r = recovery_[i];
+  const auto &s = *manager_->state(i);
+  return r.state.phase == Hero12RecoveryPhase::Ready && r.operation &&
+         s.token.connection == r.connection && s.token.operation == r.operation &&
+         s.lifecycle == Lifecycle::Ready && s.has_observation &&
+         s.observed != RecordingState::Unknown;
+}
 CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
                                            Hero12PowerCondition condition) {
   if (i >= kBlePeers || !manager_ || i >= manager_->size())
@@ -158,7 +181,8 @@ CameraError Hero12Adapter::cancelRecovery(uint8_t i) {
   if ((r.state.phase == Hero12RecoveryPhase::Connecting ||
        r.state.phase == Hero12RecoveryPhase::Observing ||
        r.state.phase == Hero12RecoveryPhase::Starting) &&
-      r.operation && manager_->state(i)->token.operation == r.operation &&
+      r.operation && manager_->state(i)->token.connection == r.connection &&
+      manager_->state(i)->token.operation == r.operation &&
       (manager_->state(i)->lifecycle == Lifecycle::Connecting ||
        manager_->state(i)->lifecycle == Lifecycle::Operating))
     manager_->cancel(i);
@@ -933,7 +957,12 @@ void Hero12Adapter::advanceRecovery() {
       break;
     }
 }
-void Hero12Adapter::service() {
+void Hero12Adapter::service(CameraServiceAction *action) {
+  if (servicing_)
+    return;
+  servicing_ = true;
+  if (group_)
+    group_->beginServicePass();
   central_.service(clock_.now());
   for (uint8_t n = 0; n < kBlePeers; ++n) {
     const uint8_t i = (cursor_ + n) % kBlePeers;
@@ -958,11 +987,14 @@ void Hero12Adapter::service() {
   }
   cursor_ = (cursor_ + 1) % kBlePeers;
   drain(); // Connection-scoped Disconnected precedes every manager tick.
+  if (action)
+    action->beforeAdvance();
   if (group_)
     group_->tick();
   else if (manager_)
     manager_->tick();
   if (manager_ && enabled_)
     advanceRecovery();
+  servicing_ = false;
 }
 } // namespace ridesync

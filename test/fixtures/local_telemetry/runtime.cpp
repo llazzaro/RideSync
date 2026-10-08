@@ -1,3 +1,4 @@
+#include "handlebar_control_esp32.h"
 #include "local_telemetry_esp32.h"
 #include "profiles/gopro_hero12_esp32.h"
 #include <array>
@@ -12,6 +13,8 @@
 #include <vector>
 using namespace ridesync;
 std::atomic<uint32_t> raw_time{100};
+unsigned led_configs = 0, led_writes = 0;
+int gpio_failure = 0, button_level = 1;
 std::vector<std::thread> workers;
 bool fail_sd = false, fail_imu = false;
 std::atomic<bool> block_close{false}, close_entered{false}, release_close{false};
@@ -71,6 +74,16 @@ int test_close(int fd) {
   }
   return 0;
 }
+struct RouteSink : StorageSink {
+  bool mount() override { return true; }
+  bool openExclusive(const char *) override { return true; }
+  size_t write(const char *, size_t n) override { return n; }
+  bool flush() override { return true; }
+  void close() override {}
+};
+struct RouteClock : Clock {
+  uint32_t now() const override { return millis(); }
+};
 void put(uint8_t *b, uint32_t v) {
   for (unsigned j = 0; j < 4; ++j)
     b[j] = uint8_t(v >> (8 * j));
@@ -133,7 +146,7 @@ int main(int argc, char **argv) {
   wire.payload[0] = 0x8c;
   wire.payload[1] = 7;
   wire.payload[7] = 6;
-  if (mode == "camera") {
+  if (mode == "camera" || mode == "control" || mode == "control-route-refusal") {
     auto camera = hero12Runtime();
     SourceConfig source;
     source.count = 1;
@@ -165,6 +178,28 @@ int main(int argc, char **argv) {
     q.modem_already_powered = false;
     refuse = true;
   }
+  if (mode == "control-route-refusal")
+    refuse = true;
+  if (mode == "control-imu-refusal") {
+    q.imu.dedicated_bus = false;
+    refuse = true;
+  }
+  if (mode == "control-power-refusal") {
+    q.modem_already_powered = false;
+    refuse = true;
+  }
+  if (mode == "control-gps-refusal") {
+    q.runtime.gps_qualified = false;
+    refuse = true;
+  }
+  if (mode == "control-uart-refusal") {
+    q.modem.pins_qualified = false;
+    refuse = true;
+  }
+  if (mode == "control-task-refusal") {
+    fail_sd = true;
+    refuse = true;
+  }
   if (mode == "sd-task") {
     fail_sd = true;
     refuse = true;
@@ -176,11 +211,74 @@ int main(int argc, char **argv) {
   if (mode == "close-barrier")
     block_close.store(true);
   auto runtime = std::unique_ptr<Esp32LocalTelemetry>(new Esp32LocalTelemetry(uart, spi, wire, q));
+  RouteSink route_sink;
+  RouteClock route_clock;
+  std::unique_ptr<CameraEventSession> legacy;
+  std::unique_ptr<Esp32HandlebarControl> control;
+  if (mode.find("control") == 0) {
+    QualifiedHandlebar h;
+    if (mode != "control-default") {
+      h.opt_in = h.acknowledge_qualification = true;
+      h.button.enabled = h.button.board_qualified = true;
+      h.button.pin = 32;
+      h.button.pull = ButtonPull::Up;
+      h.led.mode = LedMode::Mono;
+      h.led.board_qualified = h.led.reservations_complete = true;
+      h.led.pins[0] = 21;
+      h.led.polarity[0] = LedPolarity::ActiveHigh;
+      h.led.reserved_pins = (uint64_t(1) << 18) | (uint64_t(1) << 19) | (uint64_t(1) << 5) |
+                            (uint64_t(1) << 22) | (uint64_t(1) << 23);
+    }
+    if (mode == "control-gpio-fault")
+      gpio_failure = 17;
+    control.reset(new Esp32HandlebarControl(*runtime, h));
+    assert(ridesync_handlebar_begin(*control) ==
+           (mode == "control" || mode == "control-gps-refusal" || mode == "control-uart-refusal" ||
+            mode == "control-task-refusal" || mode == "control-imu-refusal" ||
+            mode == "control-power-refusal" || mode == "control-route-refusal"));
+    const auto state = control->status();
+    if (mode == "control-default")
+      assert(!state.attached && !led_configs && !led_writes);
+    if (mode == "control-gpio-fault")
+      assert(!state.attached && state.backend_error == 17 &&
+             state.backend == LedBackendState::ConfigFailed);
+  }
+  if (mode == "control-route-refusal") {
+    auto camera = hero12Runtime();
+    legacy.reset(new CameraEventSession(route_clock, route_sink, camera.adapter, camera.manager,
+                                        camera.group, 77, "test", "synthetic"));
+    assert(legacy->configurePeer(0, 301, CameraModel::HERO12_BLACK));
+    assert(legacy->activate() && hero12BindSession(*legacy));
+  }
   assert(ridesync_local_telemetry_start(*runtime) == !refuse);
   if (refuse) {
     assert(runtime->status().phase == TelemetryPhase::Refused);
     assert(runtime->status().fault != TelemetryFault::None);
     assert(runtime->canRelease() && workers.empty());
+    if (control) {
+      auto camera = hero12Runtime();
+      const auto ticks = camera.manager.ticks(), advances = camera.group.advancements();
+      for (unsigned i = 0; i < 3; ++i)
+        ridesync_handlebar_service(*control);
+      const auto copied = control->status().control;
+      assert(copied.local.phase == TelemetryPhase::Refused);
+      assert(copied.local.fault == runtime->status().fault && copied.led == LedState::Error);
+      assert(camera.manager.ticks() == ticks && camera.group.advancements() == advances);
+      assert(workers.empty() && imu_tasks == 0 && mounts == 0);
+    }
+    if (legacy) {
+      assert(runtime->status().fault == TelemetryFault::CameraRoute && uart.begins == 0 &&
+             sd_tasks == 0);
+      assert(!hero12BindTelemetry(runtime->owner()));
+      legacy->requestStop();
+      legacy->finishImu();
+      for (unsigned i = 0; i < 1000 && !legacy->stopped(); ++i) {
+        legacy->service();
+        legacy->storage().workerStep();
+      }
+      assert(legacy->stopped() && hero12UnbindStoppedSession());
+      legacy.reset();
+    }
     assert(hero12BindTelemetry(runtime->owner()));
     assert(hero12UnbindTelemetry(runtime->owner()));
     return 0;
@@ -189,6 +287,40 @@ int main(int argc, char **argv) {
     if (mode == "camera" && runtime->owner().session())
       hero12Runtime().manager.request(0, Operation::Wake);
     pass(*runtime);
+  }
+  if (mode == "local") {
+    QualifiedHandlebar h;
+    h.opt_in = h.acknowledge_qualification = true;
+    h.button.enabled = h.button.board_qualified = true;
+    h.button.pin = 32;
+    Esp32HandlebarControl late(*runtime, h);
+    assert(!late.begin());
+    struct Probe : RecordingPreparation {
+      CameraError prepare(size_t) override { return CameraError::Unsupported; }
+      RecordingPreparationResult prepared(size_t) override { return {}; }
+      void retire(size_t) override {}
+    } probe;
+    auto camera = hero12Runtime();
+    assert(camera.group.attachPreparation(probe));
+    camera.group.detachPreparation(probe);
+    assert(led_configs == 0 && led_writes == 0);
+  }
+  if (mode == "control") {
+    assert(control->status().control.local.camera == CameraAdmission::Admitted);
+    auto camera = hero12Runtime();
+    for (unsigned press = 0; press < 2; ++press) {
+      for (unsigned sample = 0; sample < 5; ++sample) {
+        button_level = sample == 1 || sample == 2 ? 0 : 1;
+        raw_time.fetch_add(25);
+        const auto ticks = camera.manager.ticks(), advances = camera.group.advancements();
+        ridesync_handlebar_service(*control);
+        assert(camera.manager.ticks() == ticks + 1);
+        assert(camera.group.advancements() == advances + 1);
+      }
+      assert(control->status().control.group.intent ==
+             (press == 0 ? RecordingState::Recording : RecordingState::Stopped));
+    }
+    assert(control->status().input_ready && led_configs == 1 && led_writes > 0);
   }
   auto s = runtime->status();
   assert(s.phase == TelemetryPhase::Running);
@@ -221,6 +353,7 @@ int main(int argc, char **argv) {
     pass(*runtime);
   assert(runtime->canRelease() && runtime->status().storage_worker_finished);
   assert(mounts == 1 && unmounts == 1);
+  control.reset();
   runtime.reset();
   for (auto &t : workers)
     t.join();

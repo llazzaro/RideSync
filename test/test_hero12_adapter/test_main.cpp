@@ -1,5 +1,6 @@
 #include "camera_event_logger.h"
 #include "camera_event_session.h"
+#include "handlebar_control.h"
 #include "profiles/gopro_hero12.h"
 #include <algorithm>
 #include <cstring>
@@ -92,7 +93,9 @@ struct ScriptHost : SilentHost {
   std::vector<BleCommand> commands;
   std::vector<BleContext *> contexts;
   std::vector<BleContext *> quiet;
-  bool encoding = false;
+  bool encoding = false, independent_encoding = false;
+  std::array<bool, kBlePeers> encodings{};
+  const BleContext *held = nullptr;
   bool busy = false, ready = true, ignore_shutter_effect = false, drop_shutter_ack = false;
   unsigned hardware_not_ready = 0;
   uint8_t hardware_model = 62, api_major = 1;
@@ -132,7 +135,8 @@ struct ScriptHost : SilentHost {
     return 0;
   }
   bool quiescent(const BleContext &ctx) const override {
-    return ctx.terminal.load() && std::find(quiet.begin(), quiet.end(), &ctx) != quiet.end();
+    return &ctx != held && ctx.terminal.load() &&
+           std::find(quiet.begin(), quiet.end(), &ctx) != quiet.end();
   }
   void deliver(BleContext &ctx, BleEvent e, bool terminal = false) {
     if (terminal) {
@@ -295,8 +299,12 @@ struct Rig {
         else {
           reply = {payload[0], 0};
           if (payload[0] == 1) {
-            if (!host.ignore_shutter_effect)
-              host.encoding = payload[2] == 1;
+            if (!host.ignore_shutter_effect) {
+              if (host.independent_encoding)
+                host.encodings[ctx.peer] = payload[2] == 1;
+              else
+                host.encoding = payload[2] == 1;
+            }
             if (host.drop_shutter_ack)
               return;
           }
@@ -317,9 +325,11 @@ struct Rig {
                             1, 1};
         else
           reply = {0x13, 0, static_cast<uint8_t>(host.wrong_query_status ? 82 : payload[1]), 1,
-                   static_cast<uint8_t>(payload[1] == 10   ? host.encoding
-                                        : payload[1] == 82 ? host.ready
-                                                           : host.busy)};
+                   static_cast<uint8_t>(
+                       payload[1] == 10
+                           ? (host.independent_encoding ? host.encodings[ctx.peer] : host.encoding)
+                       : payload[1] == 82 ? host.ready
+                                          : host.busy)};
       }
       TEST_ASSERT_TRUE(reply.size() < 63);
       if (host.fragment_hardware && c.handle == 3 && payload[0] == 0x3c && reply.size() > 8) {
@@ -1233,8 +1243,618 @@ void cancelling_recovery_while_competing_query_runs_leaves_query_owned_by_caller
     if (c.phase == BlePhase::Write && c.handle == 3)
       TEST_ASSERT_TRUE(c.bytes[2] != 1);
 }
+struct HandlebarInput : ButtonInput {
+  bool down = false;
+  bool pressed() override { return down; }
+};
+struct HandlebarLed : LedSink {
+  LedFrame frame;
+  int failure = 0;
+  int write(LedFrame f) override {
+    frame = f;
+    return failure;
+  }
+};
+void first_recording_action_recovers_fresh_then_next_stops() {
+  Rig r;
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  HandlebarInput input;
+  HandlebarLed sink;
+  HandlebarControl control(r.clock, r.adapter, r.manager, group, input, sink);
+  TEST_ASSERT_TRUE(control.begin({}));
+  LocalTelemetryStatus local;
+  local.phase = TelemetryPhase::Running;
+  local.camera = CameraAdmission::Admitted;
+  control.observe(local);
+  const auto admission = control.submit(ButtonAction::RecordingIntent);
+  r.adapter.service(&control);
+  const auto intent = group.status().intent;
+  const auto phase = r.adapter.recoveryState(0).phase;
+  control.reset();
+  r.adapter.detachGroup(&group);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Admitted, admission);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, intent);
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Scanning, phase);
+}
+struct ControlRig {
+  Rig radio;
+  RecordingManager group;
+  HandlebarInput input;
+  HandlebarLed sink;
+  HandlebarControl control;
+  CameraLogSink storage;
+  CameraEventSession session;
+  LocalTelemetryStatus local;
+  int absent = -1;
+  explicit ControlRig(unsigned peers = 1, const ButtonConfig &buttons = {})
+      : radio(Hero12Adapter::managerPolicy(), peers), group(radio.manager, radio.clock),
+        control(radio.clock, radio.adapter, radio.manager, group, input, sink),
+        session(radio.clock, storage, radio.adapter, radio.manager, group, 42, "fw", "synthetic") {
+    for (unsigned i = 0; i < peers; ++i)
+      TEST_ASSERT_TRUE(session.configurePeer(i, 300 + i, CameraModel::HERO12_BLACK));
+    TEST_ASSERT_TRUE(session.activate());
+    TEST_ASSERT_TRUE(control.begin(buttons));
+    local.phase = TelemetryPhase::Running;
+    local.camera = CameraAdmission::Admitted;
+    local.gps.validity = FixValidity::Valid;
+    control.observe(local);
+  }
+  ~ControlRig() { control.reset(); }
+  void pass(bool responses = true) {
+    const auto ticks = radio.manager.ticks(), advances = group.advancements();
+    session.service(&control);
+    control.observe(local);
+    TEST_ASSERT_EQUAL_UINT32(ticks + 1, radio.manager.ticks());
+    TEST_ASSERT_EQUAL_UINT32(advances + 1, group.advancements());
+    if (responses)
+      while (radio.handled < radio.host.commands.size()) {
+        const size_t n = radio.handled++;
+        if (radio.host.commands[n].phase == BlePhase::Scan) {
+          auto &ctx = *radio.host.contexts[n];
+          // The scan is global; synthesize only the selected recovery candidate.
+          unsigned peer = 0;
+          for (; peer < radio.peer_count; ++peer)
+            if (radio.adapter.recoveryState(peer).phase == Hero12RecoveryPhase::Scanning)
+              break;
+          BleEvent e;
+          if (int(peer) == absent) {
+            e.kind = BleEventKind::ScanComplete;
+            radio.host.deliver(ctx, e, true);
+          } else {
+            e.kind = BleEventKind::Advertisement;
+            e.advertisement_type = BleAdvertisementType::ConnectableUndirected;
+            e.identity.type = IdentityType::Public;
+            e.identity.address[0] = peer + 1;
+            e.size = 4;
+            e.bytes = {{3, 3, 0xa6, 0xfe}};
+            radio.host.deliver(ctx, e);
+          }
+        } else {
+          radio.process(n);
+        }
+      }
+    ++radio.clock.value;
+  }
+  void pump(unsigned count = 200) {
+    for (unsigned i = 0; i < count; ++i)
+      pass();
+  }
+  unsigned shutters(bool on, unsigned peer = 0) {
+    unsigned count = 0;
+    for (size_t i = 0; i < radio.host.commands.size(); ++i) {
+      const auto &c = radio.host.commands[i];
+      if (radio.host.contexts[i]->peer == peer && c.phase == BlePhase::Write && c.handle == 3 &&
+          c.bytes[2] == 1 && c.bytes[4] == unsigned(on))
+        ++count;
+    }
+    return count;
+  }
+  void shortPress() {
+    pass();
+    radio.clock.value += 21;
+    pass();
+    input.down = true;
+    pass();
+    radio.clock.value += 21;
+    pass();
+    input.down = false;
+    pass();
+    radio.clock.value += 21;
+    pass();
+  }
+};
+void actual_button_default_first_rec_second_stop_and_copied_status() {
+  ControlRig r;
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.control.status().group.intent);
+  TEST_ASSERT_EQUAL_INT(LedState::Recording, r.control.status().led);
+  TEST_ASSERT_EQUAL_INT(CameraError::Unsupported, r.control.status().wake[0]);
+  const auto copied = r.control.status();
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.control.status().group.intent);
+  TEST_ASSERT_EQUAL_INT(LedState::Ready, r.control.status().led);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, copied.group.intent);
+}
+void unavailable_peer_does_not_abort_available_rec_or_deadline() {
+  ControlRig r(2);
+  r.absent = 0;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump(400);
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true, 1));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.radio.manager.state(1)->observed);
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Unavailable, r.control.status().recovery[0].phase);
+  TEST_ASSERT_EQUAL_INT(CameraError::NotConnected, r.control.status().group.peers[0].error);
+  TEST_ASSERT_EQUAL_INT(LedState::Error, r.control.status().led);
+}
+void already_recording_startup_queries_without_rec_then_explicit_stop() {
+  ControlRig r;
+  r.radio.host.encoding = true;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.control.status().group.intent);
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
+}
+void stop_during_scan_cancels_late_advertisement_without_rec() {
+  ControlRig r;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pass(false);
+  auto *scan = r.radio.host.contexts.back();
+  r.radio.handled = r.radio.host.commands.size();
+  r.control.submit(ButtonAction::RecordingIntent);
+  BleEvent e;
+  e.kind = BleEventKind::Advertisement;
+  e.advertisement_type = BleAdvertisementType::ConnectableUndirected;
+  e.identity.type = IdentityType::Public;
+  e.identity.address[0] = 1;
+  e.size = 4;
+  e.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.radio.host.deliver(*scan, e);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.control.status().group.intent);
+}
+void stop_cancels_pending_fresh_query_and_reset_never_replays_rec() {
+  ControlRig r;
+  r.radio.manager.request(0, Operation::Connect);
+  r.pump();
+  r.radio.auto_camera = false;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump(5);
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(0).phase);
+  auto *old = r.radio.link;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.radio.host.notification(*old, 18, {0x13, 0, 10, 1, 0});
+  r.radio.host.notification(*old, 18, {0x93, 0, 10, 1, 0});
+  r.radio.auto_camera = true;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pass(false);
+  const auto outstanding = r.radio.handled;
+  r.control.reset();
+  r.radio.manager.reset();
+  for (size_t i = outstanding; i < r.radio.host.commands.size(); ++i)
+    if (r.radio.host.commands[i].phase == BlePhase::Write)
+      r.radio.host.complete(i);
+  r.radio.handled = r.radio.host.commands.size();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.control.status().group.intent);
+}
+void bounded_actions_overflow_refusal_and_batch_stop_have_no_phantom_rec() {
+  ControlRig r;
+  for (unsigned i = 0; i < 4; ++i)
+    TEST_ASSERT_EQUAL_INT(ControlAdmission::Admitted,
+                          r.control.submit(ButtonAction::RecordingIntent));
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Overflow,
+                        r.control.submit(ButtonAction::RecordingIntent));
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_UINT(4, r.control.status().accepted);
+  TEST_ASSERT_EQUAL_UINT(1, r.control.status().overflow);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.control.status().group.intent);
+  r.local.camera = CameraAdmission::Refused;
+  r.control.observe(r.local);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Refused, r.control.submit(ButtonAction::RecordingIntent));
+}
+void custom_short_wake_long_record_and_double_resync_are_preserved() {
+  ButtonConfig config;
+  config.short_action = ButtonAction::WakeReconnect;
+  config.long_action = ButtonAction::RecordingIntent;
+  config.double_enabled = true;
+  ControlRig r(1, config);
+  r.shortPress();
+  r.radio.clock.value += 301;
+  r.pass();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.control.status().group.intent);
+  r.input.down = true;
+  r.pass();
+  r.radio.clock.value += 21;
+  r.pass();
+  r.radio.clock.value += 801;
+  r.pass();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+  r.input.down = false;
+  r.pass();
+  r.radio.clock.value += 21;
+  r.pass();
+  const auto accepted = r.control.status().accepted;
+  r.shortPress();
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(accepted + 1, r.control.status().accepted);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.control.status().group.intent);
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+}
+void manager_reset_discards_previously_admitted_action_without_replay() {
+  ControlRig r;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.radio.manager.reset();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_UINT(0, r.radio.host.commands.size());
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
+}
+void copied_logger_fault_and_led_backend_error_remain_visible() {
+  ControlRig r;
+  r.local.storage.terminal = true;
+  r.local.storage_error = 17;
+  r.control.observe(r.local);
+  TEST_ASSERT_EQUAL_INT(LedState::Error, r.control.status().led);
+  TEST_ASSERT_EQUAL_INT(17, r.control.status().local.storage_error);
+  r.sink.failure = 23;
+  r.radio.clock.value += 101;
+  r.control.observe(r.local);
+  TEST_ASSERT_EQUAL_INT(23, r.control.status().led_error);
+  r.local.storage.terminal = false;
+  r.local.storage_error = 0;
+  r.control.observe(r.local);
+  TEST_ASSERT_EQUAL_INT(LedState::Error, r.control.status().led);
+}
+void stop_waits_for_actual_host_release_and_rejects_late_query_without_blocking_peer() {
+  ControlRig r(2);
+  r.radio.host.independent_encoding = true;
+  r.radio.host.encodings[0] = r.radio.host.encodings[1] = true;
+  r.radio.manager.request(0, Operation::Connect);
+  r.radio.manager.request(1, Operation::Connect);
+  r.pump();
+  r.radio.auto_camera = false;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump(5);
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(1).phase);
+  auto *old_link = r.radio.links[0];
+  const auto old_token = r.radio.manager.state(0)->token;
+  r.radio.host.held = old_link;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.radio.auto_camera = true;
+  r.pump(100);
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(false, 0));
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false, 1));
+  TEST_ASSERT_TRUE(r.radio.host.encodings[0]);
+  TEST_ASSERT_FALSE(r.radio.host.encodings[1]);
+  TEST_ASSERT_TRUE(r.group.status().peers[0].pending);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.radio.manager.state(0)->observed);
+  TEST_ASSERT_TRUE(r.radio.adapter.central().phase(0) == BlePhase::Retiring ||
+                   r.radio.adapter.central().phase(0) == BlePhase::Quarantined);
+  // Valid owned old context, after STOP; neither late query nor old connection
+  // evidence may complete the replacement request or release the host lease.
+  r.radio.host.notification(*old_link, 18, {0x13, 0, 10, 1, 0});
+  r.radio.host.notification(*old_link, 18, {0x93, 0, 10, 1, 1});
+  r.pump(10);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.radio.manager.state(0)->observed);
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true, 0));
+  r.radio.host.held = nullptr;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false, 0));
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true, 0));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.radio.manager.state(0)->observed);
+  TEST_ASSERT_TRUE(r.radio.manager.state(0)->token.connection != old_token.connection);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.group.status().peers[0].error);
+}
+void cancellation_retirement_wait_times_out_without_fabricated_stop_or_forced_release() {
+  for (uint32_t start : {uint32_t(100), uint32_t(UINT32_MAX - 70000)}) {
+    ControlRig r;
+    r.radio.clock.value = start;
+    r.radio.host.encoding = true;
+    r.radio.manager.request(0, Operation::Connect);
+    r.pump();
+    r.radio.auto_camera = false;
+    r.control.submit(ButtonAction::RecordingIntent);
+    r.pump(5);
+    r.radio.host.held = r.radio.link;
+    r.control.submit(ButtonAction::RecordingIntent);
+    r.radio.auto_camera = true;
+    r.pump(5);
+    r.radio.clock.value += 140000;
+    r.pass();
+    const auto status = r.group.status();
+    const auto phase = r.radio.adapter.central().phase(0);
+    const auto observed = r.radio.manager.state(0)->observed;
+    r.radio.host.held = nullptr;
+    r.pump();
+    TEST_ASSERT_EQUAL_INT(CameraError::Timeout, status.peers[0].error);
+    TEST_ASSERT_TRUE(status.peers[0].terminal_failure);
+    TEST_ASSERT_TRUE(phase == BlePhase::Retiring || phase == BlePhase::Quarantined);
+    TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, observed);
+    TEST_ASSERT_EQUAL_UINT(0, r.shutters(false));
+    TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+    TEST_ASSERT_TRUE(r.radio.host.encoding);
+  }
+}
+void reset_during_cancellation_retirement_discards_reconnect_and_rec() {
+  ControlRig r;
+  r.radio.host.encoding = true;
+  r.radio.manager.request(0, Operation::Connect);
+  r.pump();
+  r.radio.auto_camera = false;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump(5);
+  r.radio.host.held = r.radio.link;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.radio.auto_camera = true;
+  r.pump(5);
+  r.control.reset();
+  r.radio.manager.reset();
+  r.radio.host.held = nullptr;
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(false));
+}
+void stop_during_unanswered_live_query_reconnects_and_observes_stopped() {
+  unsigned stop_shutters = 0, start_shutters = 0;
+  bool recording = true;
+  RecordingState observed = RecordingState::Unknown;
+  CameraError error = CameraError::None;
+  {
+    ControlRig r;
+    r.radio.host.encoding = true;
+    r.radio.manager.request(0, Operation::Connect);
+    r.pump();
+    r.radio.auto_camera = false;
+    r.control.submit(ButtonAction::RecordingIntent);
+    r.pump(5);
+    TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(0).phase);
+    TEST_ASSERT_EQUAL_INT(Lifecycle::Operating, r.radio.manager.state(0)->lifecycle);
+    // ATT is complete, but no camera reply/notification is delivered before STOP.
+    r.control.submit(ButtonAction::RecordingIntent);
+    r.radio.auto_camera = true;
+    r.pump();
+    stop_shutters = r.shutters(false);
+    start_shutters = r.shutters(true);
+    recording = r.radio.host.encoding;
+    observed = r.radio.manager.state(0)->observed;
+    error = r.group.status().peers[0].error;
+  }
+  TEST_ASSERT_EQUAL_UINT(1, stop_shutters);
+  TEST_ASSERT_EQUAL_UINT(0, start_shutters);
+  TEST_ASSERT_FALSE(recording);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, observed);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, error);
+}
+void preparation_timeout_is_bounded_across_millis_wrap_without_rec() {
+  for (uint32_t start : {uint32_t(100), uint32_t(UINT32_MAX - 70000)}) {
+    ControlRig r;
+    r.radio.clock.value = start;
+    r.control.submit(ButtonAction::RecordingIntent);
+    r.pass(false);
+    r.radio.handled = r.radio.host.commands.size();
+    r.radio.clock.value += 140000;
+    r.pass(false);
+    TEST_ASSERT_EQUAL_INT(CameraError::Timeout, r.group.status().peers[0].error);
+    TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Cancelled, r.radio.adapter.recoveryState(0).phase);
+    TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  }
+}
+void keepalive_timeout_during_stop_remains_terminal_and_never_dispatches_rec() {
+  ControlRig r;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump();
+  const auto start_count = r.shutters(true);
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.radio.clock.value += 3000;
+  r.pass(false);
+  r.radio.clock.value += 2001;
+  r.pass(false);
+  for (size_t i = r.radio.handled; i < r.radio.host.commands.size(); ++i)
+    if (r.radio.host.commands[i].phase == BlePhase::Write)
+      r.radio.host.complete(i);
+  r.radio.handled = r.radio.host.commands.size();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(start_count, r.shutters(true));
+  TEST_ASSERT_TRUE(r.group.status().peers[0].terminal_failure);
+  TEST_ASSERT_EQUAL_INT(LedState::Error, r.control.status().led);
+}
+void group_rec_waits_for_keepalive_due_after_fresh_recovery() {
+  ControlRig r;
+  r.radio.manager.request(0, Operation::Connect);
+  r.pump();
+  r.control.submit(ButtonAction::RecordingIntent);
+  for (unsigned i = 0;
+       i < 100 && r.radio.adapter.recoveryState(0).phase != Hero12RecoveryPhase::Ready; ++i)
+    r.pass();
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Ready, r.radio.adapter.recoveryState(0).phase);
+  r.radio.clock.value += 3000;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.group.status().peers[0].error);
+}
+void stop_action_waits_for_keepalive_due_in_same_composed_pass() {
+  ControlRig r;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump();
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.radio.clock.value += 3000;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.group.status().peers[0].error);
+}
+void custom_double_recording_intent_admits_rec_then_stop() {
+  ButtonConfig config;
+  config.double_enabled = true;
+  config.short_action = ButtonAction::Resync;
+  config.double_action = ButtonAction::RecordingIntent;
+  ControlRig r(1, config);
+  r.shortPress();
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.control.status().accepted);
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.group.status().intent);
+  r.shortPress();
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(2, r.control.status().accepted);
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.group.status().intent);
+}
+void camera_admission_revocation_cancels_queued_recovery_before_rec() {
+  ControlRig r;
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pass(false);
+  auto *scan = r.radio.host.contexts.back();
+  r.radio.handled = r.radio.host.commands.size();
+  BleEvent e;
+  e.kind = BleEventKind::Advertisement;
+  e.advertisement_type = BleAdvertisementType::ConnectableUndirected;
+  e.identity.type = IdentityType::Public;
+  e.identity.address[0] = 1;
+  e.size = 4;
+  e.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.radio.host.deliver(*scan, e);
+  r.local.camera = CameraAdmission::Refused;
+  r.control.observe(r.local);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
+}
+void superseded_recovery_token_cannot_authorize_rec() {
+  ControlRig r;
+  r.radio.manager.request(0, Operation::Connect);
+  r.pump();
+  r.control.submit(ButtonAction::RecordingIntent);
+  for (unsigned i = 0;
+       i < 100 && r.radio.adapter.recoveryState(0).phase != Hero12RecoveryPhase::Ready; ++i)
+    r.pass();
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Ready, r.radio.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.radio.manager.request(0, Operation::Query));
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  TEST_ASSERT_EQUAL_INT(CameraError::NotConnected, r.group.status().peers[0].error);
+}
+void unsupported_peer_retains_error_while_qualified_peer_records() {
+  ControlRig r(2);
+  TEST_ASSERT_FALSE(r.radio.adapter.configurePeer(1, {}));
+  r.control.submit(ButtonAction::RecordingIntent);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true, 0));
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true, 1));
+  TEST_ASSERT_EQUAL_INT(CameraError::Unsupported, r.group.status().peers[1].error);
+}
+void actual_transport_faults_precede_action_and_only_group_advancement() {
+  Rig r;
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  struct Action : CameraServiceAction {
+    CameraManager &manager;
+    RecordingManager &group;
+    Lifecycle lifecycle = Lifecycle::Ready;
+    uint32_t ticks = 0, advances = 0;
+    Action(CameraManager &m, RecordingManager &g) : manager(m), group(g) {}
+    void beforeAdvance() override {
+      lifecycle = manager.state(0)->lifecycle;
+      ticks = manager.ticks();
+      advances = group.advancements();
+      group.request(RecordingState::Recording);
+    }
+  } action(r.manager, group);
+  const auto ticks = r.manager.ticks(), advances = group.advancements();
+  BleEvent fault;
+  fault.kind = BleEventKind::Disconnected;
+  fault.connection = r.link->connection.load();
+  r.host.deliver(*r.link, fault, true);
+  r.adapter.service(&action);
+  r.adapter.detachGroup(&group);
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Idle, action.lifecycle);
+  TEST_ASSERT_EQUAL_UINT32(ticks, action.ticks);
+  TEST_ASSERT_EQUAL_UINT32(advances, action.advances);
+  TEST_ASSERT_EQUAL_UINT32(ticks + 1, r.manager.ticks());
+  TEST_ASSERT_EQUAL_UINT32(advances + 1, group.advancements());
+}
+void composed_adapter_reentry_cannot_advance_managers_twice() {
+  Rig r;
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  struct Action : CameraServiceAction {
+    Hero12Adapter &adapter;
+    explicit Action(Hero12Adapter &a) : adapter(a) {}
+    void beforeAdvance() override { adapter.service(); }
+  } action(r.adapter);
+  const auto ticks = r.manager.ticks(), advances = group.advancements();
+  r.adapter.service(&action);
+  r.adapter.detachGroup(&group);
+  TEST_ASSERT_EQUAL_UINT32(ticks + 1, r.manager.ticks());
+  TEST_ASSERT_EQUAL_UINT32(advances + 1, group.advancements());
+}
+void composed_pass_publishes_group_once_after_all_transport_events() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  unsigned publications = 0;
+  RecordingManager group(
+      r.manager, r.clock, [](void *p, const RecordingStatus &) { ++*static_cast<unsigned *>(p); },
+      &publications);
+  r.adapter.attachGroup(group);
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 1});
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 0});
+  const auto advances = group.advancements(), ticks = r.manager.ticks();
+  r.adapter.service();
+  r.adapter.detachGroup(&group);
+  TEST_ASSERT_EQUAL_UINT(1, publications);
+  TEST_ASSERT_EQUAL_UINT32(advances + 1, group.advancements());
+  TEST_ASSERT_EQUAL_UINT32(ticks + 1, r.manager.ticks());
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(stop_waits_for_actual_host_release_and_rejects_late_query_without_blocking_peer);
+  RUN_TEST(cancellation_retirement_wait_times_out_without_fabricated_stop_or_forced_release);
+  RUN_TEST(reset_during_cancellation_retirement_discards_reconnect_and_rec);
+  RUN_TEST(stop_during_unanswered_live_query_reconnects_and_observes_stopped);
+  RUN_TEST(preparation_timeout_is_bounded_across_millis_wrap_without_rec);
+  RUN_TEST(keepalive_timeout_during_stop_remains_terminal_and_never_dispatches_rec);
+  RUN_TEST(group_rec_waits_for_keepalive_due_after_fresh_recovery);
+  RUN_TEST(stop_action_waits_for_keepalive_due_in_same_composed_pass);
+  RUN_TEST(custom_double_recording_intent_admits_rec_then_stop);
+  RUN_TEST(camera_admission_revocation_cancels_queued_recovery_before_rec);
+  RUN_TEST(superseded_recovery_token_cannot_authorize_rec);
+  RUN_TEST(unsupported_peer_retains_error_while_qualified_peer_records);
+  RUN_TEST(actual_transport_faults_precede_action_and_only_group_advancement);
+  RUN_TEST(composed_adapter_reentry_cannot_advance_managers_twice);
+  RUN_TEST(manager_reset_discards_previously_admitted_action_without_replay);
+  RUN_TEST(actual_button_default_first_rec_second_stop_and_copied_status);
+  RUN_TEST(unavailable_peer_does_not_abort_available_rec_or_deadline);
+  RUN_TEST(already_recording_startup_queries_without_rec_then_explicit_stop);
+  RUN_TEST(stop_during_scan_cancels_late_advertisement_without_rec);
+  RUN_TEST(stop_cancels_pending_fresh_query_and_reset_never_replays_rec);
+  RUN_TEST(bounded_actions_overflow_refusal_and_batch_stop_have_no_phantom_rec);
+  RUN_TEST(custom_short_wake_long_record_and_double_resync_are_preserved);
+  RUN_TEST(copied_logger_fault_and_led_backend_error_remain_visible);
+  RUN_TEST(first_recording_action_recovers_fresh_then_next_stops);
+  RUN_TEST(composed_pass_publishes_group_once_after_all_transport_events);
   RUN_TEST(default_disabled_never_starts_host_or_admits_connect);
   RUN_TEST(required_management_and_classic_routes_are_declared);
   RUN_TEST(full_pairing_observes_state_and_shutter_requires_encoding_query);
