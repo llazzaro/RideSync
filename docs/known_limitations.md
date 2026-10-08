@@ -42,7 +42,7 @@
 - Button/LED GPIO adapters require explicit qualified wiring and default off.
   Software watchdog/recovery and actual main supervision/admission contracts exist;
   physical watchdog/stack/heap measurements, installation/enclosure (#30), and the complete
-  #31 fault/8-hour-soak/controlled-ride acceptance remain open.
+  #31 finite fault/bench/controlled-ride acceptance remain open.
 
 Source implementation, Experimental qualification and Confirmed hardware support
 must remain distinct. Promote hardware support only with reproducible target

@@ -1,12 +1,14 @@
 # Insta360 BLE research
 
-Research baseline: 2026-10-07. **No RideSync hardware observations exist.**
+Research baseline: 2026-10-07; bench observations updated 2026-10-08. Limited
+X5-associated BE80 discovery and ESP32 CE80 advertising observations exist;
+camera-side remote pairing and recording control remain unverified.
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
 ## GO 3S and Action Pod feasibility (#6)
 
-**Finding: unresolved; no RideSync GO 3S or Action Pod is available for capture.**
+**Finding: unresolved; no RideSync GO 3S or Action Pod capture has been obtained.**
 This is not evidence of incompatibility. No firmware versions, pairing state,
 advertisement, GATT database, command, notification or recording-state packet
 has been observed locally. No fixture is available; see

@@ -202,8 +202,9 @@ four global streams, 32 packets and a 1000 ms absolute deadline. Management
 uses the same capacity and does not establish four-camera operation. Missing or
 late fragments have no transaction identity; the adapter retires
 ambiguous connections and correlates serialized operations. Camera pairing,
-installed firmware/API, observed status and recording, twenty cycles and
-power-reset/no-replay gates in #4/#20/#17/#24 remain open.
+installed firmware/API and observed recording remain unverified. The finite
+model smoke/coexistence checks belong to #22; integrated power/reset/no-replay
+checks belong to #31, under the [acceptance policy](acceptance_policy.md).
 
 ## HERO12 recovery policy (2026-10-08)
 
@@ -276,8 +277,10 @@ location. Synthetic native host tests validate the software sequence only.
 
 `include/protocol/gopro_codec.h` and `src/protocol/gopro_codec.cpp` implement a
 portable C++11 codec without BLE dependencies or dynamic allocation. This
-completes the documentary software portion of #20; **#20 hardware acceptance
-remains unmet**. The overall adapter/lifecycle support above is still planned.
+implements the documentary software scope of #20; its revised checklist and
+passing source checks determine software completion. Physical HERO12 acceptance
+is owned by #22/#31 and remains unmet. The adapter above exists as opt-in
+software; this does not establish installed-camera compatibility.
 
 The explicit documentary profile is classic one-byte status IDs and
 Get `0x13`/Register `0x53`/Notify `0x93`, Busy 8/Encoding 10/Ready 82. Enable a future adapter only
@@ -338,7 +341,7 @@ component licenses. No SDK implementation is reused. Native tests exercise
 packets, result/state semantics and bounded independent reassembly. ESP32 compile
 checks portability, not on-camera behavior.
 
-Before claiming HERO12 support or #20 acceptance, capture the installed firmware
+Before claiming Confirmed HERO12 hardware support, capture the installed firmware
 and API version; qualify video group 1000, shutter, hardware info, all three status
 Get/Register/Notify operations, keep-alive settings responses, errors and actual
 fragment counter behavior on that version. No hardware captures exist here.

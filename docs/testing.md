@@ -1,5 +1,16 @@
 # Validation
 
+## Finite ownership and completion
+
+The [October 8 acceptance policy](acceptance_policy.md) governs current ticket
+completion. Software tests/builds finish component implementation; actual
+compatibility remains Experimental/Not tested until observed. #3 owns the first
+X5 smoke test (three REC/STOP cycles and one reconnect); #22 owns the staged
+camera matrix, #30 installation, and #31 the finite integrated bench/ride run.
+The detailed protocols below describe evidence to collect in those owning
+tickets, not repeated blockers on every software component. Reuse existing
+results for unchanged configurations and rerun affected failures after fixes.
+
 ## Automated baseline
 
 `pio run -e lilygo_t_a7670e_r2` compiles serial-only firmware.
@@ -39,7 +50,7 @@ bounded connect/command timeouts and honest serial status. It is not met yet.
 
 ## GO 3S and Action Pod evidence protocol
 
-Status: **not run; target hardware unavailable**. Run this before adapter work
+Status: **not run; target/firmware capture pending**. Run this before adapter work
 on each tested camera/Pod firmware pair. Record date, operator, camera model,
 camera firmware, Pod firmware, app version, BLE controller/sniffer model and
 software version, camera/Pod power state, activation/pairing history and
@@ -77,8 +88,8 @@ notes use stable labels such as `camera-A` and `pod-A`.
    require reliable observed state and never replay after ambiguous timeout.
    Otherwise leave command/state unknown.
 
-The current blocker is specific: we lack a GO 3S camera and Action Pod plus
-their firmware/version record, repeated annotated recording transitions, BLE
+The current blocker is specific: we lack a recorded GO 3S/Action Pod
+firmware/version baseline, repeated annotated recording transitions, BLE
 advertisement/GATT/security evidence, and correlated command/response/state
 captures. Therefore target ownership and start/stop/state feasibility remain
 unresolved. A missing capture is not a negative compatibility result. Do not
@@ -104,10 +115,10 @@ composition against the pinned real backend without starting BLE. It proves
 source and symbol compatibility, not timing, stack high-water mark, camera
 behavior or safe controller startup. Commissioning must record exact installed
 model/firmware/API, pairing screen and control ownership, CCCD results,
-response/notification traces and response latency. Run at least twenty
-screen-and-Encoding-confirmed REC/STOP cycles and power-cycle/reset/reconnect
-checks without replay, then measure keep-alive cadence and mixed-link
-coexistence. These physical gates remain open.
+response/notification traces and response latency. In #22 run three
+screen-and-Encoding-confirmed REC/STOP cycles and one reconnect for this model,
+then record keep-alive cadence and mixed-link coexistence. #31 owns integrated
+power-cycle/reset/no-replay checks. These observations remain unverified.
 
 Follow [GoPro milestone acceptance](gopro_plan.md) for each selected model and
 firmware. Test pairing persistence, video-mode selection, explicit shutter
@@ -130,7 +141,8 @@ See the [issue-backed plan](superpowers/plans/2026-10-07-ridesync.md).
 
 ## GPS storage software and open hardware gates (#11)
 
-Run `pio test -e native -f test_storage`, then the full native suite. Tests cover
+Run `pio test -e native -f test_storage` for focused storage changes; full CI
+checks the integrated candidate once. Tests cover
 missing/no-fix and expired UTC, immutable anchor/fix copies, retained stale fix
 and stale no-fix, unsafe metadata, invalid sessions/metrics/calendars/associations,
 queue overflow, mount retry cap, collision, zero/short writes, flush failure,
@@ -147,7 +159,9 @@ boundary, proving that a final enqueue after the earlier empty observation is
 written/flushed before close; shipped source has no scheduling test hooks. ESP32 compilation verifies `storage_sd.cpp` against the
 pinned framework, but it does not qualify hardware or validate blocking latency.
 
-**Not yet bench-verified; whole #11 stays open.** Record the board revision,
+**Physical qualification is owned by #31.** Normal real-card write/flush/close
+and EN-reset readback have been observed; see the hardware-results reports.
+Active supply loss and load/fault behavior remain untested. Record the board revision,
 qualified SPI bus/pins/CS, filesystem/card model/capacity, framework/firmware
 versions, dedicated-volume ownership, worker priority/stack high-water mark,
 producer rate and flush policy. With no cameras connected and GNSS initially
@@ -157,8 +171,8 @@ latency and watchdog behavior during missing/full/slow card and intentionally
 stalled worker conditions. Compare accepted/dropped/rejected/written/flushed/lost
 and health progress; native concurrency tests cannot prove SDK fairness.
 
-After graceful stop, reset and randomized power cuts during mount, header,
-partial row, write and flush, parse complete version-1 CSV rows with fixed column
+In #31 use its finite declared startup/write/after-flush power-cut boundaries,
+then parse complete version-1 CSV rows with fixed column
 counts, session consistency and validity checks. Record trailing-row handling,
 observed missing rows versus the documented 12-record default software bound,
 and corruption affecting previously flushed data/directories. Preserve existing
@@ -281,7 +295,8 @@ AT re-entry still needs its existing caller-qualified barrier, and session IDs
 need an independent uniqueness guarantee across power loss. RTC boot counts do
 not provide that guarantee.
 
-**Physical gates remain OPEN; whole #15 is not complete.** Fault injection is
+**Physical watchdog checks remain OPEN in #31.** Software completion is
+assessed against #15’s revised implementation scope. Fault injection is
 absent/disabled in default firmware. Before acceptance, run an explicit test
 build with only a qualified owned worker stalled after entry into blocking work,
 while measuring supervisor/control/BLE/SD/IMU fairness, stack margin, latency and
@@ -463,7 +478,7 @@ config-stack check are required on the final source. Retained target symbols,
 fixed ABI and individual compiler frames are refreshed separately; none proves
 complete nested SDK/RTOS/interrupt stack, task high-water, heap margin, scheduler
 latency, radio capacity or physical watchdog behavior. The original full #22
-mixed-camera matrix and #31 fault/eight-hour-soak/controlled-ride matrix remain
+mixed-camera matrix and #31 finite fault/bench/controlled-ride matrix remain
 open, as do SD durability/namespace commissioning, board, camera, IMU/reference,
 Insta360 and estimator qualification.
 
