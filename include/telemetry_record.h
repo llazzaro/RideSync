@@ -1,10 +1,11 @@
 #pragma once
+#include "camera_manager.h"
 #include "modem_gnss.h"
 #include <cstdint>
 #include <type_traits>
 namespace ridesync {
-enum class RecordKind : uint8_t { Gps, ImuSample, ImuConfig, ImuHealth, ImuControl, Count };
-enum class StorageFormat : uint8_t { GpsV1, MixedV2 };
+enum class RecordKind : uint8_t { Gps, ImuSample, ImuConfig, ImuHealth, ImuControl, Camera, Count };
+enum class StorageFormat : uint8_t { GpsV1, MixedV2, CameraV3 };
 enum class Qualification : uint8_t { Unknown, Unqualified, Qualified };
 // IDs are caller assigned opaque uint32 values; zero = unknown. This schema
 // does not establish identity uniqueness, a mount transform, or calibration.
@@ -55,15 +56,48 @@ struct ImuEvidence {
   uint32_t event_count = 0;
   bool event_count_lower_bound = false;
 };
+enum class CameraEventKind : uint8_t {
+  RequestAccepted,
+  RequestQueued,
+  RequestRefused,
+  Attempt,
+  WireAck,
+  RecordingObserved,
+  ManagerCompleted,
+  Failed,
+  Cancelled,
+  Disconnected
+};
+// Owner-admission timestamp is in TelemetryRecord::timestamp. The event receipt
+// is the manager audit hook's raw host clock sample, translated by the telemetry
+// owner. It is not BLE radio receipt or camera acquisition. IDs are opaque.
+struct CameraEvidence {
+  uint64_t session_id = 0;
+  uint64_t event_receipt_ms = 0;
+  uint32_t event_receipt_raw32 = 0, event_receipt_age_ms = 0;
+  bool event_receipt_known = false;
+  uint8_t peer_slot = 0;
+  uint32_t peer_id = 0, group_generation = 0, intent_id = 0;
+  uint32_t connection_generation = 0, operation_generation = 0;
+  CameraModel model = CameraModel::Unknown;
+  CameraEventKind kind = CameraEventKind::RequestRefused;
+  Operation operation = Operation::Connect;
+  CameraError error = CameraError::None;
+  RecordingState recording = RecordingState::Unknown;
+  CameraAckDomain ack_domain = CameraAckDomain::None;
+  CameraAckAction ack_action = CameraAckAction::None;
+  bool delivery_admitted = false;
+};
 struct TelemetryRecord {
   RecordKind kind = RecordKind::Gps;
   RecordTimestamp timestamp;
   ModemSnapshot gps;
   ImuEvidence imu;
+  CameraEvidence camera;
 };
 static_assert(std::is_trivially_copyable<TelemetryRecord>::value,
               "Telemetry records must own copied fixed data");
-static_assert(sizeof(ImuEvidence) <= 240 && sizeof(TelemetryRecord) <= 472,
+static_assert(sizeof(ImuEvidence) <= 240 && sizeof(TelemetryRecord) <= 544,
               "Review telemetry RAM bounds when changing the envelope");
 struct KindHealth {
   uint32_t accepted, dropped, rejected, written, flushed, lost;

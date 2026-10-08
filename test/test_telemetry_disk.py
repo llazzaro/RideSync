@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from telemetry_parser import COMMON, IMU, parse
+from telemetry_parser import CAMERA, COMMON, IMU, parse
 ROOT = Path(__file__).resolve().parents[1]
 
 SOURCE = r'''
@@ -193,3 +193,74 @@ class TelemetryDiskTest(unittest.TestCase):
                              ('4294967295,1,4294967295','4294967295,0,4294967295')):
             self.assertIn(before,self.data)
             with self.assertRaises(ValueError): parse(self.data.replace(before,after))
+
+    def test_camera_v3_keeps_gps_imu_and_distinct_ack(self):
+        source = r'''
+#include "storage.h"
+#include <cassert>
+#include <cstdio>
+#include <string>
+using namespace ridesync;
+struct S : StorageSink {
+ std::string bytes;
+ bool mount() override {return true;} bool openExclusive(const char *) override {return true;}
+ size_t write(const char *p,size_t n) override {bytes.append(p,n);return n;}
+ bool flush() override {return true;} void close() override {}
+};
+int main() {
+ S sink; Storage storage(sink,{42,"fw","synthetic",2,4,StorageFormat::CameraV3});
+ RecordTimestamp t;t.session_id=42;t.monotonic_quality=MonotonicQuality::Valid;t.monotonic_ms=12;
+ ModemSnapshot gps;gps.session_id=42;assert(storage.enqueue(t,gps));
+ ImuEvidence imu;imu.session_id=42;imu.kind=RecordKind::ImuHealth;
+ assert(storage.enqueueImu(t,imu));
+ CameraEvidence e;e.session_id=42;e.peer_id=301;e.model=CameraModel::HERO12_BLACK;
+ e.kind=CameraEventKind::WireAck;e.operation=Operation::Start;e.intent_id=4;
+ e.connection_generation=2;e.operation_generation=7;
+ e.ack_domain=CameraAckDomain::Classic;e.ack_action=CameraAckAction::ShutterOn;
+ e.event_receipt_known=true;e.event_receipt_ms=8;e.event_receipt_age_ms=4;
+ assert(storage.enqueueCamera(t,e));
+ e.kind=CameraEventKind::RequestRefused;e.operation=Operation::Wake;e.intent_id=0;
+ e.connection_generation=e.operation_generation=0;e.ack_domain=CameraAckDomain::None;
+ e.ack_action=CameraAckAction::None;e.error=CameraError::InvalidPolicy;
+ assert(storage.enqueueCamera(t,e));
+ storage.requestStop();for(unsigned i=0;i<500;++i)storage.workerStep();
+ assert(storage.health().flushed==4 && storage.health().stopped);
+ std::fwrite(sink.bytes.data(),1,sink.bytes.size(),stdout);
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'camera.cpp').write_text(source)
+            subprocess.run(['c++','-std=c++11','-I'+str(ROOT/'include'),
+                            str(path/'camera.cpp'),str(ROOT/'src/storage.cpp'),
+                            '-o',str(path/'camera')],check=True)
+            data = subprocess.check_output([str(path/'camera')],text=True)
+        rows = parse(data)
+        self.assertEqual(['gps','health','camera','camera'],[row['kind'] for row in rows])
+        self.assertEqual('owner_admission',rows[2]['time_domain'])
+        self.assertEqual('0',rows[2]['radio_receipt_known'])
+        self.assertEqual('0',rows[2]['acquisition_known'])
+        self.assertEqual('1',rows[2]['event_receipt_known'])
+        self.assertEqual('8',rows[2]['event_receipt_ms'])
+        self.assertEqual('4',rows[2]['event_receipt_age_ms'])
+        self.assertEqual('301',rows[2]['peer_id'])
+        self.assertEqual('0',rows[2]['peer_slot'])
+        self.assertEqual('4',rows[2]['intent_id'])
+        self.assertEqual('10',rows[3]['error'])
+        camera_columns = ['kind'] + COMMON + CAMERA
+        for field, invalid in [('peer_slot','8'), ('peer_id','0'), ('peer_id','4294967296'),
+                               ('ack_domain','2'), ('ack_action','0'),
+                               ('time_domain','radio_receipt'),
+                               ('radio_receipt_known','1'), ('event_receipt_known','0'),
+                               ('event_receipt_age_ms','5'),
+                               ('intent_id','0')]:
+            with self.subTest(field=field, invalid=invalid):
+                lines = data.splitlines()
+                index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
+                values = next(csv.reader([lines[index]]))
+                values[camera_columns.index(field)] = invalid
+                lines[index] = ','.join(values)
+                with self.assertRaises(ValueError): parse('\n'.join(lines) + '\n')
+        with self.assertRaises(ValueError): parse(data.replace('#ridesync_telemetry,3',
+                                                                  '#ridesync_telemetry,4'))
+        with self.assertRaises(ValueError): parse(data[:-1])

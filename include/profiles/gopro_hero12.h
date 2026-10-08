@@ -5,6 +5,7 @@
 #include <array>
 
 namespace ridesync {
+class RecordingManager;
 // Commissioning supplies independent evidence. A configured BLE address and the
 // published minimum firmware are not observations of this camera.
 struct Hero12Qualification {
@@ -62,6 +63,7 @@ public:
   Hero12Adapter(const Hero12Adapter &) = delete;
   Hero12Adapter &operator=(const Hero12Adapter &) = delete;
   void attach(CameraManager &);
+  void attachGroup(RecordingManager &group) { group_ = &group; }
   bool start(bool enabled, bool source_qualified);
   bool configurePeer(uint8_t peer, const Hero12Qualification &);
   void service(); // Central faults, profile, manager events, then manager.tick().
@@ -132,6 +134,7 @@ private:
   };
   Clock &clock_;
   CameraManager *manager_ = nullptr;
+  RecordingManager *group_ = nullptr;
   BleCentral central_;
   gopro::Reassembler reassembler_;
   std::array<Peer, kBlePeers> peers_{};

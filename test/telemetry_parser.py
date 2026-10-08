@@ -15,13 +15,21 @@ IMU = ('batch_sequence frame_sequence byte_position sensor_epoch receipt_known r
        'calibration_gains_known accel_gain_x_numerator accel_gain_x_denominator accel_gain_y_numerator accel_gain_y_denominator accel_gain_z_numerator accel_gain_z_denominator gyro_gain_x_numerator gyro_gain_x_denominator gyro_gain_y_numerator gyro_gain_y_denominator gyro_gain_z_numerator gyro_gain_z_denominator accel_x accel_y accel_z gyro_x gyro_y gyro_z event_code event_length event_bytes '
        'sensor_time_present sensor_time_ticks24 event_count event_count_lower_bound '
        'accepted dropped rejected lost written flushed').split()
+CAMERA = ('peer_slot peer_id model group_generation intent_id connection_generation operation_generation '
+          'event_kind operation error recording ack_domain ack_action delivery_admitted '
+          'time_domain event_receipt_known event_receipt_ms event_receipt_age_ms '
+          'radio_receipt_known radio_receipt_ms acquisition_known acquisition_ms '
+          'accepted dropped rejected lost written flushed').split()
 
 
 def parse(data):
-    if not data.startswith('#ridesync_telemetry,2\n'):
+    version = data.split('\n', 1)[0]
+    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3'):
         raise ValueError('unsupported version')
     if not data.endswith('\n'):
         raise ValueError('partial trailing row')
+    if version == '#ridesync_telemetry,3' and '#camera_layout,3,see_docs/log_format.md\n' not in data:
+        raise ValueError('missing camera layout')
     rows = []
     for line in data.splitlines()[1:]:
         if line.startswith('#') or line.startswith('session_id,'):
@@ -66,6 +74,68 @@ def parse(data):
                     raise ValueError('sensor time event')
                 if int.from_bytes(payload, 'little') != int(row['sensor_time_ticks24']):
                     raise ValueError('sensor time payload')
+        elif values[0] == 'camera' and version == '#ridesync_telemetry,3':
+            if len(values) != 1 + len(COMMON) + len(CAMERA):
+                raise ValueError('camera column count')
+            row = dict(zip(['kind'] + COMMON + CAMERA, values))
+            if row['time_domain'] != 'owner_admission' or row['radio_receipt_known'] != '0' or \
+                    row['radio_receipt_ms'] or row['acquisition_known'] != '0' or row['acquisition_ms']:
+                raise ValueError('camera time provenance')
+            if row['event_receipt_known'] not in ('0', '1') or \
+                    bool(row['event_receipt_ms']) != (row['event_receipt_known'] == '1') or \
+                    bool(row['event_receipt_age_ms']) != (row['event_receipt_known'] == '1'):
+                raise ValueError('camera event receipt presence')
+            if row['event_receipt_known'] == '1':
+                receipt = int(row['event_receipt_ms'])
+                age = int(row['event_receipt_age_ms'])
+                if receipt < 0 or age < 0 or age > 60000 or \
+                        receipt + age != int(row['monotonic_ms']):
+                    raise ValueError('camera event receipt age')
+            numeric = ('peer_slot peer_id model group_generation intent_id connection_generation '
+                       'operation_generation event_kind operation error recording ack_domain '
+                       'ack_action delivery_admitted').split()
+            if any(not row[field] or not 0 <= int(row[field]) <= 0xffffffff
+                   for field in numeric):
+                raise ValueError('camera numeric fields')
+            if int(row['peer_slot']) not in range(8) or int(row['peer_id']) == 0 or \
+                    int(row['model']) not in range(1, 5) or \
+                    int(row['event_kind']) not in range(10) or int(row['operation']) not in range(5) or \
+                    int(row['error']) not in range(11) or int(row['recording']) not in range(3) or \
+                    int(row['ack_domain']) not in range(3) or int(row['ack_action']) not in range(16) or \
+                    row['delivery_admitted'] not in ('0', '1'):
+                raise ValueError('camera enum fields')
+            kind = int(row['event_kind'])
+            if kind == 4:
+                if any(int(row[field]) == 0 for field in ('intent_id','connection_generation',
+                                                          'operation_generation','ack_domain','ack_action')):
+                    raise ValueError('uncorrelated camera ACK')
+                action = int(row['ack_action'])
+                domain = int(row['ack_domain'])
+                if (action in (1, 2) and domain != 2) or (action not in (1, 2) and domain != 1):
+                    raise ValueError('camera ACK domain')
+            elif int(row['ack_domain']) or int(row['ack_action']):
+                raise ValueError('unexpected ACK fields')
+            if kind == 5:
+                if int(row['recording']) == 0 or int(row['connection_generation']) == 0:
+                    raise ValueError('invalid camera observation')
+            elif int(row['recording']):
+                raise ValueError('unexpected camera observation')
+            if kind in (0, 1) and (int(row['intent_id']) == 0 or int(row['error'])):
+                raise ValueError('invalid admitted request')
+            if kind == 2 and (int(row['intent_id']) or int(row['error']) == 0):
+                raise ValueError('invalid refused request')
+            if kind == 1 and int(row['operation_generation']):
+                raise ValueError('queued request borrowed operation')
+            if kind in (0, 1, 2) and (int(row['connection_generation']) or
+                                      int(row['operation_generation']) or row['delivery_admitted'] != '0'):
+                raise ValueError('request borrowed token')
+            if kind == 3 and (int(row['intent_id']) == 0 or
+                              int(row['connection_generation']) == 0 or
+                              int(row['operation_generation']) == 0 or
+                              (row['error'] != '0') == (row['delivery_admitted'] == '1')):
+                raise ValueError('invalid transport attempt')
+            if kind != 3 and row['delivery_admitted'] != '0':
+                raise ValueError('unexpected delivery admission')
         else:
             raise ValueError('unsupported record kind')
         if row['monotonic_quality'] != '0' or int(row['session_id']) <= 0:

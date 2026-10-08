@@ -1,4 +1,5 @@
 #pragma once
+#include "camera_event_session.h"
 #include "profiles/gopro_hero12.h"
 #if defined(ARDUINO_ARCH_ESP32)
 namespace ridesync {
@@ -7,8 +8,11 @@ namespace ridesync {
 struct Hero12Runtime {
   Hero12Adapter &adapter;
   CameraManager &manager;
+  RecordingManager &group;
 };
 Hero12Runtime hero12Runtime();
+bool hero12BindSession(CameraEventSession &session);
+bool hero12UnbindStoppedSession();
 } // namespace ridesync
 extern "C" ridesync::Hero12Runtime ridesync_hero12_runtime();
 // Serialized owner-loop entry point, retained in the opt-in compile image.

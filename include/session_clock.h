@@ -41,6 +41,9 @@ public:
   // Reject zero/current IDs without modifying the session.
   bool reset(uint64_t new_session_id);
   RecordTimestamp snapshot();
+  // Same owner sample as snapshot(), exposing its raw modulo-2^32 value for
+  // checked translation of externally captured event-clock samples.
+  RecordTimestamp snapshotWithRaw(uint32_t &raw);
   // UTC pertains to receipt now; known uncertainty must include transport delay.
   // Invalid input leaves the previous anchor intact, while still sampling time.
   bool anchor(const UtcDateTime &utc, bool uncertainty_known = false, uint32_t uncertainty_ms = 0);
@@ -54,5 +57,6 @@ private:
   bool duration_exceeded_ = false;
   UtcAnchor anchor_;
   void sample();
+  RecordTimestamp snapshotSampled();
 };
 } // namespace ridesync

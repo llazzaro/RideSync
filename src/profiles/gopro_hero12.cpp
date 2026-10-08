@@ -1,4 +1,5 @@
 #include "profiles/gopro_hero12.h"
+#include "recording_manager.h"
 #include <cstring>
 
 namespace ridesync {
@@ -280,7 +281,10 @@ void Hero12Adapter::drain() {
   for (uint8_t i = 0; i < kBlePeers; ++i)
     if (disconnect_pending_[i]) {
       disconnect_pending_[i] = false;
-      manager_->event(Event(i, peers_[i].connection, EventKind::Disconnected));
+      if (group_)
+        group_->event(Event(i, peers_[i].connection, EventKind::Disconnected));
+      else
+        manager_->event(Event(i, peers_[i].connection, EventKind::Disconnected));
     }
   const uint8_t count = event_count_;
   event_count_ = 0;
@@ -291,7 +295,10 @@ void Hero12Adapter::drain() {
     Event e(slot.peer, slot.token, slot.kind);
     e.recording = slot.recording;
     e.capabilities = slot.capabilities;
-    manager_->event(e);
+    if (group_)
+      group_->event(e);
+    else
+      manager_->event(e);
   }
 }
 bool Hero12Adapter::send(uint8_t i, Step step) {
@@ -424,7 +431,7 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
       observe(i, r.encoding, false);
     return;
   }
-  if (p.step == Step::None || route != p.route || message.size < 2 ||
+  if (p.step == Step::None || p.camera_done || route != p.route || message.size < 2 ||
       message.bytes[0] != p.expected_id)
     return; // Unrelated notification is never a transaction completion.
   if (p.step == Step::Pair || p.step == Step::Claim) {
@@ -501,6 +508,59 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
       if (r.encoding_known)
         observe(i, r.encoding, p.step == Step::ConfirmEncoding);
     }
+  }
+  if (manager_ && p.step != Step::KeepAlive) {
+    CameraAckDomain domain = (p.step == Step::Pair || p.step == Step::Claim)
+                                 ? CameraAckDomain::Protobuf
+                                 : CameraAckDomain::Classic;
+    CameraAckAction action = CameraAckAction::None;
+    switch (p.step) {
+    case Step::Pair:
+      action = CameraAckAction::Pair;
+      break;
+    case Step::Claim:
+      action = CameraAckAction::Claim;
+      break;
+    case Step::Hardware:
+      action = CameraAckAction::Hardware;
+      break;
+    case Step::Api:
+      action = CameraAckAction::Api;
+      break;
+    case Step::RegisterBusy:
+      action = CameraAckAction::RegisterBusy;
+      break;
+    case Step::RegisterEncoding:
+      action = CameraAckAction::RegisterEncoding;
+      break;
+    case Step::RegisterReady:
+      action = CameraAckAction::RegisterReady;
+      break;
+    case Step::GetBusy:
+      action = CameraAckAction::GetBusy;
+      break;
+    case Step::GetEncoding:
+      action = CameraAckAction::GetEncoding;
+      break;
+    case Step::GetReady:
+      action = CameraAckAction::GetReady;
+      break;
+    case Step::Video:
+      action = CameraAckAction::Video;
+      break;
+    case Step::Shutter:
+      action = p.target_encoding ? CameraAckAction::ShutterOn : CameraAckAction::ShutterOff;
+      break;
+    case Step::ConfirmEncoding:
+      action = CameraAckAction::ConfirmEncoding;
+      break;
+    case Step::QueryEncoding:
+      action = CameraAckAction::QueryEncoding;
+      break;
+    default:
+      break;
+    }
+    manager_->wireAck(i, p.token, domain, action);
   }
   p.camera_done = true;
 }
@@ -892,7 +952,9 @@ void Hero12Adapter::service() {
   }
   cursor_ = (cursor_ + 1) % kBlePeers;
   drain(); // Connection-scoped Disconnected precedes every manager tick.
-  if (manager_)
+  if (group_)
+    group_->tick();
+  else if (manager_)
     manager_->tick();
   if (manager_ && enabled_)
     advanceRecovery();

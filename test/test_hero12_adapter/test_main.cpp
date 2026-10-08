@@ -1,9 +1,39 @@
+#include "camera_event_logger.h"
+#include "camera_event_session.h"
 #include "profiles/gopro_hero12.h"
 #include <algorithm>
 #include <cstring>
+#include <sstream>
 #include <unity.h>
 #include <vector>
 using namespace ridesync;
+struct CameraLogSink : StorageSink {
+  std::string bytes;
+  bool mount() override { return true; }
+  bool openExclusive(const char *) override { return true; }
+  size_t write(const char *p, size_t n) override {
+    bytes.append(p, n);
+    return n;
+  }
+  bool flush() override { return true; }
+  void close() override {}
+};
+static std::vector<std::vector<std::string>> cameraRows(const std::string &text) {
+  std::vector<std::vector<std::string>> rows;
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (line.compare(0, 7, "camera,") != 0)
+      continue;
+    std::vector<std::string> row;
+    std::istringstream fields(line);
+    std::string field;
+    while (std::getline(fields, field, ','))
+      row.push_back(field);
+    rows.push_back(row);
+  }
+  return rows;
+}
 
 struct TestClock : Clock {
   uint32_t value = 0;
@@ -328,6 +358,140 @@ void full_pairing_observes_state_and_shutter_requires_encoding_query() {
   TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Stop));
   r.pump();
   TEST_ASSERT_EQUAL_INT((int)RecordingState::Stopped, (int)r.manager.state(0)->observed);
+}
+void duplicate_matching_response_records_one_wire_ack() {
+  Rig r;
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  CameraInbox camera;
+  CameraEventLogger logger(camera, r.clock, 42, group);
+  TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  r.manager.attachAudit(logger);
+  CameraLogSink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+  SessionClock clock(r.clock, 42, 1000);
+  ImuInbox imu;
+  TelemetryAdmission admission(clock, storage, imu, &camera);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Query));
+  r.pump(5);
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 0});
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 0});
+  r.adapter.service();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  unsigned query_ack = 0;
+  for (const auto &row : cameraRows(sink.bytes))
+    if (row[20] == "4" && row[25] == "15")
+      ++query_ack;
+  TEST_ASSERT_EQUAL_UINT(1, query_ack);
+}
+void group_route_keeps_shutter_ack_distinct_from_recording() {
+  Rig r;
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  CameraInbox camera;
+  CameraEventLogger logger(camera, r.clock, 42, group);
+  TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  r.manager.attachAudit(logger);
+  CameraLogSink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+  SessionClock clock(r.clock, 42, 1000);
+  ImuInbox imu;
+  TelemetryAdmission admission(clock, storage, imu, &camera);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  r.host.ignore_shutter_effect = true;
+  TEST_ASSERT_EQUAL_INT((int)GroupError::None, (int)group.request(RecordingState::Recording));
+  r.pump();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  unsigned shutter_ack = 0, recording_observed = 0;
+  for (const auto &row : cameraRows(sink.bytes)) {
+    if (row[20] == "4" && row[25] == "12")
+      ++shutter_ack;
+    if (row[20] == "5" && row[23] == "2")
+      ++recording_observed;
+  }
+  TEST_ASSERT_EQUAL_UINT(1, shutter_ack);
+  TEST_ASSERT_EQUAL_UINT(0, recording_observed);
+  TEST_ASSERT_EQUAL_UINT(0, group.status().recording);
+  TEST_ASSERT_TRUE(group.status().peers[0].terminal_failure);
+}
+void identical_unsolicited_encoding_observations_are_each_preserved() {
+  Rig r;
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  CameraInbox camera;
+  CameraEventLogger logger(camera, r.clock, 42, group);
+  TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  r.manager.attachAudit(logger);
+  CameraLogSink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+  SessionClock clock(r.clock, 42, 1000);
+  ImuInbox imu;
+  TelemetryAdmission admission(clock, storage, imu, &camera);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  const auto before = cameraRows(sink.bytes).size();
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 0});
+  r.adapter.service();
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 0});
+  r.adapter.service();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  const auto rows = cameraRows(sink.bytes);
+  unsigned observations = 0;
+  for (size_t i = before; i < rows.size(); ++i)
+    if (rows[i][20] == "5" && rows[i][23] == "1")
+      ++observations;
+  TEST_ASSERT_EQUAL_UINT(2, observations);
+}
+void composed_session_finishes_camera_after_final_owner_access() {
+  Rig r;
+  RecordingManager group(r.manager, r.clock);
+  CameraLogSink sink;
+  CameraEventSession session(r.clock, sink, r.adapter, r.manager, group, 42, "fw", "synthetic");
+  TEST_ASSERT_FALSE(session.configurePeer(0, 301, CameraModel::X5));
+  TEST_ASSERT_TRUE(session.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  TEST_ASSERT_TRUE(session.activate());
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  for (unsigned i = 0; i < 300; ++i) {
+    session.service();
+    while (r.handled < r.host.commands.size())
+      r.process(r.handled++);
+    ++r.clock.value;
+    session.storage().workerStep();
+  }
+  session.requestStop();
+  session.finishImu();
+  for (unsigned i = 0; i < 500 && !session.stopped(); ++i) {
+    session.service();
+    session.storage().workerStep();
+  }
+  TEST_ASSERT_TRUE(session.stopped());
+  TEST_ASSERT_TRUE(session.storage().health().stopped);
+  TEST_ASSERT_TRUE(session.cameraInbox().stopRequested());
 }
 void missing_management_service_refuses_pairing() {
   Rig r;
@@ -946,6 +1110,10 @@ int main() {
   RUN_TEST(default_disabled_never_starts_host_or_admits_connect);
   RUN_TEST(required_management_and_classic_routes_are_declared);
   RUN_TEST(full_pairing_observes_state_and_shutter_requires_encoding_query);
+  RUN_TEST(duplicate_matching_response_records_one_wire_ack);
+  RUN_TEST(group_route_keeps_shutter_ack_distinct_from_recording);
+  RUN_TEST(identical_unsolicited_encoding_observations_are_each_preserved);
+  RUN_TEST(composed_session_finishes_camera_after_final_owner_access);
   RUN_TEST(missing_management_service_refuses_pairing);
   RUN_TEST(missing_cccd_refuses_pairing_without_capabilities);
   RUN_TEST(busy_camera_never_receives_video_or_shutter);

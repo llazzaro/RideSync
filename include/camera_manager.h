@@ -28,6 +28,35 @@ enum class EventKind {
 struct Token {
   uint32_t connection = 0;
   uint32_t operation = 0;
+  // Reserve room for retries and retirement; never reuse a wrapped generation.
+  static constexpr uint32_t kHeadroom = 64;
+  bool hasRoom() const {
+    return connection < UINT32_MAX - kHeadroom && operation < UINT32_MAX - kHeadroom;
+  }
+  bool valid() const { return connection != UINT32_MAX && operation != UINT32_MAX; }
+  static void advance(uint32_t &generation) {
+    if (generation != UINT32_MAX)
+      ++generation;
+  }
+};
+enum class CameraAckDomain : uint8_t { None, Classic, Protobuf };
+enum class CameraAckAction : uint8_t {
+  None,
+  Pair,
+  Claim,
+  Hardware,
+  Api,
+  RegisterBusy,
+  RegisterEncoding,
+  RegisterReady,
+  GetBusy,
+  GetEncoding,
+  GetReady,
+  Video,
+  ShutterOn,
+  ShutterOff,
+  ConfirmEncoding,
+  QueryEncoding
 };
 struct Event {
   Event(size_t p, Token t, EventKind k) : peer(p), token(t), kind(k) {}
@@ -77,6 +106,19 @@ public:
   virtual void cancel(size_t peer, Token token) = 0;
   virtual void close(size_t peer, Token token) = 0;
 };
+// Called only in the serialized camera owner. Implementations must be bounded and
+// cannot affect admission, camera control, or call back into the manager.
+class CameraAudit {
+public:
+  virtual ~CameraAudit() = default;
+  virtual void request(size_t peer, Operation, CameraError, bool queued, uint32_t intent_id) = 0;
+  virtual void attempt(size_t peer, Operation, Token, uint32_t intent_id, bool delivered) = 0;
+  virtual void accepted(const Event &, Operation, uint32_t intent_id) = 0;
+  virtual void cancelled(size_t peer, Operation, Token, uint32_t intent_id) = 0;
+  virtual void failure(size_t peer, Operation, Token, uint32_t intent_id, CameraError) = 0;
+  virtual void wireAck(size_t peer, Operation, Token, uint32_t intent_id, CameraAckDomain,
+                       CameraAckAction) = 0;
+};
 class CameraManager {
 public:
   static constexpr size_t kQueueDepth = 4;
@@ -87,24 +129,45 @@ public:
   void reset();
   void tick();
   bool event(const Event &event);
+  bool attachAudit(CameraAudit &audit) {
+    if (audit_ && audit_ != &audit)
+      return false;
+    audit_ = &audit;
+    return true;
+  }
+  void detachAudit(const CameraAudit *expected = nullptr) {
+    if (!expected || audit_ == expected)
+      audit_ = nullptr;
+  }
+  bool wireAck(size_t peer, Token token, CameraAckDomain domain, CameraAckAction action);
   const CameraState *state(size_t peer) const;
+  const CameraConfig *configuredCamera(size_t peer) const {
+    return peer < size() ? &config_.cameras[peer] : nullptr;
+  }
   size_t size() const { return config_.count; }
 
 private:
   struct Peer {
     CameraState state;
-    std::array<Operation, kQueueDepth> queue;
+    struct Queued {
+      Operation operation;
+      uint32_t intent_id;
+    };
+    std::array<Queued, kQueueDepth> queue;
     size_t queued = 0;
     bool active = false;
     Operation current = Operation::Connect;
+    uint32_t next_intent_id = 0, active_intent_id = 0;
+    uint32_t ack_mask = 0;
   };
   Clock &clock_;
   CameraTransport &transport_;
   RetryPolicy policy_;
   SourceConfig config_;
+  CameraAudit *audit_ = nullptr;
   std::array<Peer, kMaxCameras> peers_;
   bool validPolicy() const;
-  void start(size_t peer, Operation op);
+  void start(size_t peer, Operation op, uint32_t intent_id);
   void attempt(size_t peer);
   void fail(size_t peer, CameraError error);
   void next(size_t peer);

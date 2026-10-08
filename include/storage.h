@@ -40,9 +40,12 @@ public:
   static constexpr uint32_t kCapacity = 8;
   static constexpr size_t kMaxRowBytes = 2048, kChunkBytes = 256;
   Storage(StorageSink &sink, const StorageConfig &config);
+  bool configValid() const { return valid_; }
   bool enqueue(const RecordTimestamp &timestamp, const ModemSnapshot &sample);
   bool enqueueImu(const RecordTimestamp &timestamp, const ImuEvidence &evidence,
                   bool reserve = false);
+  bool enqueueCamera(const RecordTimestamp &timestamp, const CameraEvidence &evidence,
+                     bool reserve = true);
   KindHealth kindHealth(RecordKind kind) const;
   void requestStop();
   // ONE operation/chunk per step; sink latency is unbounded. Never call on control task.
@@ -52,17 +55,20 @@ public:
 private:
   friend class TelemetryAdmission;
   void drop(RecordKind kind);
+  void droppedCamera(uint32_t count);
+  void rejectedCamera(uint32_t count);
   using Record = TelemetryRecord;
   const StorageFormat format_;
   struct Counters {
     std::atomic<uint32_t> accepted{0}, dropped{0}, rejected{0}, written{0}, flushed{0};
   };
-  Counters kinds_[5];
-  uint8_t cached_kinds_[5]{};
+  Counters kinds_[static_cast<unsigned>(RecordKind::Count)];
+  uint8_t cached_kinds_[static_cast<unsigned>(RecordKind::Count)]{};
   RecordKind in_flight_kind_ = RecordKind::Gps;
   bool publish(const Record &record, bool reserve);
   bool validTimestamp(const RecordTimestamp &timestamp) const;
   bool formatImu(const Record &record);
+  bool formatCamera(const Record &record);
   StorageSink &sink_;
   const uint64_t session_;
   const uint8_t max_mounts_, flush_records_;

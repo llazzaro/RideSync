@@ -248,3 +248,86 @@ and one admission owner; no camera rows or physical sensor qualification.
 
 Raw selected BMI270 acquisition and evidence semantics: [raw_imu.md](raw_imu.md).
 The mixed v2 schema remains unchanged; acquisition timestamps stay unknown.
+
+## Correlated camera events: opt-in telemetry version 3
+
+`StorageFormat::CameraV3` creates `/telemetry-<session>.csv` with
+`#ridesync_telemetry,3` and a `#camera_layout,3` marker. It accepts the same GPS
+and raw IMU/configuration/health/control rows through the **same** storage worker
+and admission owner, plus `camera` rows. GPS v1 and mixed v2 stay separate format
+selections; their headers and row bytes are unchanged. The parser rejects a
+camera row in v2, an unknown version, a missing v3 layout marker, malformed field
+counts or an incomplete trailing row. V3 is never inferred from an old file.
+
+A camera row begins with `camera,` and the 12 common session/anchor columns above.
+The remaining columns are, in order:
+
+`peer_slot,peer_id,model,group_generation,intent_id,connection_generation,operation_generation,event_kind,operation,error,recording,ack_domain,ack_action,delivery_admitted,time_domain,event_receipt_known,event_receipt_ms,event_receipt_age_ms,radio_receipt_known,radio_receipt_ms,acquisition_known,acquisition_ms,accepted,dropped,rejected,lost,written,flushed`.
+
+`peer_slot` is the configured registry index (0–7). `peer_id` is a
+caller-provisioned nonzero opaque numeric ID, stable for the
+session. It must not be derived from or replaced with a MAC, serial, credential,
+camera name or hash of private identity. A missing or mismatched identity prevents
+logger activation or is counted as rejected evidence. `model` uses the
+`CameraModel` values (1 X5, 2 GO3S, 3 ONE_RS, 4 HERO12_BLACK); model names here
+identify configuration, not verified physical camera identity. The numeric
+`operation` values are 0 Connect, 1 Start, 2 Stop, 3 Query, 4 Wake. A refused
+request has a `CameraError` code and no intent or transport generation; an
+accepted or queued request gets a distinct nonzero per-peer intent ID. A queued
+request has **no** operation token. The `attempt` row later assigns its actual
+connection and operation generations and records `delivery_admitted`; false
+means the transport rejected that attempt. These fields never imply a camera
+command executed. Intent IDs refuse exhaustion rather than wrap. Connection and
+operation generations reserve 64 increments before exhaustion; new requests
+are refused there, and retirement increments saturate instead of wrapping.
+
+`event_kind` values are 0 RequestAccepted, 1 RequestQueued, 2 RequestRefused,
+3 Attempt, 4 WireAck, 5 RecordingObserved, 6 ManagerCompleted, 7 Failed,
+8 Cancelled, 9 Disconnected. `recording` values are 0 Unknown, 1 Stopped and
+2 Recording, and are populated only for accepted observation rows. Connection
+notifications have no intent or operation generation; command observations are
+scoped to the active operation. Repeated fresh unsolicited same-value
+notifications remain separate observations. A duplicate matching transaction
+reply cannot create a second wire ACK. `ManagerCompleted` is internal operation
+completion and must never be read as a camera ACK or recording observation.
+
+`ack_domain` is 0 None, 1 classic HERO response, 2 Generic Protobuf setup
+result. The corresponding `ack_action` values are 0 None, 1 Pair, 2 Claim,
+3 Hardware, 4 Api, 5 RegisterBusy, 6 RegisterEncoding, 7 RegisterReady,
+8 GetBusy, 9 GetEncoding, 10 GetReady, 11 Video, 12 ShutterOn, 13 ShutterOff,
+14 ConfirmEncoding, 15 QueryEncoding. Setup actions require domain 2; all other
+actions require domain 1. Only a validated expected route, ID, result and
+required status element for the current active attempt can generate a wire ACK.
+An ATT write-complete callback or a successful shutter ACK without a fresh
+Encoding observation does not establish recording.
+
+The common `monotonic_ms` is sampled by the sole telemetry owner when it admits
+the copied camera evidence. The manager audit hook also samples the shared raw
+host clock when publishing an accepted event or request into the camera inbox.
+The owner converts that by-value sample to `event_receipt_ms` only when the
+modulo-32-bit age is at most 60 seconds and fits within this session's elapsed
+time; `event_receipt_age_ms` is the delay to admission. Unknown or ambiguous
+samples have `event_receipt_known=0` and blank values. This is an owner audit
+hook time, not an SDK callback or radio packet receipt; it excludes any time
+spent before the validated manager event. The checked modulo translation assumes
+the queue is serviced before a full 32-bit clock cycle elapses; a 49-day stalled
+consumer cannot be distinguished from a recent event with this clock API.
+`time_domain` is always `owner_admission`;
+`radio_receipt_known=0` with blank `radio_receipt_ms`, and
+`acquisition_known=0` with blank `acquisition_ms`. BLE SDK callbacks in this
+source path do not provide a qualified radio-receipt timestamp. Queue delay
+between callback, camera owner validation and storage admission is unmeasured.
+The session clock's UTC anchor is a receipt-associated estimate of this **owner
+admission** time, not camera time, radio receipt, frame acquisition or frame sync.
+No camera row contains GPS coordinates.
+
+The camera owner copies events into a fixed 16-entry camera inbox. The telemetry
+owner drains camera and IMU fairly with a two-record per-pass quota and keeps
+GPS admission independent. Storage retains its eight by-value slots and reserves
+two for GPS when admitting camera or inbox IMU rows. Inbox overflow, malformed
+events, storage rejection/drop and terminal unflushed loss appear in per-kind
+health counters. A refused log admission never cancels camera control. At stop,
+the camera owner finishes after its last callback and publication; the telemetry
+owner waits for both camera and IMU producers to finish, drains both inboxes,
+then requests the worker's final flush/close. Sink failure leaves final loss
+authoritative in runtime health, since a failed card cannot reliably log itself.

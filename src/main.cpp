@@ -151,8 +151,8 @@ void setup() {
   if (config_ble_admission &&
       xTaskCreatePinnedToCore(configTask, "config", 12288, nullptr, 1, nullptr, 1) != pdPASS)
     Serial.println("RideSync: config task creation failed; RAM defaults only.");
-  // No BLE driver exists yet; future BLE owner needs independent restoration
-  // evidence and overflow refusal as well as SDK admission.
+  // The retained opt-in HERO12 owner stays disabled until qualified settings,
+  // identity, storage and a serialized application owner are supplied.
   // NVS failure is device/config health, never a fabricated worker stall. Qualified
   // standalone GNSS/SD/IMU lifetimes must remain independent of camera/NVS readiness.
   Serial.println("Optional AT/BLE/SD/IMU disabled; no pins qualified. Serial C clears safe mode.");

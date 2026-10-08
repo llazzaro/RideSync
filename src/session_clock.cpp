@@ -50,6 +50,14 @@ void SessionClock::sample() {
 }
 RecordTimestamp SessionClock::snapshot() {
   sample();
+  return snapshotSampled();
+}
+RecordTimestamp SessionClock::snapshotWithRaw(uint32_t &raw) {
+  sample();
+  raw = last_raw_;
+  return snapshotSampled();
+}
+RecordTimestamp SessionClock::snapshotSampled() {
   RecordTimestamp r;
   r.session_id = session_id_;
   r.monotonic_ms = elapsed_ms_;

@@ -354,3 +354,27 @@ Neither build activates BLE, flashes firmware, proves pairing/restore/capacity
 or measures SDK lock/NVS/init/teardown latency. Physical #17/#18/#4/#22 acceptance
 remains OPEN; qualification procedure and lifetime limits are in
 [ble_transport.md](ble_transport.md).
+
+## Camera event software checks (#37)
+
+`pio test -e native -f test_camera_event_logging` covers distinct request and
+queued intent IDs, attempt assignment, refused requests, token-checked and
+duplicate wire ACKs, stale command observations, malformed identity/domain rows,
+camera queue pressure with GPS and IMU progress, and publication after an empty
+owner pass during stop. `pio test -e native -f test_hero12_adapter` exercises the
+actual HERO12 adapter with explicitly synthetic BLE packets: its response
+validation emits classic and Protobuf ACK evidence, a shutter ACK without an
+Encoding change remains separate from recording, the group receives each event
+once, duplicate transaction replies are suppressed, and repeated unsolicited
+same-value observations remain distinct. The opt-in session test drains callbacks
+through the retained group/admission path and closes only after producer finish.
+
+`python -m unittest discover -s test -v` checks V3 serialized GPS/IMU/camera
+rows with a separate strict parser, rejects unknown/partial/malformed formats,
+and compares the retained GPS v1 timestamp fixture byte-for-byte. Mixed v2
+parsing remains strict and rejects camera rows. `pio run -e lilygo_t_a7670e_r2`,
+`pio run -e ble_central_compile`, and `pio run -e hero12_adapter_compile` retain
+the default and opt-in real ESP32 composition symbols without activating board
+peripherals. Use a source-qualified camera, qualified storage hardware and
+on-device measurements before drawing conclusions about radio timing, resource
+margins, physical durability or recording behavior.
