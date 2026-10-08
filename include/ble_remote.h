@@ -148,7 +148,8 @@ enum class BleResultKind : uint8_t {
   Retired,
   LinkClosed,
   Advertisement,
-  ScanComplete
+  ScanComplete,
+  ScanCancelFailed
 };
 struct BleResult {
   BleResultKind kind = BleResultKind::Retired;
@@ -181,6 +182,8 @@ public:
   void copied(BleContext &, BleEvent) override;
   BlePhase phase(uint8_t peer) const;
   int error(uint8_t peer) const;
+  // Result of the single cancellation attempt; retained until the next scan.
+  int scanCancelError() const { return scan_cancel_error_; }
   bool admissionOpen(uint8_t peer) const;
   bool stopped() const { return stopping_; }
   bool canDestroy() const; // All callbacks retired/quiescent; caller must check.
@@ -222,6 +225,9 @@ private:
   uint8_t initiating_ = kBlePeers, cursor_ = 0;
   bool begun_ = false, enabled_ = false, stopping_ = false, startup_failed_ = false;
   bool scanning_ = false, scan_reported_ = false, startup_confirmed_ = false;
+  bool scan_cancel_attempted_ = false;
+  int scan_cancel_error_ = 0;
+  void cancelScanOnce();
   bool pop(BleEvent &);
   void resetContext(BleContext &, uint8_t, uint32_t, BlePhase, uint32_t, uint16_t, uint16_t);
   void retire(uint8_t, BleFault, int = 0);

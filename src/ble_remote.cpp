@@ -130,6 +130,8 @@ bool BleCentral::scan(uint32_t duration, uint32_t now) {
   resetContext(scan_, kBlePeers, scan_.generation + 1, BlePhase::Scan, 0, kBleNoHandle, 0);
   scanning_ = true;
   scan_reported_ = false;
+  scan_cancel_attempted_ = false;
+  scan_cancel_error_ = 0;
   scan_duration_ = duration;
   scan_deadline_ = now + duration;
   BleCommand c;
@@ -183,11 +185,30 @@ void BleCentral::disconnect(uint8_t i) {
   if (i < kBlePeers)
     retire(i, BleFault::Stopped);
 }
+void BleCentral::cancelScanOnce() {
+  if (!scanning_ || scan_cancel_attempted_ || scan_.terminal.load())
+    return;
+  scan_cancel_attempted_ = true; // Before call: immediate terminal callbacks are safe.
+  scan_cancel_error_ = host_.cancelScan(scan_);
+  if (scan_cancel_error_) {
+    BleResult result;
+    result.kind = BleResultKind::ScanCancelFailed;
+    result.fault = BleFault::Host;
+    result.event.peer = kBlePeers;
+    result.event.generation = scan_.generation;
+    result.event.phase = BlePhase::Scan;
+    result.event.status = scan_cancel_error_;
+    sink_.result(result);
+  }
+}
 void BleCentral::stop() {
   stopping_ = true;
   scan_.sealed.store(true);
-  if (scanning_)
-    host_.cancelScan(scan_);
+  if (scanning_) {
+    if (scan_.fault.load() == BleFault::None)
+      scan_.fault.store(BleFault::Stopped);
+    cancelScanOnce();
+  }
   for (uint8_t i = 0; i < kBlePeers; ++i)
     retire(i, BleFault::Stopped);
 }
@@ -389,7 +410,7 @@ void BleCentral::event(const BleEvent &e) {
     return;
   }
   if (e.kind == BleEventKind::Security) {
-    if (p.phase != BlePhase::Security)
+    if (p.link.connection.load() == kBleNoHandle)
       return;
     if (e.status || !e.encrypted || !e.bonded ||
         (p.spec.require_authenticated && !e.authenticated) ||
@@ -397,8 +418,10 @@ void BleCentral::event(const BleEvent &e) {
       retire(e.peer, BleFault::Identity, e.status);
       return;
     }
-    p.active = false;
-    p.phase = BlePhase::Services;
+    if (p.phase == BlePhase::Security) {
+      p.active = false;
+      p.phase = BlePhase::Services;
+    }
     return;
   }
   if (e.kind == BleEventKind::Notification) {
@@ -608,11 +631,11 @@ void BleCentral::service(uint32_t now) {
   };
   faults();
   if (scanning_ && (scan_.fault.load() != BleFault::None || stopping_ || startup_failed_ ||
-                    (expired(now, scan_deadline_) && !scan_.terminal.load()))) {
+                    (!scan_reported_ && expired(now, scan_deadline_)))) {
     scan_.sealed.store(true);
     if (!stopping_ && scan_.fault.load() == BleFault::None)
       scan_.fault.store(startup_failed_ ? BleFault::Host : BleFault::Timeout);
-    host_.cancelScan(scan_);
+    cancelScanOnce();
   }
   BleEvent e;
   for (size_t n = 0; n < kBleQueue && pop(e); ++n) {
@@ -624,7 +647,10 @@ void BleCentral::service(uint32_t now) {
       BleResult r;
       r.kind = BleResultKind::ScanComplete;
       r.fault = scan_.fault.load();
+      r.event.peer = kBlePeers;
       r.event.generation = scan_.generation;
+      r.event.phase = BlePhase::Scan;
+      r.event.status = scan_.terminal_status.load();
       sink_.result(r);
     }
     scanning_ = false;

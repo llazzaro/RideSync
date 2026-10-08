@@ -303,6 +303,9 @@ services and handle routing, missing properties/CCCD, subscription ATT/readback,
 copy bounds, queue overflow priority, stop/final detachment, deadline rollover
 and deadline-at-completion, failed termination, cancellation losing to connect,
 late generation on reused handle and restoration/capacity/security admission.
+Review regressions cover ready/read/discovery security loss and valid rekey,
+one failed scan-cancel attempt across stop/timeout/callback-fault passes with
+exact separate error reporting, and scan completion at/after its deadline.
 
 `python -m unittest discover -s test -v` executes the actual ESP32 adapter against
 explicit SDK/NVS/crypto boundary stand-ins with ASan+UBSan. These exercise startup

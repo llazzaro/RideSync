@@ -42,8 +42,10 @@ or indicate subscription. This admits multiple services including future camera
 management endpoints. The transport finds actual service/characteristic handles,
 uses the next declaration or service end for descriptor ranges, requires 0x2902,
 writes 01 00 or 02 00, and reads the exact two-byte CCCD value back. All required
-subscriptions repeat on every new connection. `TransportReady` means those ATT
-prerequisites completed; only a future profile can declare camera Ready.
+subscriptions repeat on every new connection. Later security changes are checked
+in every connected phase; encryption/bond/identity or required authentication loss
+retires the link. A valid rekey does not restart discovery or an active GATT
+phase. `TransportReady` means those ATT prerequisites completed; only a future profile can declare camera Ready.
 
 Read/write requests use resolved endpoint indices, one outstanding GATT procedure
 per peer and the actual `ble_att_mtu(handle)`. A write needs the acknowledged Write
@@ -110,6 +112,15 @@ destruction before that boundary aborts instead of freeing live callback storage
 A missing terminal event/barrier, host reset, failed controller cleanup or failed
 startup permanently consumes bounded fixed storage for that lifetime. There is no
 replacement context, worker, host initialization retry or forced task deletion.
+Scan cleanup attempts cancellation at most once per scan generation. A nonzero
+SDK result is retained by `scanCancelError()` and emitted once as
+`ScanCancelFailed` with the exact `event.status`; it does not claim a normal
+`ScanComplete` or permit context reuse. Terminal/barrier absence leaves that scan
+quarantined without repeated SDK calls. A later real terminal can still complete
+cleanup. The absolute scan deadline wins over a queued terminal completion at or
+after the deadline; already accepted earlier completion is not retroactively
+invalidated while its barrier drains.
+
 Only a completed service pass publishes HealthProgress. A stopped owner publishes
 `finished()` only after all its cleanup and routing detachment returns. The shared
 host itself lives until CPU reset; its task is not destroyed or restarted.
@@ -167,8 +178,8 @@ records still need independent commissioning evidence before a later boot.
 - Application: four peers, three services/eight endpoints and at most 32 discovered
   characteristic declarations per peer; excess or duplicates retire the link.
   Queue is 32 records, each 132 bytes (4224 bytes); one command copy is 120 bytes.
-  Native ARM64 `sizeof(BleCentral)` is 9016 bytes; the pinned Xtensa target is
-  8916 bytes and each target callback context is 32 bytes. No application
+  Native ARM64 `sizeof(BleCentral)` is 9024 bytes; the pinned Xtensa target is
+  8920 bytes and each target callback context is 32 bytes. No application
   transport heap allocation or per-command FIFO is used; one caller request per ready peer is admitted.
 - Host: configured five total connections and five bonds, with four central peers
   admitted and one connection reserved for a future raw peripheral role; 32 CCCD

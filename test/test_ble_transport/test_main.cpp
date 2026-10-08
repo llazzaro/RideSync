@@ -24,7 +24,7 @@ struct FakeHost : BleHost {
   int submit_error = 0, retire_error = 0;
   bool immediate_connect = false, allow_release = true;
   unsigned releases = 0;
-  unsigned starts = 0, retirements = 0;
+  unsigned starts = 0, retirements = 0, scan_cancellations = 0;
   FakeHost() {
     bond.stack_ready = bond.restore_verified = bond.refusal_installed = true;
     bond.existing_verified_identity = bond.identity_matches = bond.persistence_allowed = true;
@@ -63,6 +63,7 @@ struct FakeHost : BleHost {
     return retire_error;
   }
   int cancelScan(BleContext &ctx) override {
+    ++scan_cancellations;
     if (!retire_error) {
       ctx.terminal.store(true);
       quiet.push_back(&ctx);
@@ -200,7 +201,7 @@ void secure(FakeHost &h, BleCentral &owner, uint8_t peer, uint32_t now = 1) {
   e.kind = BleEventKind::Security;
   e.connection = 10 + peer;
   e.identity = identity(peer + 1);
-  e.encrypted = e.bonded = true;
+  e.encrypted = e.bonded = e.authenticated = true;
   h.deliver(*h.contexts[link], e, false);
   owner.service(now);
 }
@@ -267,8 +268,11 @@ void discover(FakeHost &h, BleCentral &owner, uint8_t peer, uint8_t properties =
   h.deliver(*h.contexts[current], e, true);
   owner.service(now);
 }
-void ready(FakeHost &h, BleCentral &owner, uint8_t peer = 0, uint32_t generation = 1) {
-  TEST_ASSERT_TRUE(owner.connect(peer, generation, identity(peer + 1), profile()));
+void ready(FakeHost &h, BleCentral &owner, uint8_t peer = 0, uint32_t generation = 1,
+           bool authenticated = false) {
+  auto spec = profile();
+  spec.require_authenticated = authenticated;
+  TEST_ASSERT_TRUE(owner.connect(peer, generation, identity(peer + 1), spec));
   owner.service(0);
   secure(h, owner, peer);
   discover(h, owner, peer);
@@ -666,6 +670,154 @@ void peer_failure_reports_device_health_only_after_a_completed_owner_pass() {
   owner.stop();
   owner.service(101);
 }
+void later_security_loss_retires_ready_and_active_links_without_restarting_discovery() {
+  for (unsigned failure = 0; failure < 9; ++failure) {
+    FakeHost h;
+    Sink sink;
+    BleCentral owner(h, sink);
+    owner.begin(true, true, 0);
+    if (failure == 7) {
+      auto spec = profile();
+      spec.require_authenticated = true;
+      owner.connect(0, 1, identity(), spec);
+      owner.service(0);
+      secure(h, owner, 0);
+    } else {
+      ready(h, owner, 0, 1, true);
+    }
+    if (failure == 5 || failure == 8)
+      TEST_ASSERT_TRUE(owner.read(0, 0, 20));
+    BleEvent security;
+    security.kind = BleEventKind::Security;
+    security.connection = 10;
+    security.identity = identity();
+    security.encrypted = security.bonded = security.authenticated = true;
+    if (failure == 0)
+      security.status = 71;
+    if (failure == 1 || failure == 5 || failure == 7)
+      security.encrypted = false;
+    if (failure == 2)
+      security.identity = identity(2);
+    if (failure == 3)
+      security.authenticated = false;
+    if (failure == 4)
+      security.bonded = false;
+    const auto before = h.commands.size();
+    h.deliver(*h.contexts[command(h, 0, BlePhase::Connect)], security, false);
+    owner.service(21);
+    const bool still_open = owner.admissionOpen(0);
+    const auto phase = owner.phase(0);
+    const auto retired = sink.count(BleResultKind::Retired);
+    const auto calls = h.retirements;
+    const auto after = h.commands.size();
+    const auto status = retired ? sink.results.back().event.status : 0;
+    if (failure == 8) {
+      h.done(command(h, 0, BlePhase::Read));
+      owner.service(22);
+    }
+    const auto reads = sink.count(BleResultKind::ReadComplete);
+    owner.stop();
+    closed(h, owner, 0);
+    if (failure == 6 || failure == 8) {
+      TEST_ASSERT_EQUAL(failure == 6, still_open);
+      TEST_ASSERT_EQUAL((int)(failure == 6 ? BlePhase::ReadyForProfile : BlePhase::Read),
+                        (int)phase);
+      TEST_ASSERT_EQUAL(failure == 8 ? 1 : 0, reads);
+      TEST_ASSERT_EQUAL(before, after);
+      TEST_ASSERT_EQUAL(0, retired);
+    } else {
+      TEST_ASSERT_FALSE(still_open);
+      TEST_ASSERT_EQUAL(1, retired);
+      TEST_ASSERT_EQUAL(1, calls);
+      TEST_ASSERT_EQUAL(failure == 0 ? 71 : 0, status);
+    }
+  }
+}
+void failed_scan_cancellation_is_submitted_once_and_cleanup_stays_quarantined() {
+  for (unsigned cause = 0; cause < 3; ++cause) {
+    FakeHost h;
+    Sink sink;
+    BleCentral owner(h, sink);
+    owner.begin(true, true, 0);
+    owner.scan(50, 0);
+    h.retire_error = 81;
+    auto &scan = *h.contexts[0];
+    if (cause == 0)
+      owner.stop();
+    if (cause == 2)
+      scan.fault.store(BleFault::Overflow);
+    for (uint32_t pass = 50; pass < 100; ++pass)
+      owner.service(pass);
+    const auto cancels = h.scan_cancellations;
+    const bool destroyable = owner.canDestroy();
+    const auto completed = sink.count(BleResultKind::ScanComplete);
+    const auto cancel_error = owner.scanCancelError();
+    const auto cancel_failures = sink.count(BleResultKind::ScanCancelFailed);
+    const auto cancel_status = sink.results.back().event.status;
+    BleEvent end;
+    end.kind = BleEventKind::ScanComplete;
+    end.status = 99;
+    h.deliver(scan, end, true);
+    owner.service(100);
+    const auto completion_status = sink.results.back().event.status;
+    if (cause != 0) {
+      h.retire_error = 0;
+      TEST_ASSERT_TRUE(owner.scan(50, 101));
+      TEST_ASSERT_EQUAL(0, owner.scanCancelError());
+    }
+    owner.stop();
+    owner.service(102);
+    TEST_ASSERT_EQUAL(81, cancel_error);
+    TEST_ASSERT_EQUAL(1, cancel_failures);
+    TEST_ASSERT_EQUAL(81, cancel_status);
+    TEST_ASSERT_EQUAL(99, completion_status);
+    TEST_ASSERT_EQUAL(cause == 0 ? 1 : 2, h.scan_cancellations);
+    TEST_ASSERT_EQUAL(1, cancels);
+    TEST_ASSERT_FALSE(destroyable);
+    TEST_ASSERT_EQUAL(0, completed);
+    TEST_ASSERT_TRUE(owner.canDestroy());
+  }
+}
+void scan_completion_at_absolute_deadline_loses_to_timeout_even_if_terminal() {
+  for (uint32_t lag = 0; lag < 2; ++lag) {
+    FakeHost h;
+    Sink sink;
+    BleCentral owner(h, sink);
+    owner.begin(true, true, 0);
+    owner.scan(50, 0);
+    BleEvent end;
+    end.kind = BleEventKind::ScanComplete;
+    h.deliver(*h.contexts[0], end, true);
+    owner.service(50 + lag);
+    const auto fault = sink.results.back().fault;
+    owner.stop();
+    owner.service(52);
+    TEST_ASSERT_EQUAL((int)BleFault::Timeout, (int)fault);
+    TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::ScanComplete));
+    TEST_ASSERT_TRUE(owner.canDestroy());
+  }
+  // A completion accepted before the deadline remains valid while its barrier drains.
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  owner.scan(50, 0);
+  auto &scan = *h.contexts[0];
+  BleEvent end;
+  end.kind = BleEventKind::ScanComplete;
+  h.deliver(scan, end, true);
+  h.quiet.clear();
+  owner.service(49);
+  owner.service(50);
+  const auto fault = scan.fault.load();
+  h.quiet.push_back(&scan);
+  owner.service(51);
+  owner.stop();
+  TEST_ASSERT_EQUAL((int)BleFault::None, (int)fault);
+  TEST_ASSERT_EQUAL(0, h.scan_cancellations);
+  TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::ScanComplete));
+  TEST_ASSERT_TRUE(owner.canDestroy());
+}
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -686,5 +838,8 @@ int main() {
   RUN_TEST(completion_at_deadline_is_retired_before_any_att_success_publication);
   RUN_TEST(bounded_scan_and_four_peer_admission_make_progress_without_catchup_burst);
   RUN_TEST(peer_failure_reports_device_health_only_after_a_completed_owner_pass);
+  RUN_TEST(later_security_loss_retires_ready_and_active_links_without_restarting_discovery);
+  RUN_TEST(failed_scan_cancellation_is_submitted_once_and_cleanup_stays_quarantined);
+  RUN_TEST(scan_completion_at_absolute_deadline_loses_to_timeout_even_if_terminal);
   return UNITY_END();
 }
