@@ -59,3 +59,12 @@ and adapter lifecycle. Official published model-specific data supports HERO12
 classic queries; newer-model capability/two-byte operations are outside its scope.
 Full initial pairing remains in #4, with no paired-only fallback or invented
 camera evidence. The plan now has 33 work packages plus maintenance #32/#33.
+
+2026-10-08 follow-up: [#37](https://github.com/llazzaro/RideSync/issues/37) extracts
+camera-event records/admission and actual ACK/observation hooks from #22.
+The current logger has no camera row, and group completion is not evidence of
+camera wire acknowledgment. #37 preserves source/domain distinctions and
+single-producer storage ownership; #22 now depends on it and retains the full
+mixed-brand capacity, timing and disconnect/logging continuity bench matrix.
+This adds the 34th planned work package, plus maintenance #32/#33. No physical
+acceptance or unsupported camera protocol is replaced with synthetic success.
