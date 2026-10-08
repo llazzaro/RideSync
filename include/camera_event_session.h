@@ -15,6 +15,7 @@ public:
   CameraEventSession &operator=(const CameraEventSession &) = delete;
   bool configurePeer(size_t peer, uint32_t opaque_id, CameraModel model);
   bool activate();
+  bool activateLocal();
   bool binds(const Hero12Adapter &adapter, const CameraManager &manager,
              const RecordingManager &group) const;
   bool active() const { return active_; }

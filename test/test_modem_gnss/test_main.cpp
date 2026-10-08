@@ -426,10 +426,95 @@ void manager_direct_barrier_releases_active_key_and_requires_qualification() {
   TEST_ASSERT_TRUE(v.tx.empty());
   TEST_ASSERT_EQUAL((int)PowerStage::Disabled, (int)unqualified.powerStage());
 }
+struct CancelPower : GnssPowerControl {
+  bool active = false;
+  unsigned enabled = 0, asserted = 0, released = 0;
+  void enableSupply() override { ++enabled; }
+  void key(bool value) override {
+    active = value;
+    value ? ++asserted : ++released;
+  }
+};
+static void cancelledPower(unsigned preparation) {
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart uart;
+  ModemGnss modem(uart, enabled());
+  CancelPower power;
+  GpsManager gps(clock, modem, &power, qualifiedTiming());
+  if (preparation)
+    gps.tick();
+  if (preparation >= 2) {
+    raw.raw = 20;
+    gps.tick();
+  }
+  if (preparation == 3) {
+    raw.raw = 30;
+    gps.tick();
+    for (const char *reply : {"OK\r\n", "OK\r\n+CGNSSPWR: READY!\r\n"}) {
+      uart.rx = reply;
+      ++raw.raw;
+      gps.tick();
+    }
+    TEST_ASSERT_TRUE(gps.snapshot().receiver_ready);
+  }
+  const auto sent = uart.tx;
+  const auto read = uart.read_count;
+  gps.cancel();
+  TEST_ASSERT_FALSE(power.active);
+  TEST_ASSERT_EQUAL_UINT(preparation ? 1 : 0, power.enabled);
+  TEST_ASSERT_EQUAL_UINT(preparation ? 1 : 0, power.asserted);
+  TEST_ASSERT_EQUAL_UINT(preparation ? 1 : 0, power.released);
+  // A verified barrier must not revive an explicitly cancelled owner. Even a
+  // reset/new clock ID cannot authorize another pulse or UART startup here.
+  TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+  TEST_ASSERT_TRUE(clock.reset(2));
+  uart.rx = "OK\r\n+CGNSSPWR: READY!\r\n";
+  for (unsigned i = 0; i < 5; ++i) {
+    gps.cancel();
+    raw.raw += 1000;
+    gps.tick();
+  }
+  TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+  TEST_ASSERT_EQUAL_UINT(preparation ? 1 : 0, power.enabled);
+  TEST_ASSERT_EQUAL_UINT(preparation ? 1 : 0, power.asserted);
+  TEST_ASSERT_EQUAL_UINT(preparation ? 1 : 0, power.released);
+  TEST_ASSERT_EQUAL_UINT(read, uart.read_count);
+  TEST_ASSERT_EQUAL_STRING(sent.c_str(), uart.tx.c_str());
+}
+void cancelled_before_start_never_asserts_power_or_starts_uart() { cancelledPower(0); }
+void cancelled_active_key_releases_once_and_refuses_restart() { cancelledPower(1); }
+void cancelled_settling_never_starts_uart_or_repeats_release() { cancelledPower(2); }
+void cancelled_ready_does_not_restart_or_consume_late_input() { cancelledPower(3); }
+void cancelled_already_powered_modem_never_restarts_uart() {
+  for (bool begun : {false, true}) {
+    RawClock raw;
+    SessionClock clock(raw, 1, 1000);
+    Uart uart;
+    ModemGnss modem(uart, enabled());
+    GpsManager gps(clock, modem, nullptr, qualifiedTiming());
+    if (begun)
+      gps.tick();
+    const auto sent = uart.tx;
+    gps.cancel();
+    TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+    for (unsigned i = 0; i < 5; ++i) {
+      raw.raw += 100;
+      gps.cancel();
+      gps.tick();
+    }
+    TEST_ASSERT_EQUAL_STRING(sent.c_str(), uart.tx.c_str());
+  }
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(cancelled_before_start_never_asserts_power_or_starts_uart);
+  RUN_TEST(cancelled_active_key_releases_once_and_refuses_restart);
+  RUN_TEST(cancelled_settling_never_starts_uart_or_repeats_release);
+  RUN_TEST(cancelled_ready_does_not_restart_or_consume_late_input);
+  RUN_TEST(cancelled_already_powered_modem_never_restarts_uart);
   RUN_TEST(manager_direct_barrier_releases_active_key_and_requires_qualification);
   RUN_TEST(initially_invalid_manager_recovers_only_through_verified_barrier);
   RUN_TEST(active_power_session_reset_recovery_never_replays_key_pulse);

@@ -17,6 +17,14 @@ bool CameraEventSession::configurePeer(size_t peer, uint32_t id, CameraModel mod
   return !active_ && configured && configured->enabled && configured->model == model &&
          logger_.configurePeer(peer, id, model);
 }
+bool CameraEventSession::activateLocal() {
+  if (active_ || stopping_ || !storage_.configValid())
+    return false;
+  camera_.finish();
+  camera_finished_ = true;
+  active_ = true;
+  return true;
+}
 bool CameraEventSession::activate() {
   if (active_ || stopping_ || !storage_.configValid() || !logger_.readyFor(manager_))
     return false;
@@ -33,8 +41,8 @@ bool CameraEventSession::binds(const Hero12Adapter &adapter, const CameraManager
 }
 void CameraEventSession::service() {
   if (!route_owned_) {
-    // A refused or completed session only drains its own telemetry on stop.
-    if (stopping_)
+    // Local mode advances only telemetry; a refused session drains only on stop.
+    if (active_ || stopping_)
       admission_.tick();
     return;
   }
@@ -51,7 +59,7 @@ void CameraEventSession::service() {
 void CameraEventSession::requestStop() {
   if (stopping_)
     return;
-  if (active_) {
+  if (route_owned_) {
     group_.cancel();
     adapter_.stop();
   } else {

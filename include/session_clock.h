@@ -48,6 +48,11 @@ public:
   // Invalid input leaves the previous anchor intact, while still sampling time.
   bool anchor(const UtcDateTime &utc, bool uncertainty_known = false, uint32_t uncertainty_ms = 0);
 
+  // Same session owner, source UTC at an already observed receipt boundary.
+  // Uncertainty is unknown unless explicitly qualified; never restamp old UTC.
+  bool anchorAtReceipt(const UtcDateTime &, uint64_t receipt_ms, bool uncertainty_known = false,
+                       uint32_t uncertainty_ms = 0);
+
 private:
   Clock &clock_;
   uint64_t session_id_;

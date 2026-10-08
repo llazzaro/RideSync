@@ -1,6 +1,7 @@
 #include "profiles/gopro_hero12_esp32.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include "ble_esp32.h"
+#include "local_telemetry_runtime.h"
 #include <Arduino.h>
 
 namespace ridesync {
@@ -9,6 +10,7 @@ struct MillisClock final : Clock {
   uint32_t now() const override { return millis(); }
 };
 CameraEventSession *active_session = nullptr;
+LocalTelemetryRuntime *active_telemetry = nullptr;
 } // namespace
 Hero12Runtime hero12Runtime() {
   static MillisClock clock;
@@ -21,10 +23,24 @@ Hero12Runtime hero12Runtime() {
 }
 bool hero12BindSession(CameraEventSession &session) {
   auto runtime = hero12Runtime();
-  if (active_session || !session.active() ||
+  if (active_session || active_telemetry || !session.active() ||
       !session.binds(runtime.adapter, runtime.manager, runtime.group))
     return false;
   active_session = &session;
+  return true;
+}
+bool hero12BindTelemetry(LocalTelemetryRuntime &owner) {
+  auto runtime = hero12Runtime();
+  if (active_session || active_telemetry ||
+      !owner.binds(runtime.adapter, runtime.manager, runtime.group))
+    return false;
+  active_telemetry = &owner;
+  return true;
+}
+bool hero12UnbindTelemetry(LocalTelemetryRuntime &owner) {
+  if (active_telemetry != &owner || !owner.canRelease())
+    return false;
+  active_telemetry = nullptr;
   return true;
 }
 bool hero12UnbindStoppedSession() {
@@ -37,7 +53,9 @@ bool hero12UnbindStoppedSession() {
 extern "C" ridesync::Hero12Runtime ridesync_hero12_runtime() { return ridesync::hero12Runtime(); }
 extern "C" void ridesync_hero12_service() {
   auto runtime = ridesync::hero12Runtime();
-  if (ridesync::active_session)
+  if (ridesync::active_telemetry)
+    ridesync::active_telemetry->service();
+  else if (ridesync::active_session)
     ridesync::active_session->service();
   else
     runtime.adapter.service();

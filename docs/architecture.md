@@ -245,3 +245,15 @@ Default bring-up does not start it. Future peripheral profiles share this host
 and store; camera setup/Ready/ACK/recording policy is separate. See
 [ble_transport.md](ble_transport.md) for concrete opt-in usage, lifetime, restore
 proof workflow, bounds, SDK latency limits and remaining physical gates.
+
+## Independent serialized telemetry composition (#40)
+
+[LocalTelemetryRuntime](local_telemetry.md) now owns one committed-ID session
+clock, CameraV3 Storage and mixed admission route for camera-free or camera-enabled
+logging. Its application pass owns modem/GPS/clock, camera service and admission;
+only acquisition and private SD filesystem work use the existing independent
+workers. The ESP32 facade binds this entire owner into `ridesync_hero12_service`
+for future controls, preserves safe-mode worker refusals and waits for final
+producer/worker access before releasing caller resources. It remains callable
+and default inactive pending #42 supervision; source/host/compile evidence does
+not establish physical support or measured ride reliability.

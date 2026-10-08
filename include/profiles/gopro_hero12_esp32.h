@@ -10,7 +10,12 @@ struct Hero12Runtime {
   CameraManager &manager;
   RecordingManager &group;
 };
+class LocalTelemetryRuntime;
 Hero12Runtime hero12Runtime();
+// Mutually exclusive with the legacy session binding. The single service route
+// advances the complete telemetry owner, never a second manager/admission tick.
+bool hero12BindTelemetry(LocalTelemetryRuntime &);
+bool hero12UnbindTelemetry(LocalTelemetryRuntime &);
 bool hero12BindSession(CameraEventSession &session);
 bool hero12UnbindStoppedSession();
 } // namespace ridesync

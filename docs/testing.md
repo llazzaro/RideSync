@@ -378,3 +378,19 @@ the default and opt-in real ESP32 composition symbols without activating board
 peripherals. Use a source-qualified camera, qualified storage hardware and
 on-device measurements before drawing conclusions about radio timing, resource
 margins, physical durability or recording behavior.
+
+## Independent local runtime software checks (#40)
+
+`pio test -e native -f test_local_telemetry` exercises the one-owner composition:
+committed allocation before session construction, camera-free/NVS-refused local
+admission, GPS NoFix/fix/stale/error and source-receipt UTC anchoring, safe-mode
+IMU refusal, task-create refusal, camera/IMU queue pressure with GPS reservation,
+terminal sensor/media outcomes and final producer/SD-access barriers.
+`python -m unittest discover -s test -p test_local_telemetry_esp32.py -v` runs the
+actual concrete ESP32 facade, bound HERO12 service route, SD worker and BMI270
+worker with synthetic hardware/RTOS callbacks; it checks raw IMU/GPS/camera rows
+on the same private worker, exclusive route admission, early refusal status and
+blocked final close without control waits. Full native/Python/format and all
+three pinned ESP32 environments remain the integration gates. See
+[local telemetry](local_telemetry.md) for lifetime, qualification and physical
+limits. Default startup remains inactive pending #42.

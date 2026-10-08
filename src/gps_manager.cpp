@@ -3,7 +3,15 @@ namespace ridesync {
 GpsManager::GpsManager(SessionClock &clock, ModemGnss &modem, GnssPowerControl *power,
                        const QualifiedPowerTiming &timing)
     : clock_(clock), modem_(modem), power_(power), timing_(timing), stage_(PowerStage::Disabled) {}
+void GpsManager::cancel() {
+  const bool release_key = power_ && stage_ == PowerStage::KeyActive;
+  stage_ = PowerStage::Cancelled;
+  if (release_key)
+    power_->key(false);
+}
 void GpsManager::tick() {
+  if (stage_ == PowerStage::Cancelled)
+    return;
   const auto now = clock_.snapshot();
   if (now.monotonic_quality != MonotonicQuality::Valid ||
       (started_ && now.session_id != session_)) {
@@ -45,6 +53,8 @@ void GpsManager::tick() {
     modem_.tick(now);
 }
 bool GpsManager::restartAfterVerifiedBarrier() {
+  if (stage_ == PowerStage::Cancelled)
+    return false;
   const auto now = clock_.snapshot();
   if (!timing_.qualified || now.monotonic_quality != MonotonicQuality::Valid ||
       now.session_id == 0 ||

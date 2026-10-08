@@ -13,15 +13,19 @@ struct QualifiedPowerTiming {
   bool qualified = false;
   uint32_t key_active_ms = 0, settle_ms = 0;
 };
-enum class PowerStage { Disabled, KeyActive, Settling, Complete, InvalidClock };
+enum class PowerStage { Disabled, KeyActive, Settling, Complete, InvalidClock, Cancelled };
 class GpsManager {
 public:
   GpsManager(SessionClock &clock, ModemGnss &modem, GnssPowerControl *power = nullptr,
              const QualifiedPowerTiming &timing = QualifiedPowerTiming{});
   void tick();
+  // Terminal owner cancellation: nonblocking release of an asserted key only.
+  // Supply ownership remains with the caller. Later tick/restart cannot start IO.
+  void cancel();
   // Same verified physical/receive barrier contract as ModemGnss. Caller also
   // asserts the qualified supply/reset sequence is complete. Does not replay
   // supply enable/PWRKEY; deasserts an active key before restarting AT startup.
+  // Refuses after cancel(); a fresh owner/session is required after terminal stop.
   bool restartAfterVerifiedBarrier();
   ModemSnapshot snapshot();
   PowerStage powerStage() const { return stage_; }

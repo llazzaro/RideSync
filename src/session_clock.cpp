@@ -78,12 +78,17 @@ RecordTimestamp SessionClock::snapshotSampled() {
 }
 bool SessionClock::anchor(const UtcDateTime &utc, bool known, uint32_t uncertainty) {
   sample();
+  return anchorAtReceipt(utc, elapsed_ms_, known, uncertainty);
+}
+bool SessionClock::anchorAtReceipt(const UtcDateTime &utc, uint64_t receipt, bool known,
+                                   uint32_t uncertainty) {
+  sample();
   int64_t ms;
-  if (session_id_ == 0 || duration_exceeded_ ||
+  if (receipt > elapsed_ms_ || session_id_ == 0 || duration_exceeded_ ||
       anchor_.sequence == std::numeric_limits<uint32_t>::max() || !utcMilliseconds(utc, ms))
     return false;
   ++anchor_.sequence;
-  anchor_.receipt_ms = elapsed_ms_;
+  anchor_.receipt_ms = receipt;
   anchor_.utc_ms = ms;
   anchor_.uncertainty_known = known;
   anchor_.uncertainty_ms = known ? uncertainty : 0;
