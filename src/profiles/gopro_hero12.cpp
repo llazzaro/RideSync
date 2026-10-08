@@ -617,6 +617,8 @@ void Hero12Adapter::result(const BleResult &r) {
     auto &recovery = recovery_[scan_owner_];
     const auto &identity = peers_[scan_owner_].qualification.identity;
     if (recovery.state.phase == Hero12RecoveryPhase::Scanning &&
+        (r.event.advertisement_type == BleAdvertisementType::ConnectableUndirected ||
+         r.event.advertisement_type == BleAdvertisementType::ConnectableDirected) &&
         r.event.identity.type == identity.type && r.event.identity.address == identity.address &&
         hasFea6(r.event)) {
       recovery.observed_advertisement = true;
@@ -772,6 +774,16 @@ void Hero12Adapter::advanceRecovery() {
       }
     } else if (phase == Hero12RecoveryPhase::Observing) {
       if (!r.operation) {
+        if (state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed ||
+            peers_[i].sealed || !peers_[i].ready) {
+          r.state.phase = Hero12RecoveryPhase::Failed;
+          continue;
+        }
+        // CameraManager::request queues behind an active operation. Never take
+        // that path or overlap the profile's serialized keepalive transaction.
+        if (state->lifecycle != Lifecycle::Ready || peers_[i].step != Step::None ||
+            !central_.admissionOpen(i))
+          continue;
         if (manager_->request(i, Operation::Query) != CameraError::None) {
           r.state.phase = Hero12RecoveryPhase::Failed;
           continue;
@@ -798,6 +810,16 @@ void Hero12Adapter::advanceRecovery() {
       }
     } else if (phase == Hero12RecoveryPhase::Starting) {
       if (!r.operation) {
+        if (state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed ||
+            peers_[i].sealed || !peers_[i].ready) {
+          r.state.phase = Hero12RecoveryPhase::Failed;
+          continue;
+        }
+        // If another owner operated between observe and Start, wait for its
+        // completion. Start itself always re-queries Encoding before shutter.
+        if (state->lifecycle != Lifecycle::Ready || peers_[i].step != Step::None ||
+            !central_.admissionOpen(i))
+          continue;
         if (manager_->request(i, Operation::Start) != CameraError::None) {
           r.state.phase = Hero12RecoveryPhase::Failed;
           continue;
@@ -826,13 +848,21 @@ void Hero12Adapter::advanceRecovery() {
       const auto link = central_.phase(i);
       if (link != BlePhase::Empty && link != BlePhase::Closed)
         continue; // A retired connection must release its host lease before rediscovery.
-      if (central_.scan(3000, clock_.now())) {
-        r.state.phase = Hero12RecoveryPhase::Scanning;
+      const uint32_t before = central_.scanGeneration();
+      const bool admitted = central_.scan(3000, clock_.now());
+      if (central_.scanGeneration() != before) {
         ++r.state.scans;
-        r.observed_advertisement = false;
-        scan_owner_ = i;
-        scan_generation_ = central_.scanGeneration();
         scan_cursor_ = (i + 1) % kBlePeers;
+        if (admitted) {
+          r.state.phase = Hero12RecoveryPhase::Scanning;
+          r.observed_advertisement = false;
+          scan_owner_ = i;
+          scan_generation_ = central_.scanGeneration();
+        } else {
+          // submit() owned a generation even when it failed synchronously. The
+          // central keeps that context until its host barrier; never retry it.
+          r.state.phase = Hero12RecoveryPhase::Failed;
+        }
       }
       break;
     }

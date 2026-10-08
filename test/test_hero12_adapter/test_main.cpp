@@ -68,6 +68,7 @@ struct ScriptHost : SilentHost {
   bool reject_pair = false, reject_claim = false, wrong_pair_route = false,
        wrong_query_status = false;
   bool fragment_hardware = false;
+  bool fail_scan_submit = false;
   uint8_t empty_register_target = 0, wrong_register_target = 0;
   BleBondAdmission bond;
   ScriptHost() {
@@ -80,6 +81,11 @@ struct ScriptHost : SilentHost {
     commands.push_back(c);
     contexts.push_back(&ctx);
     quiet.erase(std::remove(quiet.begin(), quiet.end(), &ctx), quiet.end());
+    if (c.phase == BlePhase::Scan && fail_scan_submit) {
+      ctx.terminal.store(true);
+      quiet.push_back(&ctx);
+      return 77;
+    }
     return 0;
   }
   int retire(BleContext &ctx) override {
@@ -720,11 +726,20 @@ void recovery_connects_only_matching_fea6_and_records_after_observation() {
   TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning, (int)r.adapter.recoveryState(0).phase);
   unrelated.size = 4;
   unrelated.bytes = {{3, 3, 0xa6, 0xfe}};
+  for (auto type : {BleAdvertisementType::Unknown, BleAdvertisementType::NonConnectable,
+                    BleAdvertisementType::ScanResponse, BleAdvertisementType::Scannable}) {
+    unrelated.advertisement_type = type;
+    r.host.deliver(scan, unrelated);
+    r.adapter.service();
+    TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning,
+                          (int)r.adapter.recoveryState(0).phase);
+  }
   unrelated.identity.type = IdentityType::UnresolvedPrivate;
   r.host.deliver(scan, unrelated);
   r.adapter.service();
   TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Scanning, (int)r.adapter.recoveryState(0).phase);
   unrelated.identity.type = IdentityType::Public;
+  unrelated.advertisement_type = BleAdvertisementType::ConnectableUndirected;
   r.host.deliver(scan, unrelated);
   r.adapter.service();
   r.pump();
@@ -760,6 +775,7 @@ void cancelled_recovery_ignores_late_advertisement_and_preserves_other_link() {
   TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.cancelRecovery(0));
   BleEvent late;
   late.kind = BleEventKind::Advertisement;
+  late.advertisement_type = BleAdvertisementType::ConnectableUndirected;
   late.identity.type = IdentityType::Public;
   late.identity.address[0] = 1;
   late.size = 4;
@@ -780,6 +796,7 @@ void recovery_connection_readiness_timeout_is_reported_without_rec() {
   auto &scan = *r.host.contexts.back();
   BleEvent ad;
   ad.kind = BleEventKind::Advertisement;
+  ad.advertisement_type = BleAdvertisementType::ConnectableUndirected;
   ad.identity.type = IdentityType::Public;
   ad.identity.address[0] = 1;
   ad.size = 4;
@@ -802,6 +819,7 @@ void recovery_claim_refusal_never_replays_rec() {
   auto &scan = *r.host.contexts.back();
   BleEvent ad;
   ad.kind = BleEventKind::Advertisement;
+  ad.advertisement_type = BleAdvertisementType::ConnectableUndirected;
   ad.identity.type = IdentityType::Public;
   ad.identity.address[0] = 1;
   ad.size = 4;
@@ -836,6 +854,7 @@ void recovery_does_not_connect_after_manager_generation_reset() {
   r.manager.reset();
   BleEvent late;
   late.kind = BleEventKind::Advertisement;
+  late.advertisement_type = BleAdvertisementType::ConnectableUndirected;
   late.identity.type = IdentityType::Public;
   late.identity.address[0] = 1;
   late.size = 4;
@@ -846,6 +865,81 @@ void recovery_does_not_connect_after_manager_generation_reset() {
   TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Failed, (int)r.adapter.recoveryState(0).phase);
   for (const auto &c : r.host.commands)
     TEST_ASSERT_TRUE(c.phase != BlePhase::Connect);
+}
+void rejected_scan_submission_consumes_bounded_attempt_and_releases_lease() {
+  Rig r;
+  r.host.fail_scan_submit = true;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, false));
+  for (unsigned pass = 0; pass < 20; ++pass)
+    r.adapter.service();
+  unsigned submissions = 0;
+  for (const auto &c : r.host.commands)
+    submissions += c.phase == BlePhase::Scan;
+  TEST_ASSERT_TRUE(submissions <= 2);
+  TEST_ASSERT_EQUAL_UINT8(submissions, r.adapter.recoveryState(0).scans);
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Failed, (int)r.adapter.recoveryState(0).phase);
+  r.adapter.stop();
+  r.adapter.service();
+  TEST_ASSERT_TRUE(r.adapter.canDestroy());
+}
+void recovery_waits_for_pending_keepalive_before_querying_live_link() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  r.clock.value += 3000;
+  r.adapter.service(); // KeepAlive write is now pending at the real central.
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, false));
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Ready, (int)r.manager.state(0)->lifecycle);
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Ready, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Ready, (int)r.manager.state(0)->lifecycle);
+}
+void recovery_waits_when_keepalive_becomes_due_in_same_owner_pass() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, false));
+  r.clock.value += 3000;
+  r.adapter.service(); // The normal profile starts KeepAlive before recovery advances.
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Ready, (int)r.manager.state(0)->lifecycle);
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Ready, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Ready, (int)r.manager.state(0)->lifecycle);
+}
+void competing_query_cannot_own_or_orphan_recovery_start() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.pump(); // Fresh Encoding query observed Stopped; Start is due next owner pass.
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Starting, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Query));
+  r.adapter.service(); // Recovery must not enqueue Start behind this Query.
+  r.pump(300);
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Recording, (int)r.adapter.recoveryState(0).phase);
+  unsigned shutter_on = 0;
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3 && c.bytes[2] == 1 && c.bytes[4] == 1)
+      ++shutter_on;
+  TEST_ASSERT_EQUAL_UINT(1, shutter_on);
+}
+void cancelling_recovery_while_competing_query_runs_leaves_query_owned_by_caller() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.requestRecovery(0, true));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Starting, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.manager.request(0, Operation::Query));
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT((int)CameraError::None, (int)r.adapter.cancelRecovery(0));
+  r.pump(300);
+  TEST_ASSERT_EQUAL_INT((int)Hero12RecoveryPhase::Cancelled, (int)r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT((int)Lifecycle::Ready, (int)r.manager.state(0)->lifecycle);
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3)
+      TEST_ASSERT_TRUE(c.bytes[2] != 1);
 }
 int main() {
   UNITY_BEGIN();
@@ -882,5 +976,10 @@ int main() {
   RUN_TEST(recovery_claim_refusal_never_replays_rec);
   RUN_TEST(recovery_scans_pending_peers_fairly_after_absence);
   RUN_TEST(recovery_does_not_connect_after_manager_generation_reset);
+  RUN_TEST(rejected_scan_submission_consumes_bounded_attempt_and_releases_lease);
+  RUN_TEST(recovery_waits_for_pending_keepalive_before_querying_live_link);
+  RUN_TEST(recovery_waits_when_keepalive_becomes_due_in_same_owner_pass);
+  RUN_TEST(competing_query_cannot_own_or_orphan_recovery_start);
+  RUN_TEST(cancelling_recovery_while_competing_query_runs_leaves_query_owned_by_caller);
   return UNITY_END();
 }

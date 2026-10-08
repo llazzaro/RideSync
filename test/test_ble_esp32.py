@@ -65,6 +65,11 @@ STUB = r'''
 #define BLE_GAP_EVENT_NOTIFY_RX 6
 #define BLE_GAP_EVENT_PASSKEY_ACTION 7
 #define BLE_GAP_EVENT_REPEAT_PAIRING 8
+#define BLE_HCI_ADV_RPT_EVTYPE_ADV_IND 0
+#define BLE_HCI_ADV_RPT_EVTYPE_DIR_IND 1
+#define BLE_HCI_ADV_RPT_EVTYPE_SCAN_IND 2
+#define BLE_HCI_ADV_RPT_EVTYPE_NONCONN_IND 3
+#define BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP 4
 struct ble_addr_t { uint8_t type=0,val[6]{}; };
 struct ble_uuid_t { uint8_t type; };
 union ble_uuid_any_t {
@@ -114,7 +119,7 @@ struct ble_gap_sec_state { bool encrypted=false,authenticated=false,bonded=false
 struct ble_gap_conn_desc { ble_gap_sec_state sec_state; ble_addr_t peer_id_addr; uint16_t conn_handle=0; };
 struct ble_gap_event {
  int type;
- struct { ble_addr_t addr; uint8_t length_data=0; const uint8_t *data=nullptr; } disc;
+ struct { ble_addr_t addr; uint8_t event_type=0xff,length_data=0; const uint8_t *data=nullptr; } disc;
  struct { int reason=0; } disc_complete;
  struct { int status=0; uint16_t conn_handle=0; } connect;
  struct { ble_gap_conn_desc conn; int reason=0; } disconnect;
@@ -326,6 +331,24 @@ int main(int argc,char**argv){
   assert(ble_hs_cfg.store_write_cb(1,&value)!=0);assert(written==0);
   assert(host.fault()==BleFault::Store);return 0;
  }
+ if(scenario==23){
+  Receiver receiver;BleContext scan;scan.receiver=&receiver;scan.peer=kBlePeers;
+  scan.generation=1;scan.phase=BlePhase::Scan;scan.terminal.store(false);
+  BleCommand command;command.phase=BlePhase::Scan;command.duration_ms=3000;
+  assert(host.submit(command,scan)==0);
+  const uint8_t service[]={3,3,0xa6,0xfe};
+  for(uint8_t type: {uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3),uint8_t(4),uint8_t(99)}){
+   ble_gap_event ad;ad.type=BLE_GAP_EVENT_DISC;ad.disc.addr.val[0]=1;
+   ad.disc.event_type=type;ad.disc.length_data=sizeof service;ad.disc.data=service;
+   gap_callbacks[4](&ad,gap_args[4]);
+   assert(receiver.latest.kind==BleEventKind::Advertisement);
+   auto expected=type<=4?static_cast<BleAdvertisementType>(type):BleAdvertisementType::Unknown;
+   assert(receiver.latest.advertisement_type==expected);
+   assert(receiver.latest.bytes[2]==0xa6);
+  }
+  assert(host.cancelScan(scan)==0);pump();assert(host.quiescent(scan));
+  assert(host.releaseContext(scan));return 0;
+ }
  Receiver receiver;
  auto *link=new BleContext;link->receiver=&receiver;link->peer=0;link->generation=42;link->phase=BlePhase::Connect;link->terminal.store(false);
  BleCommand c;c.phase=BlePhase::Connect;c.identity.type=IdentityType::Public;c.identity.verified=true;c.identity.address[0]=1;c.duration_ms=5000;
@@ -391,6 +414,6 @@ class BleEsp32(unittest.TestCase):
                             "-fno-sanitize-recover=all", "-g", "-O0", "-I", str(temp), "-I", str(ROOT / "include"),
                             "-I", str(ROOT), str(temp / "harness.cpp"), str(ROOT / "src/pairing_reset.cpp"),
                             "-o", str(binary)], check=True)
-            for scenario in range(23):
+            for scenario in range(24):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")

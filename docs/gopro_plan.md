@@ -218,10 +218,13 @@ unavailable for a disconnected HERO12; this callable coordinator submits the
 existing `Connect`, `Query`, and `Start` operations in sequence.
 
 For a disconnected peer it conducts at most two 3-second scans, rotating the
-shared scan lease among pending peers. It considers only a well-formed FEA6
-16-bit service advertisement whose observed public or random-static address
+shared scan lease among pending peers. A failed host scan submission consumes
+one bounded attempt and fails that recovery after central cleanup. It considers
+only a well-formed FEA6 16-bit service advertisement in an observed connectable
+legacy `ADV_IND` or `DIR_IND` report whose public or random-static address
 exactly matches the separately verified `BondIdentity`. An unresolved private
-address is not matched without a verified stack identity mapping. An observed
+address is not matched without a verified stack identity mapping. Unknown,
+nonconnectable, scannable-only and scan-response reports are refused. An observed
 match cancels only the scan, waits for its terminal callback and host barrier,
 then requests ordinary connection. Central security, fresh subscriptions,
 pairing-finish, external-control claim, Hardware Info readiness, exact
@@ -244,6 +247,10 @@ another client's ownership, disabled wireless, or full power removal follows.
 An explicit caller-reported `PowerRemoved` condition returns `Unsupported`,
 because no BLE path exists without electrical power. No GoPro wake beacon,
 undocumented power command, or Insta360 packet is sent.
+Query and Start wait for an idle profile transaction and an idle manager
+operation slot under the same absolute deadline. This preserves an in-flight
+keepalive and prevents a competing caller's operation from owning or queueing
+recovery's REC intent.
 
 The official [BLE setup](https://gopro.github.io/OpenGoPro/docs/ble/protocol/ble_setup/)
 describes advertising for the first eight hours after sleep and connecting to

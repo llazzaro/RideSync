@@ -617,6 +617,27 @@ int Esp32BleHost::gap(ble_gap_event *event, void *argument) {
   case BLE_GAP_EVENT_DISC:
     out.kind = BleEventKind::Advertisement;
     out.identity = identity(event->disc.addr);
+    // Legacy GAP report types from this pinned NimBLE ABI. Unknown types stay
+    // Unknown and cannot establish a connectable recovery candidate.
+    switch (event->disc.event_type) {
+    case BLE_HCI_ADV_RPT_EVTYPE_ADV_IND:
+      out.advertisement_type = BleAdvertisementType::ConnectableUndirected;
+      break;
+    case BLE_HCI_ADV_RPT_EVTYPE_DIR_IND:
+      out.advertisement_type = BleAdvertisementType::ConnectableDirected;
+      break;
+    case BLE_HCI_ADV_RPT_EVTYPE_SCAN_IND:
+      out.advertisement_type = BleAdvertisementType::Scannable;
+      break;
+    case BLE_HCI_ADV_RPT_EVTYPE_NONCONN_IND:
+      out.advertisement_type = BleAdvertisementType::NonConnectable;
+      break;
+    case BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP:
+      out.advertisement_type = BleAdvertisementType::ScanResponse;
+      break;
+    default:
+      break;
+    }
     if (event->disc.length_data > kBlePayload || (event->disc.length_data && !event->disc.data)) {
       entry.context->sealed.store(true);
       entry.context->fault.store(BleFault::Malformed);

@@ -75,6 +75,16 @@ enum class BleEventKind : uint8_t {
   Complete,
   Notification
 };
+// The pinned NimBLE legacy GAP report types. Unknown is the safe default for
+// synthetic events and any future report format not explicitly mapped by host.
+enum class BleAdvertisementType : uint8_t {
+  ConnectableUndirected = 0,
+  ConnectableDirected = 1,
+  Scannable = 2,
+  NonConnectable = 3,
+  ScanResponse = 4,
+  Unknown = 0xff
+};
 struct BleEvent {
   BleEventKind kind = BleEventKind::Complete;
   uint8_t peer = 0, properties = 0, size = 0;
@@ -83,6 +93,7 @@ struct BleEvent {
   int status = 0; // Host error retained, never a camera ACK.
   uint16_t connection = kBleNoHandle, handle = 0, start = 0, end = 0;
   BleUuid uuid;
+  BleAdvertisementType advertisement_type = BleAdvertisementType::Unknown;
   BondIdentity identity;
   bool encrypted = false, authenticated = false, bonded = false;
   std::array<uint8_t, kBlePayload> bytes{};
