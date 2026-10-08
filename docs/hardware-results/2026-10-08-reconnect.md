@@ -391,3 +391,29 @@ window. Host verification of the interrupted file, completed recovery file,
 previous successful CSV and expected ledger advancement is pending. This EN
 reset trial does not remove SD supply and is not a power-loss test. Issue #11
 remains open, as do concurrent-load, fault-latency and broader durability checks.
+
+
+## Interrupted reset host readback passed
+
+With H1N_SD mounted again on the Mac, both ledger slots passed exact 40-byte
+length, magic/version, reserved namespace, counter/sequence, complement, reserved
+field and CRC validation. Slot counters were 3 and 2, matching the interrupted
+and subsequent recovery allocations.
+
+The interrupted counter-2 CSV contained two complete LF-terminated records.
+The recovered counter-3 CSV contained four complete LF-terminated records.
+Both files had the expected version/session/firmware/provenance metadata,
+consistent CSV widths and admission snapshots, monotonic times 1000 ms apart,
+missing GNSS/UTC, disabled modem/UART and blank unavailable measurement fields.
+The first successful counter-1 CSV was byte-for-byte unchanged from its private
+host capture. Both original non-ledger files still matched their pre-write sizes
+and SHA-256 checksums. Private copies and a verification receipt were retained.
+No host verifier wrote the ledger or altered card content.
+
+This completes host verification for the observed EN-reset boundary: the next
+boot used a new session instead of reusing the interrupted file, and earlier
+files survived unchanged. Exactly two rows survived this particular interruption;
+that is not a general maximum-loss bound. No SD supply interruption occurred
+during the active write. Arbitrary power-loss windows, filesystem corruption
+behavior, blocked-media latency and concurrent BLE/control progress remain
+unqualified, so issue #11 remains open.
