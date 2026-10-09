@@ -39,14 +39,14 @@ struct StorageHealth {
 class Storage {
 public:
   static constexpr uint32_t kCapacity = 8;
-  static constexpr size_t kMaxRowBytes = 2048, kChunkBytes = 256;
+  static constexpr size_t kMaxRowBytes = 3072, kChunkBytes = 256;
   Storage(StorageSink &sink, const StorageConfig &config);
   bool configValid() const { return valid_; }
   uint64_t sessionId() const { return session_; }
   bool usesSink(const StorageSink &sink) const { return &sink_ == &sink; }
   bool enqueue(const RecordTimestamp &timestamp, const ModemSnapshot &sample);
   bool enqueueImu(const RecordTimestamp &timestamp, const ImuEvidence &evidence,
-                  bool reserve = false);
+                  bool reserve = false, const MotionEvidence &motion = {});
   bool enqueueCamera(const RecordTimestamp &timestamp, const CameraEvidence &evidence,
                      bool reserve = true);
   KindHealth kindHealth(RecordKind kind) const;

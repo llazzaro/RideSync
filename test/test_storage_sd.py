@@ -220,7 +220,7 @@ int test_close(int);
             build = subprocess.run([
                 'c++', '-std=c++11', '-DARDUINO', '-Wall', '-Wextra', '-Werror',
                 '-pthread', '-I', folder, '-I', str(ROOT / 'include'),
-                str(Path(folder) / 'main.cpp'), str(ROOT / 'src/storage.cpp'),
+                str(Path(folder) / 'main.cpp'), str(ROOT / 'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
                 str(Path(folder) / 'storage_sd.cpp'), str(ROOT / 'src/session_identity.cpp'),
                 str(ROOT / 'src/session_storage_owner.cpp'), str(ROOT / 'src/health_supervisor.cpp'),
                 str(ROOT / 'src/session_clock.cpp'), '-o', str(executable),

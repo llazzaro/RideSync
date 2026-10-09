@@ -113,12 +113,12 @@ class TelemetryDiskTest(unittest.TestCase):
         path = Path(cls.directory.name)
         (path / 'fixture.cpp').write_text(SOURCE)
         subprocess.run(['c++', '-std=c++11', '-pthread', '-I'+str(ROOT/'include'),
-                        str(path/'fixture.cpp'), str(ROOT/'src/storage.cpp'),
+                        str(path/'fixture.cpp'), str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
                         str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'),
                         '-o',str(path/'fixture')],check=True)
         (path / 'timestamps.cpp').write_text(TIMESTAMP_SOURCE)
         subprocess.run(['c++', '-std=c++11', '-pthread', '-I'+str(ROOT/'include'),
-                        str(path/'timestamps.cpp'), str(ROOT/'src/storage.cpp'),
+                        str(path/'timestamps.cpp'), str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
                         str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'),
                         '-o',str(path/'timestamps')],check=True)
         cls.timestamps = subprocess.check_output([str(path/'timestamps')],text=True)
@@ -232,7 +232,7 @@ int main() {
             path = Path(directory)
             (path / 'camera.cpp').write_text(source)
             subprocess.run(['c++','-std=c++11','-I'+str(ROOT/'include'),
-                            str(path/'camera.cpp'),str(ROOT/'src/storage.cpp'),
+                            str(path/'camera.cpp'),str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
                             '-o',str(path/'camera')],check=True)
             data = subprocess.check_output([str(path/'camera')],text=True)
         rows = parse(data)
