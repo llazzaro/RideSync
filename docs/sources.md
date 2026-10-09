@@ -318,3 +318,11 @@ independent `test/fixtures/insta360/wake.h` retain the pinned MIT M5 fork
 `83d4748b68d6ee5fd4414994a9e26b7d2f21364b` fixed-region comparison. The legacy
 AD framing is RideSync's explicit layout; artificial identifier fixtures are
 source-derived expectations, not camera captures or model qualification.
+
+The finite wake scheduler, lease policy and preparation bridge are RideSync
+orchestration contracts tested with synthetic providers. The concrete raw GAP
+worker and store refusal use the existing pinned NimBLE-Arduino revision and
+its actual public/private store schemas; the compile-only retained target
+checks SDK compatibility. No advertisement return code is treated as a camera
+state fact, and no production recovery provider or hardware qualification is
+inferred from the source fixtures.

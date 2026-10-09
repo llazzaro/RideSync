@@ -571,3 +571,39 @@ passed on `fe34e49c95080d659bb3550c139799f05ab3fd89`, including the native
 suite, formatting, pinned firmware/bench builds and retained GPS audit. A fresh
 independent review found no issues in this bounded request-only implementation.
 Issue #19 remains open for its receive/state and usable recording-path scope.
+
+## Finite Insta360 wake software checks (#9, partial)
+
+Run the focused native suites `test_insta360_wake_encoder`, `test_wake_manager`,
+`test_wake_radio_policy` and `test_wake_preparation`. The independent source
+literals cover all encoding bytes and invalid inputs. Scheduler tests exercise
+four-peer deadlines, one lease, cancellation/invalidation, Busy, missing or
+unsupported recovery, fresh/stale state and unreleased cleanup. Policy tests
+require actual disconnect and a new callback barrier. Preparation tests execute
+the actual CameraManager/RecordingManager with counted synthetic transport and
+recovery providers; wake preparation never dispatches REC itself.
+
+`python -m unittest discover -s test -p 'test_wake_esp32.py' -v` compiles the
+actual host and worker under ASan/UBSan. Nineteen synthetic SDK scenarios cover
+copied bytes/duration, cancellation/expiry at preparation boundaries, admitted
+start cancellation, failed start/stop/termination, full barrier queue, duplicate
+completion, incoming store/security refusal across pinned schemas, private
+aliases, wrong disconnect, descriptor failure and foreign-handle collision.
+Thread rendezvous holds preparation or an already-admitted start while the
+control caller expires all four scheduler intents without waiting. Existing
+ATT works while wake excludes targeted reset. These tests do not prove SDK
+latency, stack high-water, camera wake or recording compatibility.
+
+`pio run -e insta360_wake_compile` links the real opt-in factory, worker,
+begin/poll/cycle, and raw GAP data/response/start/stop symbols. The default image
+remains disabled. Physical wake/latency/coexistence belongs to #22; the usable
+camera adapter/state route remains with #3/#5/#21 and the full #9 acceptance.
+
+October9 local checks: focused preparation8/8 and full native401/401 passed;
+full Python51/51 passed in the current checkout, including the existing SDK
+regressions. The first native full run collided with another run's shared
+executable; isolated build output (`PLATFORMIO_BUILD_DIR=.pio/build/wake-verification`)
+then passed all401 cases. Pinned default and retained wake builds both passed;
+formatting and diff-whitespace passed. Independent review and final commit CI
+are recorded below when available. This completes the approved software stage,
+not the still-unimplemented real-camera recovery route.
