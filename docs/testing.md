@@ -513,3 +513,29 @@ supervised application service frame is 672 bytes plus its 32-byte wrapper;
 older measurements above predate motion status growth. No hardware accuracy,
 throughput or stack high-water result is implied; #13 dynamic scope and #31
 reference measurements remain open.
+
+## Pure Insta360 GPS encoder software checks (#29)
+
+Synthetic source-derived packets are not camera captures. Run:
+
+```sh
+pio test -e native -f test_insta360_gps_encoder
+python -m unittest discover -s test -p test_insta360_gps_oracle.py -v
+python -m unittest discover -s test -p test_gps_resource_audit.py -v
+pio run -e lilygo_t_a7670e_r2
+pio run -e hero12_adapter_compile
+python scripts/probe_gps_encoder_resources.py --elf .pio/build/hero12_adapter_compile/firmware.elf --build-dir .pio/build/hero12_adapter_compile --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
+python scripts/check_format.py
+```
+
+October9 local evidence: 13 encoder Unity tests, 6 independent actual-output oracle
+tests, 6 audit regression tests; full native364/364 and Python discovery40/40
+before adding the six audit tests. Default and retained pinned ESP32 builds pass.
+The resource audit reports actual target result80/config8/packet71 bytes and
+packet offset8, encoder256/narrowScalar48/writeDouble32/leap32 individual static
+compiler frames. Anchor contents reference real encodeGps. Ordinary emitted
+calls resolve to pure helper/byte/arithmetic functions; pinned absolute ROM
+helper bodies are unavailable, and compiler integrity-abort is explicitly
+excluded. Neither this nor the compiler frame list measures runtime stack or
+latency. Camera capabilities/activation remain unchanged. CI discovers all
+native/Python tests and audits the retained ELF after its existing build.

@@ -3,7 +3,7 @@
 Selected hardware: **A7670E with built-in GPS**, accessed through modem AT
 commands. No external GPS module is planned. A portable GNSS response codec is
 implemented alongside an opt-in portable AT acquisition driver; SD logger and
-GPS BLE encoder work remain separate. Physical driver qualification is pending.
+the pure camera GPS encoder remain separate. Physical driver qualification is pending.
 
 LILYGO's [modem examples](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series)
 are the starting point for identifying the modem and its GNSS variant. The
@@ -40,7 +40,7 @@ Freshness and session clock conversion belong to consumers, not this codec.
 
 The [community GPS spec](https://github.com/TheAngryRaven/insta360-ble-gps-spec)
 reports CE82 GPS/sensor notifications on an X4. That is not proof of support on
-X5, GO 3S or ONE RS. Before writing an encoder, verify complete framing, length,
+X5, GO 3S or ONE RS. For any CE82 encoder, verify complete framing, length,
 endianness, signed coordinates, scales, timestamp interpretation and rate using
 captures and golden fixtures. Store citations with every field definition.
 
@@ -60,16 +60,16 @@ altitude in metres. Unknown header constants remain opaque.
 
 The pinned [README](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/README.md)
 reports ONE R 360-mod testing; ONE RS compatibility is a claim, not local evidence.
-Both license files specify MPL-2.0; no code or packet fixture is copied.
+Both license files specify MPL-2.0. The source-derived encoder and synthetic
+fixtures now retain that license; see [file coverage](sources.md#pure-gps-encoder-file-licensing-29).
 
 Do not adopt its edge behavior: altitude loses its sign, missing speed becomes
 zero, and the float32-to-float64 exponent rebias lacks a zero special case.
 Independent arithmetic gives `2^-127`, rather than zero, for float32 zero.
-No raw capture or golden was obtained in this audit. Missing fields, negative
-altitude, zero/subnormal conversion, sequence/framing and actual target support
-need independent expectations before enabling a profile. #29/#14 remain open;
-this finding supplies a licensed research path, not a CE82 encoder or metadata
-qualification.
+No raw camera capture or camera golden was obtained in this audit. The pure
+encoder below supplies independent software expectations for numeric/validation
+behavior. Actual target support remains unqualified; #14 owns delivery. This is
+a binary BE80 path, not a CE82 encoder or metadata qualification.
 
 ### Field-level evidence reconciliation — 2026-10-09
 
@@ -95,9 +95,9 @@ opaque; they cannot be claimed as a supported fractional-time field.
 Garmin's [`Position.Info`](https://developer.garmin.com/connect-iq/api-docs/Toybox/Position/Info.html)
 documents nullable fields. Missing speed, heading, altitude or UTC therefore
 cannot be represented honestly by silently inserting zero. No presence bits or
-shorter video variant were established. A prospective strict encoder must refuse
+shorter video variant were established. The implemented strict encoder refuses
 missing required fields and unsupported negative altitude rather than invent a
-wire convention. These are proposed consumer policies, not observed protocol
+wire convention. These are explicit consumer policies, not observed protocol
 requirements. Sequence belongs to the caller's complete command stream: the
 source increments 1..254 at byte 10 before splitting into 20-byte writes. A pure
 encoder must not infer delivery success or consume a transport sequence itself.
@@ -106,8 +106,56 @@ The helper first narrows each scalar to binary32 before constructing its binary6
 representation. Normal finite values have a source-derived numeric path; its
 zero/subnormal/NaN/Inf cases are not evidence for sensible wire values. Independent
 expected fixtures must distinguish canonical IEEE encoding policies from exact
-reproduction of the helper's mistakes. None of this enables a camera profile or
-completes #29: implementation, fixtures and verified error behavior remain absent.
+reproduction of the helper's mistakes. None of this enables a camera profile. The software encoding path and independent
+fixtures are implemented below; delivery and camera metadata remain separate.
+
+## Implemented pure encoder (#29)
+
+`ridesync::insta360::encodeGps(config, now, snapshot, sequence)` consumes copied
+`RecordTimestamp`/`ModemSnapshot` observations. `GpsWireProfile` defaults Disabled;
+`GarminBe80VideoV1` must be selected explicitly with age limit 1..60000 ms.
+Sequence is caller-owned, 1..254; the encoder neither increments it nor chunks,
+queues, transmits or retries. Success is `None`, size71 and fixed bytes; every
+failure is size0 with all-zero bytes. No driver, clock read or allocation is used.
+
+Validation order: profile/age/sequence; valid bounded session clock; matching
+session/Valid fix/receipt and recomputed consistent fresh age; finite coordinate
+ranges; all five UTC/metric availability flags; real Gregorian UTC 2000..2099;
+finite nonnegative speed, course [0,360), finite altitude; nonnegative altitude;
+then binary32 representability and narrowed course <360. Errors are Disabled,
+InvalidConfig, InvalidSequence, InvalidClock, InvalidFix, InvalidCoordinate,
+MissingField, InvalidUtc, InvalidMetric and UnsupportedAltitude. Age at the limit
+passes; a retained copy beyond it fails. Source UTC supplies whole epoch seconds;
+centiseconds are validated then omitted, and session anchors are ignored.
+
+The prefix is `47 00 00 00 04 00 00 35 00 02 SS 00 00 80 00 00 0a 35`;
+SS is byte10. Filler22..28 is `00 00 00 00 00 00 41`. Offsets/units follow the
+source table above. Each scalar narrows to binary32 and promotes to binary64,
+serialized explicitly little-endian. All signed zeros canonicalize to positive
+zero (coordinates N/E); representable subnormals promote correctly. Overflow and
+nonzero underflow-to-zero fail, as does course rounding to360. Coordinates use
+magnitude plus hemisphere; negative altitude is refused. RideSync maps GNSS
+course-over-ground to the source heading field, without claiming stationary
+heading or body yaw. No photo packet, accuracy, satellite, fractional UTC,
+signed altitude or arbitrary optional variant is supported.
+
+Independent synthetic full packets cover both hemispheres/sequences. Thirteen
+Unity tests exercise parameterized validation, calendar, numeric, freshness and
+precedence cases. Six Python oracle tests compile the actual C++ encoder and
+check every output byte using independent standard-library calendar/struct
+arithmetic, including zero/subnormals/precision and 70/72-byte rejection.
+
+The opt-in HERO12 compile image retains the real encoder through a data-only
+anchor, without calling it or changing camera capabilities. The pinned target
+ABI is config8/result80/packet71 bytes, packet member offset8. Individual static
+compiler frames are encodeGps256, narrowScalar48, writeDouble32 and leap32 bytes.
+The audit resolves static Xtensa literal-loaded calls, rejects unresolved calls
+and unexpected ordinary dependencies, and verifies actual anchor contents.
+Pinned absolute ROM arithmetic helpers are trusted where ELF bodies are absent;
+compiler `__stack_chk_fail` remains an explicitly excluded integrity-abort path.
+These are compile/link facts, not physical worst-case stack/latency, camera
+acceptance, ACK, stored metadata or enabled profile evidence. Tests and CI
+commands are in [testing](testing.md#pure-insta360-gps-encoder-software-checks-29).
 
 ## Local ride logger scope
 

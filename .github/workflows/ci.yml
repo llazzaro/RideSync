@@ -32,6 +32,8 @@ jobs:
         run: pio run -e ble_central_compile
       - name: Link opt-in HERO12 adapter with the shared ESP32 host (activation disabled)
         run: pio run -e hero12_adapter_compile
+      - name: Audit retained pure GPS encoder (compile only)
+        run: python scripts/probe_gps_encoder_resources.py --elf .pio/build/hero12_adapter_compile/firmware.elf --build-dir .pio/build/hero12_adapter_compile --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
       - name: Build isolated SD bench diagnostics (compile only)
         env:
           RIDESYNC_BENCH_NAMESPACE: '1'
