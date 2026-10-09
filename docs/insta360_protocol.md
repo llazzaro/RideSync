@@ -259,3 +259,54 @@ The newly audited licensed Garmin source is a separate reference, not a
 replacement for the selected target's qualification. No code or packet
 implementation from the unlicensed direct-control/GPS sources
 may be copied; their reports only identify questions for independent captures.
+
+## Finite wake preparation (#9 software stage)
+
+`insta360_wake_encoder` supplies a fixed source-derived `M5WakeV1` advertisement
+and scan response. Its six-byte identifier must be printable ASCII; the optional
+name helper accepts only exactly `X5 ` followed by six printable bytes. It never
+converts a MAC address, pads or truncates. Disabled and unknown profiles fail
+closed. These are pinned-source fixtures, not model compatibility claims.
+
+`WakeManager` holds four copied peer configurations and one advertising lease.
+The default total deadline is 15 seconds and each advertising slice is at most
+3 seconds; queue time counts toward the original deadline. Busy defers finitely.
+No uncertain accepted submission is retried. Cancellation, expiry and generation
+invalidation seal intent independently of physical release. A blocked SDK worker,
+missing disconnect or full host queue retains ownership, while every other peer
+can still time out. Operation IDs increase for the boot and never wrap or reuse.
+
+The opt-in `Esp32Insta360Wake` uses the already-qualified `Esp32BleHost`, one
+boot-lifetime mailbox and one fixed 4096-byte RTOS worker created at activation.
+It prepares raw AD/scan-response bytes and admits bounded connectable advertising
+only after rechecking current time and cancellation. Advertising excludes new
+scan/connect and targeted bond reset; established unrelated ATT remains usable.
+It never initializes another host, changes global bonding, or erases bonds.
+Cleanup attempts stop/terminate once; errors quarantine rather than manufacture
+release. Callback references, host barriers and the worker's last access must
+all finish before storage reuse. The incoming peripheral handle is wake-only:
+refuse its security/store records, retire only that new handle, and require its
+actual disconnect. Foreign established handles are never terminated. Known
+foreign stable identities remain usable; unknown private aliases, wildcard keys
+and unknown private-key schemas are conservatively refused during that lease.
+
+Successful advertising means submitted bytes, not an awake/recording camera.
+An independently supplied `WakeRecovery` must reconnect and publish a fresh
+Stopped or Recording observation tied to the same peer/generation/operation.
+Unknown/stale observations fail. No provider means Unsupported after release.
+The provider releases its procedure storage while retaining its qualified live
+control link; it must also update the actual CameraManager from qualified facts.
+
+`WakePreparation` attaches explicitly to the existing RecordingManager. It
+never sends Start/Stop/Query or advances the camera/group owner. Call its service
+once per owner pass before the existing camera/group advancement. Fresh Stopped
+allows the group to issue its supported explicit Start; fresh Recording avoids
+a duplicate. STOP seals pending work. A live link qualified before retirement
+may still admit STOP; late Ready cannot acquire this permission. Replacement
+prepare and invalidate revoke it. Only one preparation owner may attach, so this
+bridge is not automatically added to HERO12, HandlebarControl or startup.
+
+The compile-only `insta360_wake_compile` environment retains the actual worker
+and GAP paths while application activation remains disabled. A real Insta360
+control/state adapter and model/radio qualification remain necessary for the
+end-to-end #9 recording path (#3/#5/#21/#22).

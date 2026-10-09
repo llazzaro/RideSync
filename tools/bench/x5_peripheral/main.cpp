@@ -482,50 +482,74 @@ void setup() {
       "W+6ASCII+LF=idle wake-only3s H=private sensitive hex; recording UNKNOWN\n";
   emit(banner, sizeof(banner) - 1);
 }
-void handleCommand(uint32_t now) {
-  if (Serial.available()) {
-    int command = Serial.read();
-    WakeInput input;
+int readCommand() {
+  if (!Serial.available())
+    return -1;
+  int command = Serial.read();
+  WakeInput input;
+  {
+    Lock lock;
+    input = wake.feed(uint8_t(command), capture.used());
+  }
+  if (input != WakeInput::Command)
+    command = -1; // Consume malformed/private lines, never dispatch their suffix.
+  if (input == WakeInput::Accepted || input == WakeInput::Refused)
+    record(Kind::WakeOption, BLE_HS_CONN_HANDLE_NONE, 0, input == WakeInput::Accepted ? 1 : 0);
+  return command;
+}
+
+void beginCapture(uint32_t now) {
+  bool begin;
+  {
+    Lock lock;
+    begin = wake.allowBegin() && capture.begin(now);
+    if (begin)
+      sdk_control.begin(SdkAction::Startup);
+  }
+  if (begin && xTaskCreate(ownerTask, "x5_owner", 6144, nullptr, 1, nullptr) != pdPASS) {
     {
       Lock lock;
-      input = wake.feed(uint8_t(command), capture.used());
+      sdk_control.complete(ESP_ERR_NO_MEM);
     }
-    if (input != WakeInput::Command)
-      command = -1; // Consume malformed/private lines, never dispatch their suffix.
-    if (input == WakeInput::Accepted || input == WakeInput::Refused)
-      record(Kind::WakeOption, BLE_HS_CONN_HANDLE_NONE, 0, input == WakeInput::Accepted ? 1 : 0);
-    if (command == 'A') {
-      bool begin;
-      {
-        Lock lock;
-        begin = wake.allowBegin() && capture.begin(now);
-        if (begin)
-          sdk_control.begin(SdkAction::Startup);
-      }
-      if (begin && xTaskCreate(ownerTask, "x5_owner", 6144, nullptr, 1, nullptr) != pdPASS) {
-        {
-          Lock lock;
-          sdk_control.complete(ESP_ERR_NO_MEM);
-        }
-        fail(ESP_ERR_NO_MEM);
-      }
-    } else if (command == 'X') {
-      Lock lock;
-      capture.stop(StopReason::Requested);
-      if (capture.used())
-        sdk_control.requestStop();
-      shutter.cancel();
-    } else if (command == 'S') {
-      Lock lock;
-      const bool accepted =
-          wake.shutterAllowed() && shutter.request(capture, sdk_control, uint32_t(nowMs()));
-      capture.push(Kind::ShutterRequest, nowMs(), connection, attributes[1].handle,
-                   accepted ? 1 : 0);
-    } else if (command == 'H') {
-      private_hex = true; // Explicit opt-in. Never print SM keys/passkeys.
-    }
+    fail(ESP_ERR_NO_MEM);
   }
 }
+
+void stopCapture() {
+  Lock lock;
+  capture.stop(StopReason::Requested);
+  if (capture.used())
+    sdk_control.requestStop();
+  shutter.cancel();
+}
+
+void requestShutter() {
+  Lock lock;
+  const bool accepted =
+      wake.shutterAllowed() && shutter.request(capture, sdk_control, uint32_t(nowMs()));
+  capture.push(Kind::ShutterRequest, nowMs(), connection, attributes[1].handle, accepted ? 1 : 0);
+}
+
+void dispatchCommand(int command, uint32_t now) {
+  switch (command) {
+  case 'A':
+    beginCapture(now);
+    break;
+  case 'X':
+    stopCapture();
+    break;
+  case 'S':
+    requestShutter();
+    break;
+  case 'H':
+    private_hex = true; // Explicit opt-in. Never print SM keys/passkeys.
+    break;
+  default:
+    break;
+  }
+}
+
+void handleCommand(uint32_t now) { dispatchCommand(readCommand(), now); }
 
 struct LoopState {
   bool active, used, synced;
