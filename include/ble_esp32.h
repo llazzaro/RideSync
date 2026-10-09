@@ -64,9 +64,10 @@ public:
   void wakeCallbackExit();
   void wakeBarrierReleased(const WakeOperation &);
   void quarantineWake();
-  bool wakeIdentify(const WakeOperation &, uint16_t);
+  bool wakeIdentify(const WakeOperation &, uint16_t, bool reported_success = true);
   bool wakeStoreAllowed(int type, const void *key, const void *value);
   bool wakeOwnsConnection(uint16_t) const;
+  bool wakeSecurityAllowed(uint16_t);
 
 private:
   Esp32BleHost() = default;

@@ -1075,10 +1075,20 @@ int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
     return BLE_HS_EDISABLED;
   }
   if (cmd.phase == BlePhase::Security)
-    return ble_gap_security_initiate(cmd.connection);
+    return wakeSecurityAllowed(cmd.connection) ? ble_gap_security_initiate(cmd.connection)
+                                               : BLE_HS_ENOTSUP;
   if (routing_lock_.test_and_set(std::memory_order_acquire)) {
     ctx.terminal.store(true);
-    return BLE_HS_EBUSY;
+    return cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect ? kBleHostReserved
+                                                                         : BLE_HS_EBUSY;
+  }
+  // Linearize GAP admission with reserveWake/requestBondReset, not just the
+  // preliminary atomic check made before acquiring the routing gate.
+  if (reset_gate_.load(std::memory_order_acquire) ||
+      (wakeReserved() && (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
+    routing_lock_.clear(std::memory_order_release);
+    ctx.terminal.store(true);
+    return kBleHostReserved;
   }
   auto &entry = slot(ctx);
   entry.identity = {};

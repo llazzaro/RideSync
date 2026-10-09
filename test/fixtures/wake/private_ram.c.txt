@@ -1,0 +1,125 @@
+/*
+ * Copyright 2020 Espressif Systems (Shanghai) PTE LTD
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+/* Exact-pin synthetic harness excerpts: dfb4ac561a06797081be9e752902a6582e7f029e. */
+int
+ble_rpa_resolv_add_peer_rec(uint8_t *peer_addr)
+{
+    struct ble_hs_dev_records *p_dev_rec =
+            &peer_dev_rec[ble_store_num_peer_dev_rec];
+
+    p_dev_rec->rec_used = 1;
+    memcpy(p_dev_rec->pseudo_addr, peer_addr, BLE_DEV_ADDR_LEN);
+    memcpy(p_dev_rec->rand_addr, peer_addr, BLE_DEV_ADDR_LEN);
+    memcpy(p_dev_rec->identity_addr, peer_addr, BLE_DEV_ADDR_LEN);
+    ble_store_num_peer_dev_rec++;
+
+    return 0;
+}
+
+int
+ble_rpa_remove_peer_dev_rec(struct ble_hs_dev_records *p_dev_rec)
+{
+    int i;
+
+    for (i = 0; i < ble_store_num_peer_dev_rec; i++) {
+        if (!(memcmp(p_dev_rec, &peer_dev_rec[i], sizeof(struct
+                     ble_hs_dev_records)))) {
+            memset(&peer_dev_rec[i], 0, sizeof(struct ble_hs_dev_records));
+            break;
+        }
+    }
+
+    if (i >= ble_store_num_peer_dev_rec) {
+        return BLE_HS_EUNKNOWN;
+    }
+
+    ble_store_num_peer_dev_rec--;
+    if ((i != ble_store_num_peer_dev_rec) && (ble_store_num_peer_dev_rec != 0)) {
+        memmove(&peer_dev_rec[i], &peer_dev_rec[i + 1],
+                (ble_store_num_peer_dev_rec - i) * sizeof(struct ble_hs_dev_records ));
+        memset(&peer_dev_rec[ble_store_num_peer_dev_rec], 0, sizeof(struct ble_hs_dev_records));
+    }
+
+    BLE_HS_LOG(DEBUG, " RPA: removed device at index = %d, no. of peer records"
+               " = %d\n", i, ble_store_num_peer_dev_rec);
+
+    ble_store_persist_peer_records();
+    return 0;
+}
+
+static struct ble_hs_resolv_entry *
+ble_rpa_find_rl_from_peer_records(uint8_t *peer_addr, uint8_t *peer_addr_type)
+{
+    struct ble_hs_dev_records *p_dev_rec = NULL;
+    struct ble_hs_resolv_entry *rl = NULL;
+    int i;
+    int rc = 0;
+
+    for (i = (ble_store_num_peer_dev_rec - 1); i >= 0; i--) {
+        p_dev_rec = &peer_dev_rec[i];
+        /* If the record is not used, skip */
+        if (!(p_dev_rec->rec_used)) {
+            continue;
+        }
+
+        if (is_rpa_resolvable_by_peer_rec(p_dev_rec, peer_addr)) {
+            memcpy(p_dev_rec->rand_addr, peer_addr, BLE_DEV_ADDR_LEN);
+            p_dev_rec->rand_addr_type = *peer_addr_type;
+            rl = ble_hs_resolv_list_find(p_dev_rec->identity_addr);
+            if (rl) {
+                memcpy(peer_addr, p_dev_rec->identity_addr, BLE_DEV_ADDR_LEN);
+                *peer_addr_type = p_dev_rec->peer_sec.peer_addr.type;
+            } else if ((rl = ble_hs_resolv_list_find(p_dev_rec->pseudo_addr))
+                       != NULL) {
+                memcpy(peer_addr, p_dev_rec->identity_addr, BLE_DEV_ADDR_LEN);
+                *peer_addr_type = p_dev_rec->peer_sec.peer_addr.type;
+            } else {
+                /* Peer record exists, but RL does not
+                 * exist, remove peer record */
+                BLE_HS_LOG(DEBUG, "RPA resolvable but RL doesn't exist; remove"
+                           " peer rec at index = %d \n", i);
+                rc = ble_rpa_remove_peer_dev_rec(p_dev_rec);
+                if (rc != 0) {
+                    BLE_HS_LOG(ERROR, "Unexpected error; index exceeds max capacity\n");
+                }
+            }
+            /* Break loop, unique entry */
+            break;
+        } else {
+            /* As peer_dev_rec is added as soon as peer RPA
+             * is spotted, we might encounter duplications,
+             * remove peer_dev_rec here itself */
+            if ((!memcmp(p_dev_rec->rand_addr, peer_addr, BLE_DEV_ADDR_LEN)) ||
+                    (!memcmp(p_dev_rec->pseudo_addr, peer_addr, BLE_DEV_ADDR_LEN)) ||
+                    (!memcmp(p_dev_rec->identity_addr, peer_addr, BLE_DEV_ADDR_LEN))) {
+                BLE_HS_LOG(DEBUG, "RPA NOT resolvable; remove"
+                           " peer rec at index = %d \n", i);
+                rc = ble_rpa_remove_peer_dev_rec(p_dev_rec);
+                if (rc != 0) {
+                    BLE_HS_LOG(ERROR, "Unexpected error; index exceeds max capacity\n");
+                    break;
+                }
+            }
+        }
+    }
+
+    return rl;
+}

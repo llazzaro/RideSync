@@ -584,7 +584,7 @@ the actual CameraManager/RecordingManager with counted synthetic transport and
 recovery providers; wake preparation never dispatches REC itself.
 
 `python -m unittest discover -s test -p 'test_wake_esp32.py' -v` compiles the
-actual host and worker under ASan/UBSan. Nineteen synthetic SDK scenarios cover
+actual host and worker under ASan/UBSan. Twenty-six synthetic SDK scenarios cover
 copied bytes/duration, cancellation/expiry at preparation boundaries, admitted
 start cancellation, failed start/stop/termination, full barrier queue, duplicate
 completion, incoming store/security refusal across pinned schemas, private
@@ -604,6 +604,23 @@ full Python51/51 passed in the current checkout, including the existing SDK
 regressions. The first native full run collided with another run's shared
 executable; isolated build output (`PLATFORMIO_BUILD_DIR=.pio/build/wake-verification`)
 then passed all401 cases. Pinned default and retained wake builds both passed;
-formatting and diff-whitespace passed. Independent review and final commit CI
-are recorded below when available. This completes the approved software stage,
-not the still-unimplemented real-camera recovery route.
+formatting and diff-whitespace passed. The approved software stage leaves the real-camera recovery route unimplemented.
+
+
+The fresh independent whole-change review identified four Important defects.
+All were reproduced RED and fixed GREEN in one pass: a connection arriving
+inside adv_stop cleanup; a nonzero CONNECT status retaining a real peripheral
+handle; both routing-lock scan/reservation interleavings; and store/SMP/privacy
+activity before the delayed CONNECT callback. The worker remains eligible to
+retire late handles until poll atomically claims final release. Actual pinned
+private NVS read/write/delete, RAM add/remove/resolution and incoming SMP dispatch
+are covered by new Apache-licensed SDK fixtures and ASan/UBSan tests. Exact-source
+hash checks and idempotence protect installation of the narrow weak-hook patches;
+retained-link inspection confirms all three real refusal hooks are present.
+Established foreign central identity/security stays admitted; unclassifiable
+private identities remain refused. No review minor was deferred.
+
+Final local native401/401, retained/default SDK builds, formatting and whitespace
+passed after the fixes. Final Python55/55 also passed locally. The final commit CI link is recorded
+below. The optional local project-health heuristic is skipped when
+its CLI is absent; this is not reported as a performed health check.
