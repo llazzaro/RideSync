@@ -450,3 +450,13 @@ then requests the worker's final flush/close. Sink failure leaves final loss
 authoritative in runtime health, since a failed card cannot reliably log itself.
 If activation never succeeded, the session drains and closes only its telemetry;
 it does not service, stop or wait for an independently owned adapter.
+
+
+## MotionV4 extension
+
+Requested static motion sessions use [MotionV4](motion_logging.md#csv-layout):
+GPS remains 36 columns, cameras retain V3, and each raw IMU/config/health/control
+row appends 36 motion fields to the existing 88-field prefix. Invalid numerics
+are blank and dynamic result flags remain zero. Current runtime validity expires
+independently of immutable historical log records. CameraV3 remains the default
+when motion is not requested.

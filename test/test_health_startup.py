@@ -213,7 +213,7 @@ inline int gpio_set_level(gpio_num_t, uint32_t) { throw std::logic_error("unexpe
             subprocess.run(["c++", "-std=c++11", "-DARDUINO_ARCH_ESP32", "-I", str(temp), "-I", str(ROOT),
                             "-I", str(ROOT / "include"), str(temp / "run.cpp"),
                             str(ROOT / "src/application_startup.cpp"), str(ROOT / "src/health_supervisor.cpp"), str(ROOT / "src/config_storage.cpp"),
-                            str(ROOT / "src/config_bootstrap.cpp"), str(ROOT / "src/config.cpp"), str(ROOT / "src/button_manager.cpp"), str(ROOT / "src/storage.cpp"),
+                            str(ROOT / "src/config_bootstrap.cpp"), str(ROOT / "src/config.cpp"), str(ROOT / "src/button_manager.cpp"), str(ROOT / "src/storage.cpp"), str(ROOT / "src/motion_estimator.cpp"),
                             str(ROOT / "src/session_clock.cpp"), str(ROOT / "src/status_led.cpp"), "-o", str(temp / "run")], check=True)
             for scenario in range(16):
                 with self.subTest(scenario=scenario):

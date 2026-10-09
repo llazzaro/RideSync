@@ -425,10 +425,90 @@ void motion_direct_timing_and_stop() {
   TEST_ASSERT_EQUAL_INT(MotionAdmission::Revoked, a.motionAdmission());
   drain(s);
 }
+void motion_pose_controls_queue_failure_and_reverse_route() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV4});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  ReferenceSource source;
+  TelemetryAdmission a(clock, s, inbox, nullptr, motionOptions(MotionInputRoute::Direct), &source);
+  auto e = motion_fixture::sample(42, 0);
+  e.accel[1] = 700;
+  e.accel[2] = 1924;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FLOAT_WITHIN(.001, .349066, a.motionSnapshot(0).estimate.roll_rad);
+  e.kind = RecordKind::ImuControl;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  TEST_ASSERT_EQUAL_UINT32(1, source.calls);
+  e.kind = RecordKind::ImuSample;
+  source.reuse = true;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).estimate.static_tilt_valid);
+  source.reuse = false;
+  e.accel[0] = 32767;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  e.accel[0] = 0;
+  source.reuse = true;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).estimate.static_tilt_valid);
+  drain(s);
+  for (unsigned n = 0; n < 6; ++n)
+    TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_TRUE(a.motionSnapshot(0).current);
+  TEST_ASSERT_FALSE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  drain(s);
+  ImuBatch b;
+  b.count = 1;
+  b.records[0] = e;
+  const auto calls = source.calls;
+  TEST_ASSERT_TRUE(inbox.publish(b));
+  TEST_ASSERT_EQUAL_UINT8(1, a.tick());
+  TEST_ASSERT_EQUAL_INT(MotionAdmission::Revoked, a.motionAdmission());
+  TEST_ASSERT_EQUAL_UINT32(calls, source.calls);
+}
+void motion_rollover_age_and_configuration_refusal() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV4});
+  TestClock raw;
+  raw.time = UINT32_MAX - 50;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  auto options = motionOptions(MotionInputRoute::Direct);
+  TelemetryAdmission a(clock, s, inbox, nullptr, options);
+  auto e = motion_fixture::sample(42, UINT32_MAX - 50);
+  raw.time = 49;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_TRUE(a.motionSnapshot(49).current);
+  TEST_ASSERT_FALSE(a.motionSnapshot(50).current);
+  drain(s);
+  for (unsigned mode = 0; mode < 5; ++mode) {
+    options = motionOptions();
+    if (mode == 0)
+      options.requested = false;
+    if (mode == 1)
+      options.imu_qualified = false;
+    if (mode == 2)
+      options.snapshot_max_age_ms = 0;
+    if (mode == 3)
+      options.snapshot_max_age_ms = 60001;
+    if (mode == 4)
+      options.estimator.sensor_to_body[0] = -1;
+    TelemetryAdmission refused(clock, s, inbox, nullptr, options);
+    refused.revokeMotion();
+    TEST_ASSERT_EQUAL_INT(mode == 0 ? MotionAdmission::Disabled : MotionAdmission::Refused,
+                          refused.motionAdmission());
+  }
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(motion_pose_controls_queue_failure_and_reverse_route);
+  RUN_TEST(motion_rollover_age_and_configuration_refusal);
   RUN_TEST(motion_route_current_and_declaration_lifetime);
   RUN_TEST(motion_direct_timing_and_stop);
   RUN_TEST(v4_copies_paired_evidence_and_preserves_raw_rows);

@@ -14,7 +14,7 @@ telemetry forwarding depend on each model's verified capabilities.
 Native tests cover camera/group state machines, button and LED behavior, session
 time, A7670E GNSS parsing/transport, bounded GPS/raw-IMU storage, configuration
 persistence, health supervision, the shared BLE central, the HERO12 adapter and
-correlated camera-event logging.
+correlated camera-event logging and opt-in static MotionV4 telemetry.
 The retained ESP32 builds link the real BLE host and HERO12 composition. These
 checks establish software behavior and build compatibility; they do not prove
 camera or sensor operation on the motorcycle.
@@ -26,8 +26,9 @@ only after the dedicated watchdog subscription succeeds. Camera control, GNSS,
 SD, IMU and external controls remain disabled by default until wiring, identities,
 firmware/API and required store evidence are qualified. The handlebar and local
 telemetry workflows are composed and tested synthetically; physical bench
-validation remains open. Estimated
-linear acceleration/lean/pitch and Insta360 control/wake/GPS forwarding still need
+validation remains open. Qualified static force/rate and externally referenced
+roll/pitch now have [runtime logging](docs/motion_logging.md#implemented-static-motion-logging-v4).
+Dynamic linear acceleration/lean and Insta360 control/wake/GPS forwarding still need
 their required protocol or reference evidence. Opt-in HERO12 recovery now has a
 bounded discovery/connect/query/conditional-REC software path, with physical
 sleep/wake behavior still untested. The retained camera/group logging route now

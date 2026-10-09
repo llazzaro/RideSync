@@ -191,6 +191,7 @@ int test_close(int);
 
             run = subprocess.run([str(exe), 'motion-csv'], capture_output=True, timeout=10)
             self.assertEqual(0, run.returncode, run.stderr.decode())
+            print(run.stderr.decode('ascii').strip())
             rows = parse(run.stdout.decode('ascii'))
             samples = [r for r in rows if r['kind']=='imu' and r['motion_measurements_valid']=='1']
             self.assertTrue(samples)

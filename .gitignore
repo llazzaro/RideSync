@@ -7,3 +7,4 @@ __pycache__/
 config.local.json
 *.bin
 *.elf
+compile_commands.json

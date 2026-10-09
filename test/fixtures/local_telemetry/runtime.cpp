@@ -440,6 +440,8 @@ int main(int argc, char **argv) {
     assert(csv.find("camera,") != std::string::npos);
   if (mode == "motion-csv") {
     assert(motion_source.declaration > 0);
+    std::fprintf(stderr, "native-sdk Esp32LocalTelemetry=%zu SupervisedEsp32Application=%zu\n",
+                 sizeof(Esp32LocalTelemetry), sizeof(SupervisedEsp32Application));
     std::fwrite(csv.data(), 1, csv.size(), stdout);
   }
 }
