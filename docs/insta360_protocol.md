@@ -80,13 +80,11 @@ and pinned MIT source/license provenance are in
 [`test/fixtures/insta360/README.md`](../test/fixtures/insta360/README.md).
 This pure primitive has no BLE delivery or automatic repeat and is not an
 idempotent Start/Stop API. No receive parser, ACK, sequence field or recording
-observation is invented from these opaque bytes. Explicit Start/Stop and state
-decoding remain unsupported pending licensed source facts or annotated evidence.
-Issue #19 remains open: the shutter primitive itself and SDK submission do not
-establish authoritative state. The later card-ready trial established a
-camera-observed recording start, without decoding the incoming state packets. Unknown incoming data
-stays unclassified; private bounded captures must not be promoted into state
-from a colon or a missing timer.
+observation is invented from these opaque bytes. CE80 shutter delivery still has no idempotent Start/Stop API. The implemented
+CE80 display parser below now interprets known captured recording/settings
+fields; its state cannot come from shutter submission alone. The later card-ready trial established a
+camera-observed recording start, without decoding the incoming state packets. Other incoming data stays Unknown; retained captures support the typed parser
+below, not a colon-only or missing-timer inference.
 
 The [October 9 name-aligned trial](hardware-results/2026-10-09-x5-pairing.md)
 established a real CE80 connection, CE82 subscription and CE81 writes; the owner
@@ -108,7 +106,7 @@ submission. The later [three-cycle session](hardware-results/2026-10-09-x5-pairi
 completed three camera-observed remote Start/Stop cycles, with the last Stop
 submitted after reconnect. An expired-window request was refused locally; no
 automatic shutter replay occurred. Incoming display framing is now classified by the published-capture comparison below;
-production state decoding remains unimplemented. Keep NVS refusal guards;
+production adapter/state integration remains unimplemented. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Licensed BE80 control reference (#19, #5)
@@ -259,8 +257,8 @@ This explains the formerly opaque length groups: eleven-byte writes are mainly
 type `0x02`; fifteen-byte writes are display runtime; nineteen-byte writes include
 both elapsed timers and photo settings. A length/colon search discards these
 field distinctions. We now have externally documented framing and independently
-matched X5 display evidence, sufficient to work on a strict typed display decoder
-from retained data without another generic capture run. Its model qualification,
+matched X5 display evidence, sufficient for the implemented strict typed display decoder below, without
+another generic capture run. Its model qualification,
 connection freshness, command correlation and mode-safe control still require
 explicit implementation; silence/disconnect remains Unknown. A display parser
 is distinct from a dedicated recording-state query.
@@ -428,3 +426,31 @@ The compile-only `insta360_wake_compile` environment retains the actual worker
 and GAP paths while application activation remains disabled. A real Insta360
 control/state adapter and model/radio qualification remain necessary for the
 end-to-end #9 recording path (#3/#5/#21/#22).
+
+## Implemented CE80 display interpretation (#19)
+
+`decodeCe80Display()` extends the existing pure shutter codec. Default profile
+is Disabled. The explicit `X5CapturedDisplayV1` profile and independently known
+CameraToRemote route are required. The caller supplies one complete stable
+readable frame; the decoder checks size6..256 (local cap), pointer, magic and
+exact `6 + payload length` before body access. Unknown message types expose no
+raw text or state. Display type0x10 requires observed flag80/81, control byte6=1,
+and the supported text-layout fields at bytes8/9; byte7 remains opaque layout.
+
+Typed elapsed `.HH:MM:SS` (minutes/seconds0..59) yields Recording and owned
+elapsed seconds, with mode Unknown. Exact captured video `5.7K|30` and photo
+`72MP|MEGA` settings yield Stopped with distinct mode. They are supported display
+observations under this explicit profile, not a dedicated state query. Other
+settings, layouts and malformed text return UnsupportedDisplay/Unknown.
+Remaining-runtime and padded numeric-count displays yield Remaining while
+recording and mode stay Unknown. Every error has Unknown kind/mode/state and
+seconds0; no input pointers, arbitrary bodies or identifiers escape.
+
+This stateless parser cannot establish freshness, peer identity, replay safety,
+command correlation or delivery. #3 must attach actual generation/time and
+mode-safe command admission. Silence, disconnect and runtime/count displays
+never become Stop. No adapter or camera capability is enabled by this change.
+BE80 receive semantics remain opaque; no guessed ACK or capture-status fields
+are adopted. The [owned display fixtures](../test/fixtures/insta360/README.md#ce80-display-fixtures-october-10-2026)
+and [published-capture comparison](#published-ce80-capture-compared-with-retained-x5-data-19)
+provide the independent evidence for the known supported fields.
