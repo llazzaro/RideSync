@@ -482,8 +482,7 @@ void setup() {
       "W+6ASCII+LF=idle wake-only3s H=private sensitive hex; recording UNKNOWN\n";
   emit(banner, sizeof(banner) - 1);
 }
-void loop() {
-  const uint32_t now = uint32_t(nowMs());
+void handleCommand(uint32_t now) {
   if (Serial.available()) {
     int command = Serial.read();
     WakeInput input;
@@ -526,9 +525,16 @@ void loop() {
       private_hex = true; // Explicit opt-in. Never print SM keys/passkeys.
     }
   }
+}
+
+struct LoopState {
   bool active, used, synced;
   uint16_t conn;
   StopReason reason;
+};
+
+LoopState updateCapture(uint32_t now) {
+  LoopState state;
   {
     Lock lock;
     capture.tick(now);
@@ -536,16 +542,23 @@ void loop() {
       sdk_control.requestStop();
       shutter.cancel();
     }
-    active = capture.active();
-    used = capture.used();
-    synced = host_synced;
-    conn = connection;
-    reason = capture.reason();
+    state.active = capture.active();
+    state.used = capture.used();
+    state.synced = host_synced;
+    state.conn = connection;
+    state.reason = capture.reason();
   }
-  if (used && !active && !stop_reported) {
-    record(Kind::Stop, conn, 0, int(reason));
+  return state;
+}
+
+void reportStop(const LoopState &state) {
+  if (state.used && !state.active && !stop_reported) {
+    record(Kind::Stop, state.conn, 0, int(state.reason));
     stop_reported = true;
   }
+}
+
+void reportQueuedEvent() {
   // The loop only latches cleanup. SDK owner may be stalled indefinitely while
   // control continues serial, policy deadlines and bounded reporting below.
   Event event;
@@ -564,6 +577,9 @@ void loop() {
       capture.pop();
     }
   }
+}
+
+void reportSummary(uint32_t now, const LoopState &state, char *line) {
   if (uint32_t(now - last_summary) >= 1000) {
     last_summary = now;
     Stats stats;
@@ -585,8 +601,8 @@ void loop() {
         "sdk_stop=%u sdk_inflight=%u sdk_op=%u sdk_ops_admitted/returned=%lu/%lu "
         "sdk_last_op/rc=%u/%d shutter_pending=%u wake_only=%u "
         "nvs_refused_init/open/erase=%lu/%lu/%lu recording=UNKNOWN kind_counts=",
-        static_cast<unsigned long>(now), used, active, synced,
-        synced ? unsigned(ble_gap_adv_active()) : 0, conn, unsigned(reason), private_hex,
+        static_cast<unsigned long>(now), state.used, state.active, state.synced,
+        state.synced ? unsigned(ble_gap_adv_active()) : 0, state.conn, unsigned(state.reason), private_hex,
         static_cast<unsigned long>(stats.seen), static_cast<unsigned long>(stats.reported), depth,
         static_cast<unsigned long>(stats.dropped), static_cast<unsigned long>(stats.truncated),
         sdk.stop_requested, sdk.in_flight, unsigned(sdk.action),
@@ -611,5 +627,15 @@ void loop() {
       }
     }
   }
+}
+
+void loop() {
+  const uint32_t now = uint32_t(nowMs());
+  handleCommand(now);
+  const LoopState state = updateCapture(now);
+  reportStop(state);
+  char line[768];
+  reportQueuedEvent();
+  reportSummary(now, state, line);
   delay(1);
 }

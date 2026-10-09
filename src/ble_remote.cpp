@@ -414,93 +414,101 @@ void BleCentral::finishDiscovery(uint8_t i) {
   p.endpoint = 0;
   p.phase = BlePhase::Descriptors;
 }
-void BleCentral::event(const BleEvent &e) {
-  if (e.peer == kBlePeers) {
-    if (scanning_ && e.generation == scan_.generation && !scan_.sealed.load()) {
-      BleResult r;
-      r.kind = e.kind == BleEventKind::Advertisement ? BleResultKind::Advertisement
-                                                     : BleResultKind::ScanComplete;
-      r.event = e;
-      if (e.kind == BleEventKind::ScanComplete)
-        scan_reported_ = true;
-      sink_.result(r);
-    }
-    return;
+bool BleCentral::eventScan(const BleEvent &e) {
+  if (e.peer != kBlePeers)
+    return false;
+  if (scanning_ && e.generation == scan_.generation && !scan_.sealed.load()) {
+    BleResult r;
+    r.kind = e.kind == BleEventKind::Advertisement ? BleResultKind::Advertisement
+                                                   : BleResultKind::ScanComplete;
+    r.event = e;
+    if (e.kind == BleEventKind::ScanComplete)
+      scan_reported_ = true;
+    sink_.result(r);
   }
-  if (e.peer >= kBlePeers)
-    return;
+  return true;
+}
+
+bool BleCentral::eventPeerLink(const BleEvent &e) {
   auto &p = peers_[e.peer];
-  if (e.generation != p.link.generation || p.link.sealed.load() ||
-      p.procedure.fault.load() != BleFault::None || p.phase == BlePhase::Closed)
-    return;
   if (e.kind == BleEventKind::Connected) {
     if (p.phase != BlePhase::Connect)
-      return;
+      return true;
     if (e.status || e.connection == kBleNoHandle) {
       retire(e.peer, BleFault::Host, e.status);
-      return;
+      return true;
     }
     initiating_ = kBlePeers;
     p.phase = BlePhase::Security;
     p.active = false;
-    return;
+    return true;
   }
   if (e.kind == BleEventKind::Security) {
     if (p.link.connection.load() == kBleNoHandle)
-      return;
+      return true;
     if (e.status || !e.encrypted || !e.bonded ||
         (p.spec.require_authenticated && !e.authenticated) ||
         !sameIdentity(e.identity, p.identity)) {
       retire(e.peer, BleFault::Identity, e.status);
-      return;
+      return true;
     }
     if (p.phase == BlePhase::Security) {
       p.active = false;
       p.phase = BlePhase::Services;
     }
-    return;
+    return true;
   }
-  if (e.kind == BleEventKind::Notification) {
-    if (p.phase != BlePhase::ReadyForProfile && p.phase != BlePhase::Read &&
-        p.phase != BlePhase::Write)
-      return;
-    for (uint8_t n = 0; n < p.spec.endpoint_count; ++n)
-      if (p.spec.endpoints[n].subscribe && p.endpoints[n].value == e.handle) {
-        BleResult r;
-        r.kind = BleResultKind::Notification;
-        r.event = e;
-        r.endpoint = n;
-        sink_.result(r);
-        return;
-      }
+  return false;
+}
+
+bool BleCentral::eventNotification(const BleEvent &e) {
+  auto &p = peers_[e.peer];
+  if (e.kind != BleEventKind::Notification)
+    return false;
+  if (p.phase != BlePhase::ReadyForProfile && p.phase != BlePhase::Read &&
+      p.phase != BlePhase::Write)
+    return true;
+  for (uint8_t n = 0; n < p.spec.endpoint_count; ++n)
+    if (p.spec.endpoints[n].subscribe && p.endpoints[n].value == e.handle) {
+      BleResult r;
+      r.kind = BleResultKind::Notification;
+      r.event = e;
+      r.endpoint = n;
+      sink_.result(r);
+      return true;
+    }
+  retire(e.peer, BleFault::Malformed);
+  return true;
+}
+
+bool BleCentral::eventComplete(const BleEvent &e) {
+  auto &p = peers_[e.peer];
+  if (e.kind != BleEventKind::Complete)
+    return false;
+  if ((p.phase == BlePhase::Subscribe || p.phase == BlePhase::VerifySubscription ||
+       p.phase == BlePhase::Read || p.phase == BlePhase::Write) &&
+      e.status == 0 && e.handle != p.procedure.expected_handle) {
     retire(e.peer, BleFault::Malformed);
-    return;
+    return true;
   }
-  if (!p.active || e.procedure != p.procedure.procedure || e.phase != p.phase)
-    return;
-  if (e.kind == BleEventKind::Complete) {
-    if ((p.phase == BlePhase::Subscribe || p.phase == BlePhase::VerifySubscription ||
-         p.phase == BlePhase::Read || p.phase == BlePhase::Write) &&
-        e.status == 0 && e.handle != p.procedure.expected_handle) {
-      retire(e.peer, BleFault::Malformed);
-      return;
-    }
-    if (e.status) {
-      retire(e.peer, BleFault::Att, e.status);
-      return;
-    }
-    if (p.phase == BlePhase::VerifySubscription &&
-        (e.size != 2 || e.bytes[0] != p.spec.endpoints[p.endpoint].subscribe || e.bytes[1] != 0)) {
-      retire(e.peer, BleFault::MissingCccd);
-      return;
-    }
-    if (p.phase == BlePhase::Read || p.phase == BlePhase::Write)
-      emit(e.peer,
-           p.phase == BlePhase::Read ? BleResultKind::ReadComplete : BleResultKind::WriteComplete,
-           e);
-    p.complete = true;
-    return;
+  if (e.status) {
+    retire(e.peer, BleFault::Att, e.status);
+    return true;
   }
+  if (p.phase == BlePhase::VerifySubscription &&
+      (e.size != 2 || e.bytes[0] != p.spec.endpoints[p.endpoint].subscribe || e.bytes[1] != 0)) {
+    retire(e.peer, BleFault::MissingCccd);
+    return true;
+  }
+  if (p.phase == BlePhase::Read || p.phase == BlePhase::Write)
+    emit(e.peer, p.phase == BlePhase::Read ? BleResultKind::ReadComplete : BleResultKind::WriteComplete,
+         e);
+  p.complete = true;
+  return true;
+}
+
+void BleCentral::eventDiscovery(const BleEvent &e) {
+  auto &p = peers_[e.peer];
   if (p.phase == BlePhase::Services && e.kind == BleEventKind::Service) {
     if (!(e.uuid == p.spec.services[p.service]) || !e.start || e.end < e.start ||
         p.service_start[p.service]) {
@@ -514,7 +522,9 @@ void BleCentral::event(const BleEvent &e) {
       }
     p.service_start[p.service] = e.start;
     p.service_end[p.service] = e.end;
-  } else if (p.phase == BlePhase::Characteristics && e.kind == BleEventKind::Characteristic) {
+    return;
+  }
+  if (p.phase == BlePhase::Characteristics && e.kind == BleEventKind::Characteristic) {
     if (p.char_count == kBleDiscoveredChars || !validUuid(e.uuid) ||
         e.start < p.service_start[p.service] || e.start >= e.handle ||
         e.handle > p.service_end[p.service]) {
@@ -532,7 +542,9 @@ void BleCentral::event(const BleEvent &e) {
     chr.declaration = e.start;
     chr.value = e.handle;
     chr.properties = e.properties;
-  } else if (p.phase == BlePhase::Descriptors && e.kind == BleEventKind::Descriptor) {
+    return;
+  }
+  if (p.phase == BlePhase::Descriptors && e.kind == BleEventKind::Descriptor) {
     auto &endpoint = p.endpoints[p.endpoint];
     if (e.handle <= endpoint.value || e.handle > endpoint.end) {
       retire(e.peer, BleFault::Malformed);
@@ -545,9 +557,27 @@ void BleCentral::event(const BleEvent &e) {
       }
       endpoint.cccd = e.handle;
     }
-  } else {
-    retire(e.peer, BleFault::Malformed);
+    return;
   }
+  retire(e.peer, BleFault::Malformed);
+}
+
+void BleCentral::event(const BleEvent &e) {
+  if (eventScan(e))
+    return;
+  if (e.peer >= kBlePeers)
+    return;
+  auto &p = peers_[e.peer];
+  if (e.generation != p.link.generation || p.link.sealed.load() ||
+      p.procedure.fault.load() != BleFault::None || p.phase == BlePhase::Closed)
+    return;
+  if (eventPeerLink(e) || eventNotification(e))
+    return;
+  if (!p.active || e.procedure != p.procedure.procedure || e.phase != p.phase)
+    return;
+  if (eventComplete(e))
+    return;
+  eventDiscovery(e);
 }
 void BleCentral::advance(uint8_t i, uint32_t now) {
   auto &p = peers_[i];

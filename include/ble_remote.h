@@ -256,6 +256,11 @@ private:
   void resetContext(BleContext &, uint8_t, uint32_t, BlePhase, uint32_t, uint16_t, uint16_t);
   void retire(uint8_t, BleFault, int = 0);
   void event(const BleEvent &);
+  bool eventScan(const BleEvent &);
+  bool eventPeerLink(const BleEvent &);
+  bool eventNotification(const BleEvent &);
+  bool eventComplete(const BleEvent &);
+  void eventDiscovery(const BleEvent &);
   bool launch(uint8_t, BleCommand, uint32_t);
   void advance(uint8_t, uint32_t);
   void finishDiscovery(uint8_t);

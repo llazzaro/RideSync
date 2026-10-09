@@ -82,6 +82,9 @@ private:
   bool resetAdmitted() const;
   void revokeReset(bool timeout = false);
   void serviceReset();
+  bool serviceResetProof();
+  bool serviceResetHost(uint32_t now);
+  void serviceResetPhase(uint32_t now);
   void finishReset();
   void publish(Worker, uint32_t, DeviceHealth, bool finished = false, bool refused = false);
 };
