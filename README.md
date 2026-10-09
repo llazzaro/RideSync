@@ -43,9 +43,10 @@ A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
 but acquired no position fix. Isolated RideSync diagnostics subsequently observed
 [X5 CE80 pairing/subscription](docs/hardware-results/2026-10-09-x5-pairing.md)
 and [one owner-confirmed wake](docs/hardware-results/2026-10-09-x5-wake.md#owner-requested-repeat-observed-wake).
-The separate one-shot shutter trial did not establish recording: the owner
-reported no SD card in the camera. Camera firmware remains unrecorded, and the
-production runtime has not been qualified on hardware. See
+After installing a camera card, the owner reported firmware **1.11.10** and
+confirmed a remote recording start, a playable clip after manual stop, and a
+subsequent BLE reconnect. Remote stop and three complete REC/STOP cycles remain
+outstanding; the production runtime has not been qualified on hardware. See
 [bring-up results](docs/hardware-results/2026-10-07-bringup.md).
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
 passing synthetic tests does not promote a camera to Confirmed.
@@ -53,7 +54,7 @@ passing synthetic tests does not promote a camera to Confirmed.
 | Feature | X5 | GO 3S | ONE RS | HERO12 Black |
 |---|---|---|---|---|
 | BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested |
-| Start recording | Not tested | Not tested | Not tested | Not tested |
+| Start recording | Observed once (isolated probe, 1.11.10) | Not tested | Not tested | Not tested |
 | Stop recording | Not tested | Not tested | Not tested | Not tested |
 | Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested |
 | GPS telemetry | Not tested | Not tested | Not tested | Outside scope |

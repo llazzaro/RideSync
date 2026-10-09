@@ -8,7 +8,9 @@
   ordered worker teardown are composed in software. Native/retained builds are not hardware proof.
 - A factory-firmware probe confirmed modem identity and GNSS enable/READY, but no
   position fix. Isolated RideSync diagnostics observed X5 CE80 pairing/subscription
-  and one owner-confirmed wake; camera firmware remains unrecorded. The production
+  and one owner-confirmed wake. A card-ready retry on owner-reported firmware
+  1.11.10 established a remote recording start and playable clip after manual
+  stop; a subsequent connection established reconnect. The production
   runtime and per-camera compatibility remain unqualified. See the
   [pairing/shutter result](hardware-results/2026-10-09-x5-pairing.md) and
   [wake result](hardware-results/2026-10-09-x5-wake.md).
@@ -28,8 +30,8 @@
   wake is explicit; BLE reconnect does not prove power-on. External GPS/IMU
   injection into GoPro is not assumed.
 - Insta360 X5/ONE RS protocols and wake remain gated by model-specific captures
-  and qualification. The X5 one-shot shutter submission did not establish
-  recording; the owner reported no camera SD card. Incoming state packets remain
+  and qualification. X5 remote stop and three complete remote REC/STOP cycles
+  remain outstanding despite the observed recording start. Incoming state packets remain
   unclassified, and the isolated wake result is not production orchestration.
   GO 3S/Action Pod link ownership, third-party pairing,
   services, recording commands and authoritative state are unresolved. Official
