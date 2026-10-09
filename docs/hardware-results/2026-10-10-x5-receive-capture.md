@@ -55,9 +55,66 @@ cleanup evidence, not that submission return.
 Manual Stop and a switch to photo mode were requested after the running-timer
 reply. The owner subsequently confirmed stopped, still in video mode, after the
 capture had closed. Actual Stop timing remains unresolved and no mode change
-was confirmed. The owner also confirmed that the new clip plays on the X5. The first #46 capture row remains
-incomplete: a bounded capture covering confirmed Stop, mode change and playback
-is still required. Neither silence nor the deadline disconnect means stopped.
+was confirmed. The owner also confirmed that the new clip plays on the X5. At the end of this
+first attempt, a bounded capture covering confirmed Stop and mode change was
+still required; the follow-up below supplies that sequence with coarse timing. Neither silence nor the deadline disconnect means stopped.
 Keep #19/#3 open and software recording state Unknown. Reuse the previously
 completed three remote Start/Stop cycles and isolated wake proof; this run does
 not repeat or replace those checks.
+
+## Follow-up: completed manual sequence and photo-mode observation
+
+The owner reset the USB board and again confirmed stopped video. A first setup
+attempt connected/subscribed, but a reset during serial setup had cleared the
+private H option. It was stopped with X before any manual camera sequence was
+requested. Its length-only writes are not complete payload fixtures and are
+excluded from the analysis below. No shutter was sent. The next serial session
+observed a fresh idle boot and confirmed `hex=1` before submitting one A. This
+was a fresh-boot diagnostic attempt, not a retry of a recording command.
+
+On that second attempt, connection occurred at boot 48.602 s and CE82
+subscription at 49.919 s, with MTU 251. The owner was asked, in one instruction,
+to start manually, observe approximately ten seconds of running timer, stop,
+then switch to photo mode. The owner replied “done. camera in photo mode” while
+still connected, at approximately boot 110 s. After capture ended, the owner
+also confirmed playback of the new video. These are camera-side observations;
+there were no SDK shutter requests/results. The sequence request was recorded
+at 22:09:19.457996 UTC and the completion reply at 22:10:32.702030 UTC. Individual
+Start, Stop and mode-switch times remain intervals, not exact timestamps.
+
+| Incoming write length | Count | Boot-time range (seconds) |
+|---|---:|---|
+| 6 | 3 | 51.801–98.511 |
+| 7 | 3 | 50.796–51.216 |
+| 9 | 1 | 50.046 |
+| 11 | 92 | 50.226–132.307 |
+| 14 | 7 | 103.146–126.367 |
+| 15 | 11 | 54.111–101.616 |
+| 17 | 3 | 50.436–97.371 |
+| 19 | 28 | 80.902–102.726 |
+
+All 148 CE81 writes were complete bounded copies with the `FE EF FE` prefix.
+The 15-byte payload was identical across its eleven occurrences; the 14-byte
+payload was identical across its seven occurrences, including samples after
+the owner confirmed photo mode. Twenty-seven of the 28 nineteen-byte writes
+contained a colon; the final one did not. An identical 11-byte payload occurred
+81 times across the sequence. These distinctions are retained observations,
+not a mapping from packet length or body content to authoritative state.
+In particular, a nineteen-byte write is not necessarily the timer-like format.
+No identity, token or raw private payload is published.
+
+After retaining additional photo-mode traffic, X was submitted. Actual
+unsubscribe occurred at boot 133.026 s and disconnect at 133.028 s. Final
+reports showed 169 events seen/reported, zero queued/dropped/truncated events,
+no peer, no pending shutter, no in-flight SDK operation, four admitted/returned
+SDK operations and NVS refusal counters 1/2/0. The complete event sequence
+1–169, CE81 handle, lengths/copy sizes, prefix, connection/disconnect and absence
+of shutter events were checked against the private transcript.
+
+This follow-up supplies the previously missing completed sequence, confirmed
+photo-mode interval and playable new clip. Exact per-action timing and an
+evidenced state/query interpretation are still missing. Keep the full #46 row
+unchecked rather than treating coarse operator intervals as precise camera-display
+timestamps. The next protocol work is to establish the meaning and freshness of
+specific fields; neither another generic shutter smoke test nor a timer heuristic
+closes #19. Production integration remains unqualified.
