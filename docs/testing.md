@@ -666,3 +666,10 @@ reliability and exact action timing are not claimed from coarse operator
 annotations. These limitations do not replace the implemented known-field codec
 with a placeholder and do not close production camera support. Passing CI on
 the final source commit is required before closing #19's software acceptance.
+
+Final source [CI run38000783464](https://github.com/llazzaro/RideSync/actions/runs/38000783464)
+passed on `7d4ae894a20f5058c2622623939d6c084219e569`, including the full repository
+checks, default/retained builds and bench audits. #19 is closed for codec software
+scope. Closure does not enable the unimplemented production Insta360 adapter
+or supersede #3/#22/#46 acceptance. Subsequent closure-note edits are prose only;
+the passing source/build evidence is reused under the acceptance policy.

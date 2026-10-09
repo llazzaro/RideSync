@@ -1,12 +1,13 @@
 # Insta360 BLE research
 
-Research baseline: 2026-10-07; bench observations updated 2026-10-09. Limited
+Research baseline: 2026-10-07; bench observations updated 2026-10-10. Limited
 X5-associated BE80 discovery, CE80 pairing/subscription and one owner-confirmed
 wake have been observed with isolated diagnostics. A card-ready retry on
 owner-reported X5 firmware 1.11.10 established one remote recording start, a
 playable clip after manual stop. A later probe session completed three
 camera-observed remote Start/Stop cycles and reconnect. The production X5
-adapter and authoritative state decoding remain unimplemented; camera-dependent
+adapter and connection-fresh state integration remain unimplemented. Known
+CE80 display fields are now decoded under the explicit profile below; camera-dependent
 follow-up checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
@@ -126,7 +127,8 @@ RideSync. Full framing, response-versus-observation identity and error semantics
 still need independent validation. The source's ONE R 360-mod testing report
 does not qualify ONE RS modules, X5 or GO 3S; no actual camera firmware is
 recorded in this audit. Keep reset/disconnect/errors Unknown and do not
-automatically replay an ambiguous command. #19/#5 remain open.
+automatically replay an ambiguous command. #5 remains open; #19 now supplies
+known-field codec interpretation below without qualifying this BE80 route.
 
 ### Implemented pure BE80 recording requests (#19, partial)
 
@@ -162,10 +164,9 @@ idempotence/ACK/state semantics have not been established. Submission never
 becomes an observation, and ambiguous delivery does not justify automatic replay.
 No receive decoder or camera profile is enabled by this extension; reset,
 disconnect and unknown responses retain existing Unknown semantics. Source ONE R
-reporting does not qualify X5, fitted ONE RS modules or GO 3S. #19 remains open
-for its usable target/recording-state and finite receive/malformed-frame corpus;
-#3/#22 retain real camera checks. This codec is concrete progress on known fields,
-not a substitute for those remaining requirements.
+reporting does not qualify X5, fitted ONE RS modules or GO 3S. #19 software acceptance is completed by the CE80 display decoder below and
+its independent receive/malformed corpus. #3/#22 retain actual adapter/camera
+checks; this BE80 request-only extension does not qualify that transport route.
 
 ### Additional CE80 reference audit (#19)
 
@@ -181,7 +182,8 @@ The source also checks a six-byte ASCII identifier behind a CE81 handshake
 prefix. That is a candidate peer-association fact for the annotated #46 capture,
 not a qualified X5 identity parser, a BLE MAC or a recording observation. This
 audit supplies no new authoritative state mapping or installed-firmware proof.
-No upstream implementation or asset was copied; #19 remains open.
+No upstream implementation or asset was copied. The later typed CE80 decoder
+below uses independently owned X5 captures rather than this detector.
 
 ### Implemented BE80 receive envelope (#19, partial)
 
@@ -220,8 +222,8 @@ altered signatures, all command-byte values with zero/nonzero status-like bytes,
 and all accepted sizes with every proper prefix rejected. The existing five
 request/shutter tests remain unchanged. The twelve codec tests passed natively
 and under AddressSanitizer/UndefinedBehaviorSanitizer. No camera was operated for
-this change. #19 stays open for the usable target/receive-state path; #46 owns
-the annotated capture and final camera checks.
+this change. The later CE80 decoder below completes known-field codec scope;
+#3 retains the actual adapter and #46 the final camera checks.
 
 Software verification: the full repository pipeline passed (55 Python tests,
 408 native cases, existing bench harnesses and C++ formatting), and the pinned
@@ -454,3 +456,9 @@ BE80 receive semantics remain opaque; no guessed ACK or capture-status fields
 are adopted. The [owned display fixtures](../test/fixtures/insta360/README.md#ce80-display-fixtures-october-10-2026)
 and [published-capture comparison](#published-ce80-capture-compared-with-retained-x5-data-19)
 provide the independent evidence for the known supported fields.
+
+Final codec verification: source commit `7d4ae894a20f5058c2622623939d6c084219e569`
+passed [CI](https://github.com/llazzaro/RideSync/actions/runs/38000783464), full local
+checks,21 focused/sanitized tests and a fresh review with no findings. The actual
+decoder replay matched all305 retained private writes. #19 is closed for its
+known-field software scope; #3/#22/#46 remain open for real integration/support.
