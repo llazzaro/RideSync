@@ -108,7 +108,14 @@ int guardedRead(int type, const ble_store_key *key, ble_store_value *value) {
     host.onStoreStatus(nullptr, nullptr);
     return BLE_HS_ESTORE_FAIL;
   }
-  return ble_store_config_read(type, key, value);
+  if (!host.wakeStoreAllowed(type, key, nullptr))
+    return BLE_HS_ESTORE_FAIL;
+  const int rc = ble_store_config_read(type, key, value);
+  if (!rc && !host.wakeStoreAllowed(type, nullptr, value)) {
+    std::memset(value, 0, sizeof *value);
+    return BLE_HS_ESTORE_FAIL;
+  }
+  return rc;
 }
 int guardedWrite(int type, const ble_store_value *value) {
   auto &host = Esp32BleHost::instance();
@@ -116,6 +123,8 @@ int guardedWrite(int type, const ble_store_value *value) {
     host.onStoreStatus(nullptr, nullptr);
     return BLE_HS_ESTORE_FAIL;
   }
+  if (!host.wakeStoreAllowed(type, nullptr, value))
+    return BLE_HS_ESTORE_FAIL;
   const int rc = ble_store_config_write(type, value);
   if (rc && rc != BLE_HS_ESTORE_CAP)
     host.onStoreStatus(nullptr, nullptr);
@@ -126,6 +135,8 @@ int guardedDelete(int type, const ble_store_key *key) {
     Esp32BleHost::instance().onStoreStatus(nullptr, nullptr);
     return BLE_HS_ESTORE_FAIL;
   }
+  if (!Esp32BleHost::instance().wakeStoreAllowed(type, key, nullptr))
+    return BLE_HS_ESTORE_FAIL;
   return ble_store_config_delete(type, key);
 }
 bool stackMatches(unsigned schema, const void *blob) {
@@ -418,6 +429,11 @@ BleFault Esp32BleHost::fault() const {
 int Esp32BleHost::onStoreStatus(ble_store_status_event *event, void *) {
   // Refuse FULL/OVERFLOW without deleting another peer. Where the SDK supplies
   // a peer, seal only that peer; unknown store/NVS corruption seals the host.
+  if (event &&
+      ((event->event_code == BLE_STORE_EVENT_FULL && wakeOwnsConnection(event->full.conn_handle)) ||
+       (event->event_code == BLE_STORE_EVENT_OVERFLOW &&
+        !wakeStoreAllowed(event->overflow.obj_type, nullptr, event->overflow.value))))
+    return BLE_HS_ESTORE_CAP;
   error_.store(BLE_HS_ESTORE_CAP);
   if (routing_lock_.test_and_set(std::memory_order_acquire)) {
     fail(BleFault::Store, BLE_HS_ESTORE_CAP);

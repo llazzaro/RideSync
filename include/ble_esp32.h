@@ -64,12 +64,19 @@ public:
   void wakeCallbackExit();
   void wakeBarrierReleased(const WakeOperation &);
   void quarantineWake();
+  bool wakeIdentify(const WakeOperation &, uint16_t);
+  bool wakeStoreAllowed(int type, const void *key, const void *value);
+  bool wakeOwnsConnection(uint16_t) const;
 
 private:
   Esp32BleHost() = default;
   std::atomic<bool> wake_reserved_{false}, wake_sealed_{false}, wake_quarantined_{false};
   std::atomic_flag wake_lock_ = ATOMIC_FLAG_INIT;
   WakeRadioPolicy wake_policy_;
+  std::atomic<bool> wake_identity_pending_{false};
+  std::atomic<uint16_t> wake_connection_{kBleNoHandle};
+  ble_addr_t wake_identity_{}, wake_ota_{};
+  bool wake_identity_known_ = false;
 
   struct Slot {
     BleContext *context = nullptr;
