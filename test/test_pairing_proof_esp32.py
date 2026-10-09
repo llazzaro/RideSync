@@ -14,6 +14,7 @@ HARNESS = r'''
 static ridesync::NvsBootStatus boot_status;
 namespace ridesync { NvsBootStatus nvsBootStatus(){return boot_status;} }
 #include "src/ble_esp32.cpp"
+#include "src/ble_wake_esp32.cpp"
 #include "src/pairing_proof_esp32.cpp"
 using namespace ridesync;
 // Independent test encoding, not production codec output used to validate itself.
@@ -98,7 +99,7 @@ class PairingProofEsp32(unittest.TestCase):
                 p=temp/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('#include "standin.h"\n')
             (temp/'harness.cpp').write_text(HARNESS)
             binary=temp/'proof'
-            subprocess.run(['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(temp/'harness.cpp'),str(ROOT/'src/pairing_reset.cpp'),'-o',str(binary)],check=True)
+            subprocess.run(['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(temp/'harness.cpp'),str(ROOT/'src/pairing_reset.cpp'),str(ROOT/'src/wake_radio_policy.cpp'),str(ROOT/'src/wake_manager.cpp'),str(ROOT/'src/insta360_wake_encoder.cpp'),'-o',str(binary)],check=True)
             retained=temp/'retained.bin'
             for mode in range(37):
                 run=subprocess.run([str(binary),str(mode),str(retained)],capture_output=True,text=True,timeout=15)

@@ -1,6 +1,8 @@
 #include "ble_esp32.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include "nvs_boot_guard.h"
+#include <nimble/nimble/host/include/host/ble_store.h>
+#include <nimble/nimble/host/src/ble_hs_resolv_priv.h>
 namespace ridesync {
 namespace {
 class WakeGate {
@@ -41,6 +43,9 @@ WakeSubmit Esp32BleHost::reserveWake(const WakeOperation &op, uint32_t deadline,
     return WakeSubmit::Busy;
   if (wake_quarantined_.load() || !wake_policy_.reserve(op, deadline, now))
     return WakeSubmit::Failed;
+  wake_identity_known_ = false;
+  wake_identity_pending_.store(false);
+  wake_connection_.store(kBleNoHandle);
   wake_sealed_.store(false, std::memory_order_release);
   wake_reserved_.store(true, std::memory_order_release);
   return WakeSubmit::Accepted;
@@ -141,6 +146,101 @@ void Esp32BleHost::wakeBarrierReleased(const WakeOperation &op) {
     wake_policy_.barrierReleased(op);
   else
     quarantineWake();
+}
+bool Esp32BleHost::wakeOwnsConnection(uint16_t handle) const {
+  return wakeReserved() && handle != kBleNoHandle && wake_connection_.load() == handle;
+}
+bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle) {
+  wake_identity_pending_.store(true, std::memory_order_release);
+  WakeGate routing(routing_lock_);
+  if (!routing.held() || handle == kBleNoHandle) {
+    quarantineWake();
+    return false;
+  }
+  for (const auto &entry : slots_)
+    if (entry.context && entry.context->connection.load() == handle) {
+      quarantineWake();
+      return false; // Never terminate an established foreign handle.
+    }
+  if (!wakeIncoming(op, handle)) {
+    quarantineWake();
+    return false;
+  }
+  wake_connection_.store(handle, std::memory_order_release);
+  ble_gap_conn_desc description{};
+  if (ble_gap_conn_find(handle, &description)) {
+    quarantineWake();
+    return true; // Actual new handle is owned; identity stays ambiguous.
+  }
+  WakeGate policy(wake_lock_);
+  if (!policy.held()) {
+    quarantineWake();
+    return true;
+  }
+  wake_identity_ = description.peer_id_addr;
+  wake_ota_ = description.peer_ota_addr;
+  wake_identity_known_ = true;
+  wake_identity_pending_.store(false, std::memory_order_release);
+  return true;
+}
+bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const void *value_pointer) {
+  if (!wakeReserved())
+    return true;
+  if (wake_identity_pending_.load(std::memory_order_acquire))
+    return false;
+  WakeGate policy(wake_lock_);
+  if (!policy.held()) {
+    quarantineWake();
+    return false;
+  }
+  if (!wake_identity_known_)
+    return true;
+  const auto same = [](const ble_addr_t &a, const ble_addr_t &b) {
+    return a.type == b.type && std::memcmp(a.val, b.val, 6) == 0;
+  };
+  const auto allowed = [&](const ble_addr_t &address) {
+    bool nonzero = false;
+    for (auto byte : address.val)
+      nonzero |= byte != 0;
+    return nonzero && address.type <= BLE_ADDR_RANDOM && !same(address, wake_identity_) &&
+           !same(address, wake_ota_) &&
+           (address.type != BLE_ADDR_RANDOM || (address.val[5] & 0xc0) == 0xc0);
+    // Unknown private addresses can alias the incoming identity. Only known
+    // foreign stable identities can be classified without resolution I/O.
+  };
+  const auto *key = static_cast<const ble_store_key *>(key_pointer);
+  const auto *value = static_cast<const ble_store_value *>(value_pointer);
+  if (!key && !value)
+    return false;
+  switch (type) {
+  case BLE_STORE_OBJ_TYPE_OUR_SEC:
+  case BLE_STORE_OBJ_TYPE_PEER_SEC:
+    return allowed(value ? value->sec.peer_addr : key->sec.peer_addr);
+  case BLE_STORE_OBJ_TYPE_CCCD:
+    return allowed(value ? value->cccd.peer_addr : key->cccd.peer_addr);
+  case BLE_STORE_OBJ_TYPE_CSFC:
+    return allowed(value ? value->csfc.peer_addr : key->csfc.peer_addr);
+  case BLE_STORE_OBJ_TYPE_LOCAL_IRK:
+    return allowed(value ? value->local_irk.addr : key->local_irk.addr);
+  case BLE_STORE_OBJ_TYPE_PEER_ADDR:
+    return value ? allowed(value->rpa_rec.peer_rpa_addr) && allowed(value->rpa_rec.peer_addr)
+                 : allowed(key->rpa_rec.peer_rpa_addr);
+  case BLE_STORE_OBJ_TYPE_PEER_DEV_REC: {
+    if (!value_pointer)
+      return false; // Pinned public key union has no private record schema.
+    const auto &record = *static_cast<const ble_hs_dev_records *>(value_pointer);
+    if (!allowed(record.peer_sec.peer_addr))
+      return false;
+    for (const auto *alias : {record.identity_addr, record.rand_addr, record.pseudo_addr})
+      if (std::memcmp(alias, wake_identity_.val, 6) == 0 ||
+          std::memcmp(alias, wake_ota_.val, 6) == 0)
+        return false;
+    return true;
+  }
+  default:
+    quarantineWake();
+    return false;
+  }
 }
 } // namespace ridesync
 #endif

@@ -150,7 +150,7 @@ static int os_mbuf_copydata(os_mbuf*m,int offset,int length,void*p) {
  if(length)std::memcpy(p,m->data.data()+offset,length); return 0;
 }
 struct ble_gap_sec_state { bool encrypted=false,authenticated=false,bonded=false; };
-struct ble_gap_conn_desc { ble_gap_sec_state sec_state; ble_addr_t peer_id_addr; uint16_t conn_handle=0; };
+struct ble_gap_conn_desc { ble_gap_sec_state sec_state; ble_addr_t peer_id_addr,peer_ota_addr; uint16_t conn_handle=0; };
 struct ble_gap_event {
  int type;
  struct { ble_addr_t addr; uint8_t event_type=0xff,length_data=0; const uint8_t *data=nullptr; } disc;
