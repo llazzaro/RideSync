@@ -1,7 +1,9 @@
 # Contributing
 
-Work in small milestone-focused branches and submit GitHub pull requests.
-Use the setup/build/check commands in README before proposing a change.
+Work in small milestone-focused changes directly on `main`, and commit and push
+verified work to `origin/main`. Create branches, worktrees or pull requests only
+when explicitly requested. See [agent workflow](AGENTS.md).
+Use the setup/build/check commands in README before committing a change.
 
 Hardware changes need exact board and modem revisions. Protocol changes need
 primary source links, applicable licenses, packet fixtures and evidence labels.
