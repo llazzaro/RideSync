@@ -565,3 +565,9 @@ default ESP32 build passed, formatting and diff-whitespace checks passed.
 The initial focused RED run failed on the missing BE80 codec header, then the
 implemented codec passed the independent fixtures and finite invalid-input
 cases. Existing hardware and receive-state gaps are unchanged.
+
+[Final BE80 codec CI](https://github.com/llazzaro/RideSync/actions/runs/37933250577)
+passed on `fe34e49c95080d659bb3550c139799f05ab3fd89`, including the native
+suite, formatting, pinned firmware/bench builds and retained GPS audit. A fresh
+independent review found no issues in this bounded request-only implementation.
+Issue #19 remains open for its receive/state and usable recording-path scope.
