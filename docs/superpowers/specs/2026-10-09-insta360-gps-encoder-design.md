@@ -1,6 +1,6 @@
 # Source-backed pure Insta360 GPS encoder (#29)
 
-Date: 2026-10-09. Status: approach approved; written spec awaiting user review.
+Date: 2026-10-09. Status: written spec approved for implementation planning.
 The user approved the proposed pure 71-byte encoder approach. This document
 makes its implementation contract reviewable. Work stays directly on main.
 
@@ -198,7 +198,7 @@ software gates pass; #14 and physical acceptance remain separate and open.
 
 ## Handoff
 
-The approach is approved; this newly written contract still needs the user's
-review before implementation planning. After approval, write a concrete plan and
-select execution using the required skill workflow. Preserve direct-main work and
-reuse unchanged evidence. No product implementation was performed for this spec.
+The user approved this written contract on 2026-10-09. The concrete
+[implementation plan](../plans/2026-10-09-insta360-gps-encoder.md) awaits review
+before implementation. Preserve the selected native/inline execution, direct-main
+work and unchanged evidence. No product implementation was performed for this spec.
