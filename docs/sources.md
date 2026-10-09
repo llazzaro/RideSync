@@ -311,6 +311,14 @@ independently authored contract tests retain their existing licenses.
 No Garmin BLE/controller/state implementation or unrelated assets were copied.
 Source-derived fixtures are not camera captures.
 
+The receive-envelope extension in the same header/source derives only the
+little-endian total-length and `responseSig` checks from that pinned source's
+`onCharacteristicChanged`. `test/fixtures/insta360/be80_envelope.h` retains
+MPL-2.0 attribution and holds a synthetic source-specified envelope with opaque
+body bytes, not a camera capture. The 256-byte cap, direction admission, owned
+copy and error policy are RideSync rules. No upstream state/timer parser is
+copied; complete-frame validity is not a recording observation.
+
 ### Pure Insta360 wake codec (#9)
 
 `include/insta360_wake_encoder.h`, `src/insta360_wake_encoder.cpp` and the

@@ -184,6 +184,56 @@ not a qualified X5 identity parser, a BLE MAC or a recording observation. This
 audit supplies no new authoritative state mapping or installed-firmware proof.
 No upstream implementation or asset was copied; #19 remains open.
 
+### Implemented BE80 receive envelope (#19, partial)
+
+`decodeBe80Envelope(config, direction, data, size)` in the existing
+`protocol/insta360_be80_codec.h` now validates one complete, explicitly opted-in
+`GarminBe80ControlV1` envelope. The pinned Garmin `onCharacteristicChanged`
+source documents little-endian total length in bytes0..1, signature
+`00 00 04 00 00` in bytes2..6, and examines this family only at size18 or larger.
+These facts qualify the envelope shape, not a camera ACK or state schema.
+No upstream receive implementation is copied.
+
+The local storage limit is 256 bytes; it is not an observed MTU, camera limit or
+fragmentation rule. The decoder requires size18..256 and exact declared total
+length. Short keepalives, other signatures, partial frames and concatenated
+frames are rejected without exposing a prefix. It does not assemble fragments;
+the future transport must separately qualify complete-frame boundaries and
+fragment retirement. There is no retained decoder state, allocation, I/O or retry.
+
+Validation precedence is Disabled, UnsupportedProfile, WrongDirection,
+InvalidSize, InvalidBuffer, LengthMismatch, UnsupportedHeader. Only
+`Be80Direction::CameraToRemote` is admitted; unknown enum values fail.
+The direction argument must come from the caller's actual GATT route: it cannot
+authenticate origin or distinguish a wrongly routed request with identical
+header bytes. Size is checked before buffer access; non-null input must reference
+at least size readable bytes. Every failure returns size0, zeroed fixed storage
+and recording Unknown. Success returns an owned copy with a zeroed unused tail.
+All remaining bytes, including command and sequence positions, stay opaque;
+every result still has recording Unknown. Success proves only envelope validity,
+never camera delivery, freshness, ACK, video mode or observed recording state.
+
+The independently specified `test/fixtures/insta360/be80_envelope.h` is a
+**synthetic source-specified envelope**, not captured camera data. Its opaque
+bytes deliberately have no assigned semantics. Seven added behavior tests cover
+admission/error precedence, owned copies, full-capacity/little-endian length,
+altered signatures, all command-byte values with zero/nonzero status-like bytes,
+and all accepted sizes with every proper prefix rejected. The existing five
+request/shutter tests remain unchanged. The twelve codec tests passed natively
+and under AddressSanitizer/UndefinedBehaviorSanitizer. No camera was operated for
+this change. #19 stays open for the usable target/receive-state path; #46 owns
+the annotated capture and final camera checks.
+
+Software verification: the full repository pipeline passed (55 Python tests,
+408 native cases, existing bench harnesses and C++ formatting), and the pinned
+default ESP32 build passed. Fresh read-only review found no defects; its
+independent warning-clean sanitizer build also passed the twelve codec tests.
+Review declined to qualify physical/model behavior, reassembly/MTU, opaque
+message semantics, ACK/freshness/authentication, recovery/I/O, and invalid or
+concurrently mutated caller buffers; those remain outside this pure complete-frame
+contract, not silently enabled capabilities. Repository and firmware acceptance
+were verified separately from that focused review.
+
 ## Wake and identification
 
 The [GPS specification](https://github.com/TheAngryRaven/insta360-ble-gps-spec)
