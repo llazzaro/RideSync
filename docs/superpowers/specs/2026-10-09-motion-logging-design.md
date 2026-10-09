@@ -1,9 +1,10 @@
 # Qualified static motion logging in the existing runtime
 
-Date: 2026-10-09. Status: proposed architectural specification for user review.
-The user approved writing this specification from the design outline. This is
-not approval to implement it or an implementation plan. Work stays on `main`;
-this document creates no hardware qualification or ticket-completion claim.
+Date: 2026-10-09. Status: approved by the user for implementation planning.
+The user approved this specification in chat on October 9. The implementation
+plan still requires review and an execution-method selection before product
+implementation. Work stays on `main`; this document creates no hardware
+qualification or ticket-completion claim.
 
 ## Intent and scope
 
