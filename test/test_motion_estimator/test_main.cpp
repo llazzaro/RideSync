@@ -1,5 +1,6 @@
 #include "motion_estimator.h"
 #include <cmath>
+#include <limits>
 #include <unity.h>
 using namespace ridesync;
 MotionEstimatorConfig qualifiedConfig() {
@@ -209,10 +210,59 @@ void saturation_invalid_metadata_and_singular_attitude_fail_closed() {
   e = sample();
   TEST_ASSERT_FALSE(reflected.update(e, reference(e, 1)).measurements_valid);
 }
+void reusable_configuration_qualification_rejects_unknown_and_improper_mounts() {
+  auto c = qualifiedConfig();
+  TEST_ASSERT_TRUE(MotionEstimator::configValid(c));
+  for (unsigned mode = 0; mode < 11; ++mode) {
+    c = qualifiedConfig();
+    switch (mode) {
+    case 0:
+      c.sensor_to_body[0] = -1;
+      break;
+    case 1:
+      c.sensor_to_body[0] = 2;
+      break;
+    case 2:
+      c.sensor_to_body[1] = 0.2f;
+      break;
+    case 3:
+      c.sensor_to_body[0] = std::numeric_limits<float>::quiet_NaN();
+      break;
+    case 4:
+      c.sensor_to_body[0] = std::numeric_limits<float>::infinity();
+      break;
+    case 5:
+      c.mount_id = 0;
+      break;
+    case 6:
+      c.calibration_id = 0;
+      break;
+    case 7:
+      c.mount_qualified = false;
+      break;
+    case 8:
+      c.residual_calibration_qualified = false;
+      break;
+    case 9:
+      c.convention = MotionCalibrationConvention::Unsupported;
+      break;
+    case 10:
+      c.gyro_compensation = 0;
+      break;
+    }
+    TEST_ASSERT_FALSE(MotionEstimator::configValid(c));
+  }
+  c = qualifiedConfig();
+  c.accel_compensation = c.gyro_compensation = 2;
+  TEST_ASSERT_TRUE(MotionEstimator::configValid(c));
+  c.accel_compensation = 3;
+  TEST_ASSERT_FALSE(MotionEstimator::configValid(c));
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(reusable_configuration_qualification_rejects_unknown_and_improper_mounts);
   RUN_TEST(known_static_angles_use_real_counts_and_explicit_body_frame);
   RUN_TEST(offsets_gains_rates_and_mount_are_actually_applied);
   RUN_TEST(calibration_convention_and_compensation_cannot_be_inferred_from_ids);

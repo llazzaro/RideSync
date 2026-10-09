@@ -56,6 +56,12 @@ double norm(const MotionVector &v) {
   return std::sqrt(double(v.x) * v.x + double(v.y) * v.y + double(v.z) * v.z);
 }
 } // namespace
+bool MotionEstimator::configValid(const MotionEstimatorConfig &c) {
+  return c.mount_qualified && c.residual_calibration_qualified && c.mount_id && c.calibration_id &&
+         c.convention == MotionCalibrationConvention::ResidualCountsOffsetThenGain &&
+         c.accel_compensation >= 1 && c.accel_compensation <= 2 && c.gyro_compensation >= 1 &&
+         c.gyro_compensation <= 2 && rotationValid(c.sensor_to_body);
+}
 MotionEstimate MotionEstimator::update(const ImuEvidence &e,
                                        const StaticMotionReference &reference) {
   reset();
@@ -66,16 +72,11 @@ MotionEstimate MotionEstimator::update(const ImuEvidence &e,
   if (e.kind != RecordKind::ImuSample || !e.session_id || !c.generation || !c.sensor_id ||
       !c.mount_id || !c.calibration_id || c.sensor_state != Qualification::Qualified ||
       c.mount_state != Qualification::Qualified ||
-      c.calibration_state != Qualification::Qualified || !config_.mount_qualified ||
+      c.calibration_state != Qualification::Qualified || !configValid(config_) ||
       c.mount_id != config_.mount_id || c.calibration_id != config_.calibration_id ||
-      !config_.residual_calibration_qualified ||
-      config_.convention != MotionCalibrationConvention::ResidualCountsOffsetThenGain ||
       !c.calibration_offsets_known || !c.calibration_gains_known ||
-      config_.accel_compensation < 1 || config_.accel_compensation > 2 ||
-      config_.gyro_compensation < 1 || config_.gyro_compensation > 2 ||
       c.accel_offset_compensation != config_.accel_compensation ||
-      c.gyro_offset_compensation != config_.gyro_compensation || (e.timing_flags & 8) ||
-      !rotationValid(config_.sensor_to_body))
+      c.gyro_offset_compensation != config_.gyro_compensation || (e.timing_flags & 8))
     return estimate_;
   MotionVector force, rate;
   if (!convert(e.accel, c.accel_offset, c.accel_gain_numerator, c.accel_gain_denominator,

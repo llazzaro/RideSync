@@ -1,11 +1,12 @@
 #pragma once
 #include "camera_manager.h"
 #include "modem_gnss.h"
+#include "motion_types.h"
 #include <cstdint>
 #include <type_traits>
 namespace ridesync {
 enum class RecordKind : uint8_t { Gps, ImuSample, ImuConfig, ImuHealth, ImuControl, Camera, Count };
-enum class StorageFormat : uint8_t { GpsV1, MixedV2, CameraV3 };
+enum class StorageFormat : uint8_t { GpsV1, MixedV2, CameraV3, MotionV4 };
 enum class Qualification : uint8_t { Unknown, Unqualified, Qualified };
 // IDs are caller assigned opaque uint32 values; zero = unknown. This schema
 // does not establish identity uniqueness, a mount transform, or calibration.
@@ -94,10 +95,12 @@ struct TelemetryRecord {
   ModemSnapshot gps;
   ImuEvidence imu;
   CameraEvidence camera;
+  MotionEvidence motion;
 };
 static_assert(std::is_trivially_copyable<TelemetryRecord>::value,
               "Telemetry records must own copied fixed data");
-static_assert(sizeof(ImuEvidence) <= 240 && sizeof(TelemetryRecord) <= 544,
+static_assert(sizeof(ImuEvidence) <= 240 && sizeof(MotionEvidence) <= 160 &&
+                  sizeof(TelemetryRecord) <= 704,
               "Review telemetry RAM bounds when changing the envelope");
 struct KindHealth {
   uint32_t accepted, dropped, rejected, written, flushed, lost;
