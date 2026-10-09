@@ -53,8 +53,9 @@ cleanup evidence, not that submission return.
 ## Remaining checks
 
 Manual Stop and a switch to photo mode were requested after the running-timer
-reply. Their camera outcomes and timing were not confirmed within this capture.
-Playback was not checked in this run. The first #46 capture row remains
+reply. The owner subsequently confirmed stopped, still in video mode, after the
+capture had closed. Actual Stop timing remains unresolved and no mode change
+was confirmed. The owner also confirmed that the new clip plays on the X5. The first #46 capture row remains
 incomplete: a bounded capture covering confirmed Stop, mode change and playback
 is still required. Neither silence nor the deadline disconnect means stopped.
 Keep #19/#3 open and software recording state Unknown. Reuse the previously
