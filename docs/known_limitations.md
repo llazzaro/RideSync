@@ -30,9 +30,11 @@
   wake is explicit; BLE reconnect does not prove power-on. External GPS/IMU
   injection into GoPro is not assumed.
 - Insta360 X5/ONE RS protocols and wake remain gated by model-specific captures
-  and qualification. X5 remote stop and three complete remote REC/STOP cycles
-  remain outstanding despite the observed recording start. Incoming state packets remain
-  unclassified, and the isolated wake result is not production orchestration.
+  and qualification. The isolated X5 probe completed three camera-observed remote
+  Start/Stop cycles and reconnect on owner-reported firmware 1.11.10. The real
+  X5 adapter remains unimplemented, incoming state packets remain unclassified,
+  and the isolated wake result is not production orchestration. Remaining camera
+  checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
   GO 3S/Action Pod link ownership, third-party pairing,
   services, recording commands and authoritative state are unresolved. Official
   materials document Pod Bluetooth remote control without a third-party GATT

@@ -2,7 +2,9 @@
 
 Revised October 8, 2026 following the owner's request to make ticket acceptance
 realistic. This changes ticket boundaries, not the overall camera/logger goal or
-the truth of any hardware claim. No new issues are needed for this review.
+the truth of any hardware claim. On October 9 the owner explicitly requested a
+new ticket collecting camera-dependent checks together: #46 is that execution
+checklist. The component and acceptance tickets retain their delivery decisions.
 
 ## What closes a ticket
 
@@ -52,6 +54,12 @@ features disabled does not complete their implementation tickets.
 | #22 | New-model smoke checks, staged mixed groups, missing-peer progress, latency/skew, radio coexistence, enabled wake and camera GPS metadata |
 | #30 | Actual supply/enclosure/mount, pin/pull/polarity/current checks, antenna access, strain relief and finite physical inspection methods |
 | #31 | Integrated reset/no replay, watchdog/control progress, real-driver GNSS stale/recovery, SD faults/power cuts, sensor faults/load and controlled-ride reference checks |
+
+The owner-requested [#46](https://github.com/llazzaro/RideSync/issues/46) collects
+the camera checks above into one execution checklist, including the receive
+evidence needed by #19. It reuses the completed X5 probe smoke/wake evidence,
+without promoting the probe to production support or changing ticket completion
+requirements. Schedule ready rows together and label unavailable stages Blocked.
 
 #31 starts with one declared 30-minute bench campaign as an initial baseline,
 not an endurance certification. Its checklist fixes the scenarios before the run.

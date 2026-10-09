@@ -11,6 +11,13 @@ The detailed protocols below describe evidence to collect in those owning
 tickets, not repeated blockers on every software component. Reuse existing
 results for unchanged configurations and rerun affected failures after fixes.
 
+At the owner’s October 9 request, [#46](https://github.com/llazzaro/RideSync/issues/46)
+consolidates all remaining camera-dependent checks into one execution checklist,
+including the annotated receive evidence needed by #19. The original tickets
+retain implementation, compatibility and release decisions; #46 does not add
+another soak or repeat unchanged successful component checks. The isolated X5
+probe’s three remote Start/Stop cycles and reconnect are already confirmed.
+
 ## Automated baseline
 
 `pio run -e lilygo_t_a7670e_r2` compiles serial-only firmware.

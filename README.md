@@ -44,9 +44,11 @@ but acquired no position fix. Isolated RideSync diagnostics subsequently observe
 [X5 CE80 pairing/subscription](docs/hardware-results/2026-10-09-x5-pairing.md)
 and [one owner-confirmed wake](docs/hardware-results/2026-10-09-x5-wake.md#owner-requested-repeat-observed-wake).
 After installing a camera card, the owner reported firmware **1.11.10** and
-confirmed a remote recording start, a playable clip after manual stop, and a
-subsequent BLE reconnect. Remote stop and three complete REC/STOP cycles remain
-outstanding; the production runtime has not been qualified on hardware. See
+confirmed a playable clip after manual stop. A later probe session completed
+[three camera-observed remote Start/Stop cycles and reconnect](docs/hardware-results/2026-10-09-x5-pairing.md#three-remote-recording-cycles--owner-confirmed).
+The production X5 adapter and authoritative recording-state decoder remain
+unimplemented. Remaining camera checks are consolidated in
+[#46](https://github.com/llazzaro/RideSync/issues/46). See
 [bring-up results](docs/hardware-results/2026-10-07-bringup.md).
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
 passing synthetic tests does not promote a camera to Confirmed.
