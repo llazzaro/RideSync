@@ -38,18 +38,27 @@ Configuration handoff, durable session IDs, local/control composition and
 supervised startup have software implementations tracked in [#38](https://github.com/llazzaro/RideSync/issues/38)–[#42](https://github.com/llazzaro/RideSync/issues/42).
 
 A factory-firmware bench probe confirmed board/modem startup and GNSS enable,
-but acquired no position fix. No RideSync firmware or camera behavior has been
-verified on hardware. See [bring-up results](docs/hardware-results/2026-10-07-bringup.md).
+but acquired no position fix. Isolated RideSync diagnostics subsequently observed
+[X5 CE80 pairing/subscription](docs/hardware-results/2026-10-09-x5-pairing.md)
+and [one owner-confirmed wake](docs/hardware-results/2026-10-09-x5-wake.md#owner-requested-repeat-observed-wake).
+The separate one-shot shutter trial did not establish recording: the owner
+reported no SD card in the camera. Camera firmware remains unrecorded, and the
+production runtime has not been qualified on hardware. See
+[bring-up results](docs/hardware-results/2026-10-07-bringup.md).
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
 passing synthetic tests does not promote a camera to Confirmed.
 
 | Feature | X5 | GO 3S | ONE RS | HERO12 Black |
 |---|---|---|---|---|
-| BLE connect | Not tested | Not tested | Not tested | Not tested |
+| BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested |
 | Start recording | Not tested | Not tested | Not tested | Not tested |
 | Stop recording | Not tested | Not tested | Not tested | Not tested |
-| Wake | Not tested | Not tested | Not tested | Not tested |
+| Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested |
 | GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
+
+Observed probe results do not establish production support or firmware-qualified
+compatibility. X5 recording/state decoding, the three-cycle smoke test and
+production wake/reconnect scheduling remain open in #19, #3 and #9.
 
 GoPro HERO12 Black is the first implemented GoPro profile. Its opt-in adapter
 uses [Open GoPro](https://gopro.github.io/OpenGoPro/) for initial pairing/control,

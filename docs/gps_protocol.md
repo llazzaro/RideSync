@@ -49,6 +49,28 @@ speed, heading, validity and satellites. Bounded buffers must prevent a missing
 or full microSD card from stalling control. Telemetry injection is opt-in per
 camera and disabled until its profile is validated.
 
+## Licensed binary telemetry reference (#29)
+
+October 9 audit: [Garmin controller source](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/BLE%20Barrel/BLEBarrel.mc)
+provides a different candidate from CE82 RMC. `sendPosition` builds a 71-byte
+binary video packet; `sendCMD` updates byte 10 with a 1–254 sequence and writes
+20-byte chunks through BE81 under BE80. Its comments identify an epoch field,
+little-endian doubles, hemisphere bytes, speed in m/s, heading in degrees and
+altitude in metres. Unknown header constants remain opaque.
+
+The pinned [README](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/README.md)
+reports ONE R 360-mod testing; ONE RS compatibility is a claim, not local evidence.
+Both license files specify MPL-2.0; no code or packet fixture is copied.
+
+Do not adopt its edge behavior: altitude loses its sign, missing speed becomes
+zero, and the float32-to-float64 exponent rebias lacks a zero special case.
+Independent arithmetic gives `2^-127`, rather than zero, for float32 zero.
+No raw capture or golden was obtained in this audit. Missing fields, negative
+altitude, zero/subnormal conversion, sequence/framing and actual target support
+need independent expectations before enabling a profile. #29/#14 remain open;
+this finding supplies a licensed research path, not a CE82 encoder or metadata
+qualification.
+
 ## Local ride logger scope
 
 Local GPS logging is a core project goal. An external IMU will add raw motion

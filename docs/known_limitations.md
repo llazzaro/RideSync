@@ -7,8 +7,11 @@
   qualification. Bounded configuration/startup, completed-work supervision and
   ordered worker teardown are composed in software. Native/retained builds are not hardware proof.
 - A factory-firmware probe confirmed modem identity and GNSS enable/READY, but no
-  position fix. RideSync firmware and per-camera compatibility remain unverified
-  on physical hardware.
+  position fix. Isolated RideSync diagnostics observed X5 CE80 pairing/subscription
+  and one owner-confirmed wake; camera firmware remains unrecorded. The production
+  runtime and per-camera compatibility remain unqualified. See the
+  [pairing/shutter result](hardware-results/2026-10-09-x5-pairing.md) and
+  [wake result](hardware-results/2026-10-09-x5-wake.md).
 - Configuration has validated bounded runtime/persistence and immutable startup
   handoff contracts. Sample configuration supplies no proof of qualified pins,
   camera firmware, bond identity or commissioned durable session namespace.
@@ -25,7 +28,10 @@
   wake is explicit; BLE reconnect does not prove power-on. External GPS/IMU
   injection into GoPro is not assumed.
 - Insta360 X5/ONE RS protocols and wake remain gated by model-specific captures
-  and qualification. GO 3S/Action Pod link ownership, third-party pairing,
+  and qualification. The X5 one-shot shutter submission did not establish
+  recording; the owner reported no camera SD card. Incoming state packets remain
+  unclassified, and the isolated wake result is not production orchestration.
+  GO 3S/Action Pod link ownership, third-party pairing,
   services, recording commands and authoritative state are unresolved. Official
   materials document Pod Bluetooth remote control without a third-party GATT
   protocol; absent captures are not an incompatibility finding. See the

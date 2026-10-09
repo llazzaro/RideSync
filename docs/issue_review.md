@@ -1,5 +1,31 @@
 # GitHub issue review — 2026-10-07
 
+## Remaining work — 2026-10-09
+
+GitHub currently has 12 open issues. This reconciliation reuses the retained
+evidence; it does not close a ticket or add acceptance requirements. The
+[finite acceptance policy](acceptance_policy.md) remains authoritative.
+
+| Issues | Current evidence and next dependency |
+|---|---|
+| #3, #19 | Isolated X5 CE80 pairing/subscription and one source-derived shutter submission are recorded. Recording was not established because the owner reported no camera SD card; firmware and annotated recording-state packets are missing. Resume the existing three-cycle/reconnect milestone with a camera card and recorded firmware. |
+| #9 | The isolated source-derived advertisement produced one owner-confirmed X5 wake. Production bounded advertising/connect/observe/start orchestration is still absent; reuse this observation rather than repeating it without a new question. |
+| #5 | ONE RS needs its own lens/module and recording-path evidence. The newly audited [licensed BE80 reference](insta360_protocol.md#licensed-be80-control-reference-19-5) supplies source-level command candidates for ONE R; it does not qualify ONE RS configurations or authoritative state. |
+| #21 | GO 3S/Action Pod control ownership and usable third-party recording path remain unresolved after #6. No enabled profile can be justified yet. |
+| #13 | The qualified static estimator core is implemented and tested. Runtime/logging integration has a written spec awaiting user review; dynamic lean/gravity-free acceleration remain unresolved and invalid. |
+| #29, #14 | A newly audited MPL-2.0 Garmin source provides a binary BE80 GPS candidate for ONE R, distinct from CE82 RMC. Numeric edge cases, independent expected fixtures and actual target applicability remain unresolved; see the [source audit](gps_protocol.md#licensed-binary-telemetry-reference-29). Encoder evidence precedes optional forwarding; local logging can proceed independently. |
+| #22 | The staged physical camera matrix remains open. Limited X5 probe results do not establish recording, production orchestration, other models or mixed-radio capacity. |
+| #30 | Actual supply/enclosure/mount selection and finite installed-hardware observations are still required. |
+| #31 | The declared integrated bench/controlled-ride campaign requires qualified enabled hardware and actual observations; synthetic software tests cannot complete it. |
+| #16 | Roadmap stays open while required milestones above remain incomplete. |
+
+Evidence: [X5 pairing and shutter trial](hardware-results/2026-10-09-x5-pairing.md),
+[X5 wake](hardware-results/2026-10-09-x5-wake.md),
+[static estimator](motion_estimator.md), and the proposed
+[motion runtime/logging spec](superpowers/specs/2026-10-09-motion-logging-design.md).
+
+## Original review and subsequent scope changes
+
 Reviewed all original #1–#16. Preserved issue identities, narrowed compound scopes,
 created 15 split tickets and updated all 30 work packages plus the #16 tracker.
 
