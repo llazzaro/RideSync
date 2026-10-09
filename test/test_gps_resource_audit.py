@@ -51,6 +51,12 @@ class ResourceAuditTests(unittest.TestCase):
         self.assertEqual(audit.audit_calls(graph, instructions, 'encoder', {'__lshrdi3'}),
                          {'encoder', '__lshrdi3'})
 
+    def test_indirect_tail_jump_cannot_evade_dependency_audit(self):
+        dump = '400d0000 <encoder>:\n400d0000: 0008a0 jx a8\n'
+        graph, instructions = audit.call_graph(dump, {}, lambda address: 0)
+        with self.assertRaisesRegex(AssertionError, 'unresolved'):
+            audit.audit_calls(graph, instructions, 'encoder')
+
     def test_allocator_or_driver_dependency_is_rejected(self):
         for name in ('malloc', 'digitalWrite', 'ble_gatts_notify_custom'):
             with self.subTest(name=name):

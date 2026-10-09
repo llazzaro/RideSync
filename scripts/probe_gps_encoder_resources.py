@@ -49,6 +49,10 @@ def call_graph(disassembly, addresses, literal_value):
                 literal = re.match(r'a\d+,\s*([0-9a-fA-F]+)', operands)
                 if literal:
                     registers[destination] = addresses.get(literal_value(int(literal[1], 16)))
+            elif opcode == 'jx':
+                # No indirect tail transfer is part of the qualified artifact.
+                graph[owner].add('<unresolved-register-call>')
+                registers.clear()
             elif opcode.startswith('callx'):
                 target = registers.get(destination)
                 graph[owner].add(target or '<unresolved-register-call>')

@@ -529,8 +529,8 @@ python scripts/check_format.py
 ```
 
 October9 local evidence: 13 encoder Unity tests, 6 independent actual-output oracle
-tests, 6 audit regression tests; full native364/364 and Python discovery40/40
-before adding the six audit tests. Default and retained pinned ESP32 builds pass.
+tests, 7 audit regression tests; full native364/364 and Python discovery47/47
+after the independent review audit fix. Default and retained pinned ESP32 builds pass.
 The resource audit reports actual target result80/config8/packet71 bytes and
 packet offset8, encoder256/narrowScalar48/writeDouble32/leap32 individual static
 compiler frames. Anchor contents reference real encodeGps. Ordinary emitted
