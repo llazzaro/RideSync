@@ -252,6 +252,14 @@ private:
   bool scan_cancel_attempted_ = false, scan_pending_ = false;
   int scan_cancel_error_ = 0;
   void cancelScanOnce();
+  void serviceStartup(uint32_t now);
+  void serviceFaults(uint32_t now);
+  void serviceScan(uint32_t now);
+  void releaseScan();
+  void serviceEvents(uint32_t now);
+  void servicePeers(uint32_t now);
+  void serviceHealth();
+  bool servicePeer(uint8_t i, uint32_t now, bool &admitted);
   bool pop(BleEvent &);
   void resetContext(BleContext &, uint8_t, uint32_t, BlePhase, uint32_t, uint16_t, uint16_t);
   void retire(uint8_t, BleFault, int = 0);
