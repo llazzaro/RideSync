@@ -19,7 +19,7 @@ class BenchRunTest(unittest.TestCase):
             result = subprocess.run([
                 'c++', '-std=c++11', '-Wall', '-Wextra', '-Werror',
                 '-I', str(ROOT / 'include'), '-I', str(BENCH),
-                str(BENCH / 'test_run.cpp'), str(ROOT / 'src/storage.cpp'),
+                str(BENCH / 'test_run.cpp'), str(ROOT / 'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
                 str(ROOT / 'src/session_clock.cpp'), '-o', str(binary),
             ], capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)

@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "motion_estimator.h"
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -10,6 +11,49 @@ static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "Storage requires lock-free boolean at
 constexpr uint32_t Storage::kCapacity;
 constexpr size_t Storage::kMaxRowBytes, Storage::kChunkBytes;
 namespace {
+bool vectorFinite(const MotionVector &v) {
+  return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+bool motionValid(const ImuEvidence &e, const MotionEvidence &m) {
+  const auto &o = m.estimate;
+  if (static_cast<unsigned>(m.state) > 3 || o.dynamic_lean_valid || o.dynamic_acceleration_valid)
+    return false;
+  if (m.state != MotionAdmission::Enabled)
+    return !o.measurements_valid && !o.static_tilt_valid;
+  if (!MotionEstimator::configValid(m.config) || !m.snapshot_max_age_ms ||
+      m.snapshot_max_age_ms > 60000)
+    return false;
+  if (e.kind != RecordKind::ImuSample)
+    return !o.measurements_valid && !o.static_tilt_valid && !m.reference.externally_stationary &&
+           !m.reference.session_id && !m.reference.config_generation &&
+           !m.reference.batch_sequence && !m.reference.declaration;
+  const auto &v = e.config;
+  if (o.measurements_valid) {
+    if (!v.generation || !v.sensor_id || v.sensor_state != Qualification::Qualified ||
+        v.mount_state != Qualification::Qualified ||
+        v.calibration_state != Qualification::Qualified || v.mount_id != m.config.mount_id ||
+        v.calibration_id != m.config.calibration_id ||
+        v.accel_offset_compensation != m.config.accel_compensation ||
+        v.gyro_offset_compensation != m.config.gyro_compensation || !v.calibration_offsets_known ||
+        !v.calibration_gains_known || !v.accel_scale_numerator || !v.accel_scale_denominator ||
+        !v.gyro_scale_numerator || !v.gyro_scale_denominator || (e.timing_flags & 8))
+      return false;
+    for (unsigned i = 0; i < 3; ++i)
+      if (e.accel[i] <= -32767 || e.accel[i] >= 32767 || e.gyro[i] <= -32767 || e.gyro[i] >= 32767)
+        return false;
+  }
+  if (o.measurements_valid &&
+      (!vectorFinite(o.specific_force_mps2) || !vectorFinite(o.angular_rate_rad_s)))
+    return false;
+  if (o.static_tilt_valid &&
+      (!o.measurements_valid || !std::isfinite(o.roll_rad) || !std::isfinite(o.pitch_rad) ||
+       !m.reference.externally_stationary || !m.reference.declaration ||
+       m.reference.session_id != e.session_id ||
+       m.reference.config_generation != e.config.generation ||
+       m.reference.batch_sequence != e.batch_sequence || !e.receipt_known || (e.timing_flags & 7)))
+    return false;
+  return true;
+}
 bool token(const char *s, char *out) {
   if (!s)
     return false;
@@ -62,6 +106,41 @@ struct Csv {
     append(",");
   }
 };
+void formatMotion(Csv &c, const MotionEvidence &m) {
+  c.append(",%u", static_cast<unsigned>(m.state));
+  if (m.state != MotionAdmission::Enabled) {
+    for (unsigned field = 1; field < 36; ++field) {
+      c.append(",");
+      if (field >= 24 && field <= 27)
+        c.append("0");
+    }
+    return;
+  }
+  const auto &v = m.config;
+  const auto &r = m.reference;
+  const auto &o = m.estimate;
+  c.append(",1,%u,%u,%u,%u,%u,%u,%u,%u", m.snapshot_max_age_ms, static_cast<unsigned>(v.convention),
+           v.mount_qualified, v.residual_calibration_qualified, v.mount_id, v.calibration_id,
+           v.accel_compensation, v.gyro_compensation);
+  for (float x : v.sensor_to_body)
+    c.append(",%.9g", double(x));
+  c.append(",%u,%llu,%u,%u,%u,%u,%u,0,0", r.externally_stationary, (unsigned long long)r.session_id,
+           r.config_generation, r.batch_sequence, r.declaration, o.measurements_valid,
+           o.static_tilt_valid);
+  const float values[] = {o.specific_force_mps2.x,
+                          o.specific_force_mps2.y,
+                          o.specific_force_mps2.z,
+                          o.angular_rate_rad_s.x,
+                          o.angular_rate_rad_s.y,
+                          o.angular_rate_rad_s.z,
+                          o.roll_rad,
+                          o.pitch_rad};
+  for (unsigned i = 0; i < 8; ++i) {
+    c.append(",");
+    if (i < 6 ? o.measurements_valid : o.static_tilt_valid)
+      c.append("%.9g", double(values[i]));
+  }
+}
 void formatTimestamp(Csv &c, const RecordTimestamp &t) {
   c.append("%llu,%llu,%u,%u,", (unsigned long long)t.session_id, (unsigned long long)t.monotonic_ms,
            (unsigned)t.monotonic_quality, (unsigned)t.anchor_quality);
@@ -93,7 +172,7 @@ Storage::Storage(StorageSink &sink, const StorageConfig &c)
     : format_(c.format), sink_(sink), session_(c.session_id), max_mounts_(c.mount_attempts),
       flush_records_(c.flush_records), valid_(false) {
   valid_ = (format_ == StorageFormat::GpsV1 || format_ == StorageFormat::MixedV2 ||
-            format_ == StorageFormat::CameraV3) &&
+            format_ == StorageFormat::CameraV3 || format_ == StorageFormat::MotionV4) &&
            session_ && max_mounts_ > 0 && max_mounts_ <= 3 && flush_records_ > 0 &&
            flush_records_ <= kCapacity && token(c.firmware, firmware_) &&
            token(c.provenance, provenance_);
@@ -170,15 +249,17 @@ bool Storage::publish(const Record &record, bool reserve) {
   add(h.accepted);
   return true;
 }
-bool Storage::enqueueImu(const RecordTimestamp &t, const ImuEvidence &e, bool reserve) {
+bool Storage::enqueueImu(const RecordTimestamp &t, const ImuEvidence &e, bool reserve,
+                         const MotionEvidence &motion) {
   const auto k = static_cast<unsigned>(e.kind);
   const auto &c = e.config;
   const bool kind_valid = k > 0 && k < 5;
   if (!valid_ || format_ == StorageFormat::GpsV1 || !kind_valid || !validTimestamp(t) ||
-      e.session_id != session_ || static_cast<unsigned>(c.sensor_state) > 2 ||
-      static_cast<unsigned>(c.mount_state) > 2 || static_cast<unsigned>(c.calibration_state) > 2 ||
-      c.accel_offset_compensation > 2 || c.gyro_offset_compensation > 2 || e.timing_flags > 15 ||
-      e.event_code > 9 || e.event_length > 4 || e.sensor_time_ticks24 > 0xffffff ||
+      (format_ == StorageFormat::MotionV4 && !motionValid(e, motion)) || e.session_id != session_ ||
+      static_cast<unsigned>(c.sensor_state) > 2 || static_cast<unsigned>(c.mount_state) > 2 ||
+      static_cast<unsigned>(c.calibration_state) > 2 || c.accel_offset_compensation > 2 ||
+      c.gyro_offset_compensation > 2 || e.timing_flags > 15 || e.event_code > 9 ||
+      e.event_length > 4 || e.sensor_time_ticks24 > 0xffffff ||
       ((c.accel_scale_numerator == 0) != (c.accel_scale_denominator == 0)) ||
       ((c.gyro_scale_numerator == 0) != (c.gyro_scale_denominator == 0)) ||
       (c.sensor_state == Qualification::Qualified && !c.sensor_id) ||
@@ -210,6 +291,7 @@ bool Storage::enqueueImu(const RecordTimestamp &t, const ImuEvidence &e, bool re
   record.kind = e.kind;
   record.timestamp = t;
   record.imu = e;
+  record.motion = motion;
   return publish(record, reserve);
 }
 bool Storage::enqueueCamera(const RecordTimestamp &t, const CameraEvidence &e, bool reserve) {
@@ -222,8 +304,8 @@ bool Storage::enqueueCamera(const RecordTimestamp &t, const CameraEvidence &e, b
                        e.kind == CameraEventKind::RequestRefused;
   const bool setup_ack =
       e.ack_action == CameraAckAction::Pair || e.ack_action == CameraAckAction::Claim;
-  if (!valid_ || format_ != StorageFormat::CameraV3 || !validTimestamp(t) ||
-      e.session_id != session_ || e.peer_slot >= kMaxCameras || !e.peer_id ||
+  if (!valid_ || (format_ != StorageFormat::CameraV3 && format_ != StorageFormat::MotionV4) ||
+      !validTimestamp(t) || e.session_id != session_ || e.peer_slot >= kMaxCameras || !e.peer_id ||
       (e.event_receipt_known &&
        (e.event_receipt_age_ms > 60000 || e.event_receipt_ms > t.monotonic_ms ||
         t.monotonic_ms - e.event_receipt_ms != e.event_receipt_age_ms)) ||
@@ -326,7 +408,8 @@ bool Storage::format(const Record &r) {
   if (f.fix_quality.available)
     c.append("%u", f.fix_quality.value);
   auto h = health();
-  c.append(",%u,%u,%u,%u,%u,%u\n", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  c.append(",%u,%u,%u,%u,%u,%u", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  c.append("\n");
   length_ = c.size;
   offset_ = 0;
   return c.ok;
@@ -385,14 +468,17 @@ void Storage::workerStep() {
       Csv c(buffer_, sizeof(buffer_));
       c.append("%s\n#session,%llu,firmware,%s,provenance,%s\n#policy,queue_records,8,flush_"
                "records,%u,idle_flush,1,chunk_bytes,256,mount_attempts,%u,write_retries,0\n%s",
-               format_ == StorageFormat::GpsV1     ? "#ridesync_gps,1"
-               : format_ == StorageFormat::MixedV2 ? "#ridesync_telemetry,2"
-                                                   : "#ridesync_telemetry,3",
+               format_ == StorageFormat::GpsV1      ? "#ridesync_gps,1"
+               : format_ == StorageFormat::MixedV2  ? "#ridesync_telemetry,2"
+               : format_ == StorageFormat::CameraV3 ? "#ridesync_telemetry,3"
+                                                    : "#ridesync_telemetry,4",
                (unsigned long long)session_, firmware_, provenance_, flush_records_, max_mounts_,
                header);
       if (format_ != StorageFormat::GpsV1)
-        c.append("#imu_layout,2,see_docs/mixed_telemetry.md\n");
-      if (format_ == StorageFormat::CameraV3)
+        c.append(format_ == StorageFormat::MotionV4
+                     ? "#imu_layout,4,see_docs/motion_logging.md\n"
+                     : "#imu_layout,2,see_docs/mixed_telemetry.md\n");
+      if (format_ == StorageFormat::CameraV3 || format_ == StorageFormat::MotionV4)
         c.append("#camera_layout,3,see_docs/log_format.md\n");
       length_ = c.size;
       offset_ = 0;
@@ -540,7 +626,10 @@ bool Storage::formatImu(const Record &r) {
     c.append("%u", e.sensor_time_ticks24);
   c.append(",%u,%u", e.event_count, e.event_count_lower_bound);
   auto h = kindHealth(r.kind);
-  c.append(",%u,%u,%u,%u,%u,%u\n", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  c.append(",%u,%u,%u,%u,%u,%u", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  if (format_ == StorageFormat::MotionV4)
+    formatMotion(c, r.motion);
+  c.append("\n");
   length_ = c.size;
   offset_ = 0;
   return c.ok;

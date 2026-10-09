@@ -1,5 +1,7 @@
 """Independent strict parser for the documented mixed v2 contract; test tooling only."""
 import csv
+import math
+import re
 
 COMMON = ('session_id monotonic_ms monotonic_quality anchor_quality anchor_sequence '
           'anchor_receipt_ms anchor_utc_ms uncertainty_known uncertainty_ms anchor_age_ms '
@@ -20,6 +22,82 @@ CAMERA = ('peer_slot peer_id model group_generation intent_id connection_generat
           'time_domain event_receipt_known event_receipt_ms event_receipt_age_ms '
           'radio_receipt_known radio_receipt_ms acquisition_known acquisition_ms '
           'accepted dropped rejected lost written flushed').split()
+
+
+MOTION = 'motion_state motion_algorithm motion_snapshot_max_age_ms motion_convention motion_mount_qualified motion_residual_calibration_qualified motion_mount_id motion_calibration_id motion_accel_compensation motion_gyro_compensation motion_r_bs_00 motion_r_bs_01 motion_r_bs_02 motion_r_bs_10 motion_r_bs_11 motion_r_bs_12 motion_r_bs_20 motion_r_bs_21 motion_r_bs_22 motion_reference_stationary motion_reference_session_id motion_reference_generation motion_reference_batch motion_reference_declaration motion_measurements_valid motion_static_tilt_valid motion_dynamic_lean_valid motion_dynamic_acceleration_valid motion_force_x_mps2 motion_force_y_mps2 motion_force_z_mps2 motion_rate_x_rad_s motion_rate_y_rad_s motion_rate_z_rad_s motion_roll_rad motion_pitch_rad'.split()
+
+def _motion(row):
+    def integer(field, lo=0, hi=0xffffffff):
+        value = row[field]
+        if not value or not value.isascii() or not value.isdigit() or not lo <= int(value) <= hi:
+            raise ValueError('invalid motion integer '+field)
+        return int(value)
+
+    def number(field):
+        value = row[field]
+        if not re.fullmatch(r'-?(?:[0-9]+(?:\.[0-9]+)?)(?:[eE][+-]?[0-9]+)?', value):
+            raise ValueError('invalid motion number '+field)
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError('nonfinite motion number')
+        return parsed
+
+    state = integer('motion_state', 0, 3)
+    flags = MOTION[24:28]
+    if any(row[f] not in ('0', '1') for f in flags) or any(row[f] != '0' for f in flags[2:]):
+        raise ValueError('motion result flags')
+    if state != 2:
+        if any(row[f] for f in MOTION[1:] if f not in flags) or any(row[f] != '0' for f in flags):
+            raise ValueError('inactive motion presence')
+        return
+    for f in ('motion_algorithm','motion_convention','motion_mount_qualified','motion_residual_calibration_qualified'):
+        if row[f] != '1': raise ValueError('motion qualification')
+    integer('motion_snapshot_max_age_ms',1,60000)
+    integer('motion_mount_id',1); integer('motion_calibration_id',1)
+    integer('motion_accel_compensation',1,2); integer('motion_gyro_compensation',1,2)
+    rotation = [number(f) for f in MOTION[10:19]]
+    for i in range(3):
+        for j in range(3):
+            dot = sum(rotation[3*i+k]*rotation[3*j+k] for k in range(3))
+            if abs(dot - (1 if i == j else 0)) > 0.0001: raise ValueError('motion rotation')
+    a,b,c,d,e,f,g,h,i = rotation
+    if a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g) <= 0: raise ValueError('motion reflection')
+    if row['motion_reference_stationary'] not in ('0','1'): raise ValueError('reference flag')
+    integer('motion_reference_session_id',0,0xffffffffffffffff)
+    for f in MOTION[21:24]: integer(f)
+    measured = row['motion_measurements_valid'] == '1'
+    tilt = row['motion_static_tilt_valid'] == '1'
+    for f in MOTION[28:34]:
+        if measured: number(f)
+        elif row[f]: raise ValueError('invalid vector presence')
+    for f in MOTION[34:36]:
+        if tilt: number(f)
+        elif row[f]: raise ValueError('invalid angle presence')
+    if row['kind'] != 'imu':
+        if measured or tilt or any(row[f] != '0' for f in MOTION[19:24]):
+            raise ValueError('motion event result')
+        return
+    if measured:
+        for f in ('sensor_state','mount_state','calibration_state'):
+            if row[f] != '2': raise ValueError('raw qualification')
+        for raw, qualified in (('mount_id','motion_mount_id'),('calibration_id','motion_calibration_id'),
+                               ('accel_offset_compensation','motion_accel_compensation'),
+                               ('gyro_offset_compensation','motion_gyro_compensation')):
+            if row[raw] != row[qualified]: raise ValueError('motion raw context')
+        if not int(row['sensor_id']) or not int(row['generation']) or                 row['calibration_offsets_known'] != '1' or row['calibration_gains_known'] != '1':
+            raise ValueError('missing raw calibration')
+        for f in ('accel_scale_numerator','accel_scale_denominator','gyro_scale_numerator','gyro_scale_denominator'):
+            if not int(row[f]): raise ValueError('motion scale')
+        if int(row['timing_flags']) & 8 or any(abs(int(row[p+'_'+axis])) >= 32767
+                                              for p in ('accel','gyro') for axis in ('x','y','z')):
+            raise ValueError('saturated motion')
+    if tilt:
+        if not measured or row['motion_reference_stationary'] != '1' or                 row['receipt_known'] != '1' or int(row['timing_flags']) & 7 or                 not int(row['motion_reference_declaration']):
+            raise ValueError('invalid static reference')
+        for raw, reference in (('session_id','motion_reference_session_id'),
+                               ('generation','motion_reference_generation'),
+                               ('batch_sequence','motion_reference_batch')):
+            if row[raw] != row[reference]: raise ValueError('stationary context')
 
 
 def _v3_timestamp(row):
@@ -64,12 +142,14 @@ def _v3_timestamp(row):
 
 def parse(data):
     version = data.split('\n', 1)[0]
-    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3'):
+    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3', '#ridesync_telemetry,4'):
         raise ValueError('unsupported version')
     if not data.endswith('\n'):
         raise ValueError('partial trailing row')
-    if version == '#ridesync_telemetry,3' and '#camera_layout,3,see_docs/log_format.md\n' not in data:
+    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4') and '#camera_layout,3,see_docs/log_format.md\n' not in data:
         raise ValueError('missing camera layout')
+    if version == '#ridesync_telemetry,4' and '#imu_layout,4,see_docs/motion_logging.md\n' not in data:
+        raise ValueError('missing motion layout')
     rows = []
     for line in data.splitlines()[1:]:
         if line.startswith('#') or line.startswith('session_id,'):
@@ -80,9 +160,10 @@ def parse(data):
                 raise ValueError('GPS column count')
             row = dict(zip(['kind'] + COMMON, values))
         elif values[0] in ('imu', 'config', 'health', 'control'):
-            if len(values) != 1 + len(COMMON) + len(IMU):
+            extra = MOTION if version == '#ridesync_telemetry,4' else []
+            if len(values) != 1 + len(COMMON) + len(IMU) + len(extra):
                 raise ValueError(f'IMU column count {len(values)}')
-            row = dict(zip(['kind'] + COMMON + IMU, values))
+            row = dict(zip(['kind'] + COMMON + IMU + extra, values))
             if row['acquisition_known'] != '0' or row['acquisition_ms']:
                 raise ValueError('unsupported acquisition model')
             for flag, fields in [('receipt_known', ['receipt_millis32']),
@@ -114,7 +195,7 @@ def parse(data):
                     raise ValueError('sensor time event')
                 if int.from_bytes(payload, 'little') != int(row['sensor_time_ticks24']):
                     raise ValueError('sensor time payload')
-        elif values[0] == 'camera' and version == '#ridesync_telemetry,3':
+        elif values[0] == 'camera' and version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4'):
             if len(values) != 1 + len(COMMON) + len(CAMERA):
                 raise ValueError('camera column count')
             row = dict(zip(['kind'] + COMMON + CAMERA, values))
@@ -178,8 +259,10 @@ def parse(data):
                 raise ValueError('unexpected delivery admission')
         else:
             raise ValueError('unsupported record kind')
-        if version == '#ridesync_telemetry,3':
+        if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4'):
             _v3_timestamp(row)
+        if version == "#ridesync_telemetry,4" and row["kind"] in ("imu","config","health","control"):
+            _motion(row)
         if row['monotonic_quality'] != '0' or int(row['session_id']) <= 0:
             raise ValueError('invalid timestamp')
         if row['anchor_quality'] != '0':

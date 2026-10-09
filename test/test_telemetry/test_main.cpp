@@ -1,5 +1,7 @@
+#include "../fixtures/motion/evidence.h"
 #include "telemetry_admission.h"
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -127,24 +129,26 @@ void cross_session_and_stop_final_publication() {
 }
 void mixed_flush_and_partial_loss() {
   for (bool short_write : {false, true}) {
-    Sink sink;
-    Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MixedV2});
-    TestClock raw;
-    SessionClock clock(raw, 42, 1000);
-    ImuInbox inbox;
-    TelemetryAdmission a(clock, s, inbox);
-    TEST_ASSERT_TRUE(a.event(evidence()));
-    TEST_ASSERT_TRUE(a.event(evidence(RecordKind::ImuHealth)));
-    if (short_write)
-      sink.limit = 3;
-    else
-      sink.flush_ok = false;
-    drain(s);
-    TEST_ASSERT_TRUE(s.health().terminal);
-    TEST_ASSERT_TRUE(s.health().stopped);
-    TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).lost);
-    TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuHealth).lost);
-    TEST_ASSERT_EQUAL_UINT32(0, s.kindHealth(RecordKind::ImuSample).flushed);
+    for (auto format : {StorageFormat::MixedV2, StorageFormat::MotionV4}) {
+      Sink sink;
+      Storage s(sink, {42, "fw", "synthetic", 2, 4, format});
+      TestClock raw;
+      SessionClock clock(raw, 42, 1000);
+      ImuInbox inbox;
+      TelemetryAdmission a(clock, s, inbox);
+      TEST_ASSERT_TRUE(a.event(evidence()));
+      TEST_ASSERT_TRUE(a.event(evidence(RecordKind::ImuHealth)));
+      if (short_write)
+        sink.limit = 3;
+      else
+        sink.flush_ok = false;
+      drain(s);
+      TEST_ASSERT_TRUE(s.health().terminal);
+      TEST_ASSERT_TRUE(s.health().stopped);
+      TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).lost);
+      TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuHealth).lost);
+      TEST_ASSERT_EQUAL_UINT32(0, s.kindHealth(RecordKind::ImuSample).flushed);
+    }
   }
 }
 
@@ -286,10 +290,66 @@ void gps_progress_under_sustained_backlog_and_clock_reset_rejection() {
   TEST_ASSERT_EQUAL_UINT32(2, a.tick());
   TEST_ASSERT_EQUAL_UINT32(before + 2, s.kindHealth(RecordKind::ImuSample).rejected);
 }
+void v4_copies_paired_evidence_and_preserves_raw_rows() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV4});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  auto e = motion_fixture::sample(42, 0);
+  MotionEvidence m;
+  m.state = MotionAdmission::Enabled;
+  m.config = motion_fixture::config();
+  m.snapshot_max_age_ms = 100;
+  m.estimate.measurements_valid = true;
+  m.estimate.specific_force_mps2.z = 9.80665f;
+  TEST_ASSERT_TRUE(s.enqueueImu(clock.snapshot(), e, false, m));
+  e.accel[2] = -1;
+  m.estimate.specific_force_mps2.z = -99;
+  drain(s);
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find("#ridesync_telemetry,4\n"));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                        sink.bytes.find("#imu_layout,4,see_docs/motion_logging.md\n"));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                        sink.bytes.find("#camera_layout,3,see_docs/log_format.md\n"));
+  TEST_ASSERT_EQUAL(std::string::npos, sink.bytes.find("-99"));
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).accepted);
+}
+void v4_refuses_nonfinite_dynamic_and_inconsistent_presence() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV4});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  auto e = motion_fixture::sample(42, 0);
+  MotionEvidence m;
+  m.state = MotionAdmission::Enabled;
+  m.config = motion_fixture::config();
+  m.snapshot_max_age_ms = 100;
+  m.estimate.measurements_valid = true;
+  m.estimate.specific_force_mps2.z = std::numeric_limits<float>::infinity();
+  TEST_ASSERT_FALSE(s.enqueueImu(clock.snapshot(), e, false, m));
+  m.estimate.specific_force_mps2.z = 9.80665f;
+  m.estimate.dynamic_lean_valid = true;
+  TEST_ASSERT_FALSE(s.enqueueImu(clock.snapshot(), e, false, m));
+  m.estimate.dynamic_lean_valid = false;
+  m.estimate.static_tilt_valid = true;
+  TEST_ASSERT_FALSE(s.enqueueImu(clock.snapshot(), e, false, m));
+  m.estimate.static_tilt_valid = false;
+  e.config.mount_id = 123;
+  TEST_ASSERT_FALSE(s.enqueueImu(clock.snapshot(), e, false, m));
+  e.config.mount_id = 7;
+  m = {};
+  m.state = MotionAdmission::Refused;
+  TEST_ASSERT_TRUE(s.enqueueImu(clock.snapshot(), e, false, m));
+  drain(s);
+  TEST_ASSERT_EQUAL_UINT32(4, s.kindHealth(RecordKind::ImuSample).rejected);
+  TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).written);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(v4_copies_paired_evidence_and_preserves_raw_rows);
+  RUN_TEST(v4_refuses_nonfinite_dynamic_and_inconsistent_presence);
   RUN_TEST(copied_config_old_anchor_and_kind_health);
   RUN_TEST(inbox_overflow_and_gps_reservation);
   RUN_TEST(cross_session_and_stop_final_publication);

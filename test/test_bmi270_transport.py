@@ -163,6 +163,6 @@ int main(){
                             '-I', str(path), '-I', str(ROOT / 'include'), '-I', str(vendor),
                             str(path / 'main.cpp'), str(ROOT / 'src/bmi270_imu.cpp'),
                             str(ROOT / 'src/imu_manager.cpp'), str(ROOT / 'src/telemetry_admission.cpp'),
-                            str(ROOT / 'src/storage.cpp'), str(ROOT / 'src/session_clock.cpp'),
+                            str(ROOT / 'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'), str(ROOT / 'src/session_clock.cpp'),
                             str(ROOT / 'src/health_supervisor.cpp'), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
