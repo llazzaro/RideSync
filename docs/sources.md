@@ -2,8 +2,8 @@
 
 Inspected 2026-10-07. Commit links below freeze the research baseline. The three Insta360 MIT license files were read at the pinned revisions below.
 Other license labels are metadata unless the audit notes explicitly say otherwise.
-The attributed NimBLE restore/reset function fixtures below are the only vendored
-third-party implementation; no protocol documentation has been vendored.
+The attributed NimBLE restore/reset fixtures and MPL-2.0 GPS wire-derived files
+below retain their applicable licenses; no protocol documentation has been vendored.
 RideSync's MIT license does not relicense any referenced project.
 
 Official Insta360 GO 3S support pages were consulted on 2026-10-07. They describe
@@ -17,7 +17,7 @@ No official code or images are copied.
 | [theserialhobbyist/insta360_m5StickC_remote](https://github.com/theserialhobbyist/insta360_m5StickC_remote/tree/6ea50ed8a2b276cb2461b06de97d8a801386a309) | `6ea50ed8a2b276cb2461b06de97d8a801386a309` | MIT | Reference only; no code copied |
 | [xaionaro-go/insta360ctl](https://github.com/xaionaro-go/insta360ctl/tree/f94193ce03c5af0921a9992bfd1af6bd946150d0) | `f94193ce03c5af0921a9992bfd1af6bd946150d0` | No license detected (do not copy) | Reference only; no code copied |
 | [TheAngryRaven/insta360-ble-gps-spec](https://github.com/TheAngryRaven/insta360-ble-gps-spec/tree/7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199) | `7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199` | No license detected (do not copy) | Reference only; no code copied |
-| [arsfabula/Insta360-Remote-CIQ](https://github.com/arsfabula/Insta360-Remote-CIQ/tree/39c51b3aa7c453227831d811355899371bbb8b94) | `39c51b3aa7c453227831d811355899371bbb8b94` (inspected 2026-10-09) | MPL-2.0; root and BLE Barrel license files read | Binary BE80 GPS/control research reference; no code or packet fixture copied; see [audit](gps_protocol.md#licensed-binary-telemetry-reference-29) |
+| [arsfabula/Insta360-Remote-CIQ](https://github.com/arsfabula/Insta360-Remote-CIQ/tree/39c51b3aa7c453227831d811355899371bbb8b94) | `39c51b3aa7c453227831d811355899371bbb8b94` (inspected 2026-10-09) | MPL-2.0; root and BLE Barrel license files read | Binary BE80 GPS encoder and synthetic wire fixtures under MPL-2.0; control remains research only; see [audit](gps_protocol.md#licensed-binary-telemetry-reference-29) |
 | [Xinyuan-LilyGO/LilyGo-Modem-Series](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/tree/e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00) | `e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00` | MIT | Reference only; no code copied |
 | [Insta360 GO Series: Action Pod Connection](https://onlinemanual.insta360.com/go3s/en-us/operating_tutorials/connect/actionpod) | Accessed 2026-10-07 | Official vendor support page; content reference only | GO 3S/Pod pairing prerequisites, control and stated Bluetooth range; no GATT protocol |
 | [Insta360: Using GO 3S and Action Pod](https://onlinemanual.insta360.com/go3s/en-us/camera/basicuse/go3s_actionpod) | Accessed 2026-10-07 | Official vendor support page; content reference only | Describes button/control behavior when docked and remote Bluetooth control when separated |
@@ -277,3 +277,22 @@ generic SDK selector. Equal foreign duplicates remain admissible because they st
 represented during target deletion. Distinct target values remain supported;
 durable duplicates hiding a different live target value also refuse unchanged.
 Actual-source fixture modes83..102 exercise all five schemas for these four cases.
+
+## Pure GPS encoder file licensing (#29)
+
+The source-derived wire layout and ordinary numeric precision use
+`arsfabula/Insta360-Remote-CIQ` at
+`39c51b3aa7c453227831d811355899371bbb8b94`, `BLE Barrel/BLEBarrel.mc`,
+`sendPosition`, `toDouble`, `sendCMD`. The source author/project attribution
+and MPL-2.0 notices are retained in `include/insta360_gps_encoder.h`,
+`src/insta360_gps_encoder.cpp` and `test/fixtures/insta360/be80_gps.h`.
+The matching pinned upstream license is stored in
+`licenses/insta360-remote-ciq-MPL-2.0.txt`; RideSync's MIT license does not
+relicense these files. Derived probe/oracle wire data added with independent
+verification also retains MPL-2.0 notices. Existing unrelated files retain
+their existing licenses.
+
+Packet coordinates and times are synthetic, independently calculated values.
+Validation, Gregorian arithmetic and canonical IEEE zero/subnormal conversion
+are RideSync policy, not camera acceptance evidence. No Garmin radio/controller
+implementation, queue or assets have been imported.

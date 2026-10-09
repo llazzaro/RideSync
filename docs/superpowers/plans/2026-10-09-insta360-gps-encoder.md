@@ -291,4 +291,4 @@ Add `-Wl,-u,ridesync_insta360_gps_encoder_backend` only to `hero12_adapter_compi
 
 Spec coverage: Task 1 owns API, all validation stages, exact packet, numerical policy and license; Task 2 owns independent actual-output arithmetic; Task 3 owns retained target proof, CI, documentation and software acceptance. All five Review Focus conditions have owning tests/checks. No shared parser/calendar refactor or new runtime scope is needed. Public names/signatures are identical throughout; source fixtures remain explicitly synthetic.
 
-Written spec approved on 2026-10-09. This implementation plan awaits user review. Preserve native/inline execution after that review, using executing-plans, and continue direct-main commits. No product implementation has been performed while writing this plan.
+Written spec approved on 2026-10-09. The user approved this implementation plan on 2026-10-09. Preserve native/inline execution, using executing-plans, and continue direct-main commits. Implementation progress is recorded in the execution ledger and task commits.
