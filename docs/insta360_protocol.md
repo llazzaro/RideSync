@@ -168,6 +168,22 @@ for its usable target/recording-state and finite receive/malformed-frame corpus;
 #3/#22 retain real camera checks. This codec is concrete progress on known fields,
 not a substitute for those remaining requirements.
 
+### Additional CE80 reference audit (#19)
+
+The MIT-licensed [Multicam protocol source](https://github.com/dstrat28/action-multicam-remote/blob/b89cd0022e5a50b357a7fdbab154b9a5ff037e21/ActionCamRemote/Bluetooth/Insta360RemoteProtocol.swift)
+was inspected at `b89cd0022e5a50b357a7fdbab154b9a5ff037e21`, together with
+its root license, service and regression tests. Its detector accepts any packet
+of at least 18 bytes containing a colon; the service reports Stopped after five
+seconds without such a packet. A synthetic regression timer even has a different
+magic prefix. These are heuristic tests, not camera-state evidence. RideSync
+does not adopt this detector or infer Stopped from absent traffic.
+
+The source also checks a six-byte ASCII identifier behind a CE81 handshake
+prefix. That is a candidate peer-association fact for the annotated #46 capture,
+not a qualified X5 identity parser, a BLE MAC or a recording observation. This
+audit supplies no new authoritative state mapping or installed-firmware proof.
+No upstream implementation or asset was copied; #19 remains open.
+
 ## Wake and identification
 
 The [GPS specification](https://github.com/TheAngryRaven/insta360-ble-gps-spec)
