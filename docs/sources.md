@@ -309,3 +309,12 @@ file notices are preserved in `include/protocol/insta360_be80_codec.h`,
 independently authored contract tests retain their existing licenses.
 No Garmin BLE/controller/state implementation or unrelated assets were copied.
 Source-derived fixtures are not camera captures.
+
+### Pure Insta360 wake codec (#9)
+
+`include/insta360_wake_encoder.h`, `src/insta360_wake_encoder.cpp` and the
+independent `test/fixtures/insta360/wake.h` retain the pinned MIT M5 fork
+`c76e140396de8b2404cdd36d17cf0d1a251a9dcc` manufacturer/name facts and MIT ESP32
+`83d4748b68d6ee5fd4414994a9e26b7d2f21364b` fixed-region comparison. The legacy
+AD framing is RideSync's explicit layout; artificial identifier fixtures are
+source-derived expectations, not camera captures or model qualification.
