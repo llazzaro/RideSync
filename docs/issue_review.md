@@ -13,7 +13,7 @@ evidence; it does not close a ticket or add acceptance requirements. The
 | #5 | ONE RS needs its own lens/module and recording-path evidence; RS 1-inch community examples and X5 observations do not qualify every ONE RS configuration. |
 | #21 | GO 3S/Action Pod control ownership and usable third-party recording path remain unresolved after #6. No enabled profile can be justified yet. |
 | #13 | The qualified static estimator core is implemented and tested. Runtime/logging integration has a written spec awaiting user review; dynamic lean/gravity-free acceleration remain unresolved and invalid. |
-| #29, #14 | No usable licensed/source-backed GPS encoding path with independent expected fixtures is established. Encoder evidence precedes optional per-profile forwarding; local GPS logging can proceed independently. |
+| #29, #14 | A newly audited MPL-2.0 Garmin source provides a binary BE80 GPS candidate for ONE R, distinct from CE82 RMC. Numeric edge cases, independent expected fixtures and actual target applicability remain unresolved; see the [source audit](gps_protocol.md#licensed-binary-telemetry-reference-29). Encoder evidence precedes optional forwarding; local logging can proceed independently. |
 | #22 | The staged physical camera matrix remains open. Limited X5 probe results do not establish recording, production orchestration, other models or mixed-radio capacity. |
 | #30 | Actual supply/enclosure/mount selection and finite installed-hardware observations are still required. |
 | #31 | The declared integrated bench/controlled-ride campaign requires qualified enabled hardware and actual observations; synthetic software tests cannot complete it. |
