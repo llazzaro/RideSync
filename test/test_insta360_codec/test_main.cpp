@@ -1,5 +1,6 @@
 #include "../fixtures/insta360/be80_envelope.h"
 #include "../fixtures/insta360/be80_recording.h"
+#include "../fixtures/insta360/ce80_display.h"
 #include "../fixtures/insta360/ce80_shutter.h"
 #include "protocol/insta360_be80_codec.h"
 #include "protocol/insta360_codec.h"
@@ -200,6 +201,191 @@ void finite_receive_corpus_handles_each_complete_size_and_rejected_prefix() {
                                   : Be80EnvelopeError::LengthMismatch);
   }
 }
+
+Ce80DisplayConfig displayConfig() {
+  Ce80DisplayConfig c;
+  c.profile = Ce80DisplayProfile::X5CapturedDisplayV1;
+  return c;
+}
+Ce80DisplayResult display(const uint8_t *p, size_t n) {
+  return decodeCe80Display(displayConfig(), Ce80Direction::CameraToRemote, p, n);
+}
+void unknownDisplay(const Ce80DisplayResult &r, Ce80DisplayError error) {
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(error), static_cast<int>(r.error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayKind::Unknown), static_cast<int>(r.kind));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80CameraMode::Unknown), static_cast<int>(r.mode));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ridesync::RecordingState::Unknown),
+                        static_cast<int>(r.recording));
+  TEST_ASSERT_EQUAL_UINT32(0, r.elapsed_seconds);
+}
+// Omitting type/layout validation or accepting any colon must break these tests.
+void captured_elapsed_display_reports_recording_with_owned_seconds() {
+  uint8_t input[sizeof insta360_fixture::kCe80Timer];
+  std::memcpy(input, insta360_fixture::kCe80Timer, sizeof input);
+  const auto r = display(input, sizeof input);
+  std::memset(input, 0, sizeof input);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayError::None), static_cast<int>(r.error));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayKind::Elapsed), static_cast<int>(r.kind));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ridesync::RecordingState::Recording),
+                        static_cast<int>(r.recording));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80CameraMode::Unknown), static_cast<int>(r.mode));
+  TEST_ASSERT_EQUAL_UINT32(5, r.elapsed_seconds);
+}
+void captured_settings_report_stopped_with_distinct_modes() {
+  const uint8_t *inputs[] = {insta360_fixture::kCe80Video, insta360_fixture::kCe80VideoUpdate,
+                             insta360_fixture::kCe80Photo};
+  const size_t sizes[] = {sizeof insta360_fixture::kCe80Video,
+                          sizeof insta360_fixture::kCe80VideoUpdate,
+                          sizeof insta360_fixture::kCe80Photo};
+  for (size_t i = 0; i < 3; ++i) {
+    const auto r = display(inputs[i], sizes[i]);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayError::None), static_cast<int>(r.error));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayKind::Settings), static_cast<int>(r.kind));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ridesync::RecordingState::Stopped),
+                          static_cast<int>(r.recording));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(i == 2 ? Ce80CameraMode::Photo : Ce80CameraMode::Video),
+                          static_cast<int>(r.mode));
+    TEST_ASSERT_EQUAL_UINT32(0, r.elapsed_seconds);
+  }
+}
+void remaining_runtime_and_count_do_not_prove_stopped_or_mode() {
+  const auto runtime =
+      display(insta360_fixture::kCe80Runtime, sizeof insta360_fixture::kCe80Runtime);
+  const auto count = display(insta360_fixture::kCe80Count, sizeof insta360_fixture::kCe80Count);
+  for (const auto &r : {runtime, count}) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayError::None), static_cast<int>(r.error));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayKind::Remaining), static_cast<int>(r.kind));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ridesync::RecordingState::Unknown),
+                          static_cast<int>(r.recording));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80CameraMode::Unknown), static_cast<int>(r.mode));
+    TEST_ASSERT_EQUAL_UINT32(0, r.elapsed_seconds);
+  }
+}
+void display_admission_checks_profile_direction_bounds_and_pointer() {
+  unknownDisplay(decodeCe80Display({}, Ce80Direction::CameraToRemote, nullptr, 19),
+                 Ce80DisplayError::Disabled);
+  for (unsigned value = 2; value <= 255; ++value) {
+    auto c = displayConfig();
+    c.profile = static_cast<Ce80DisplayProfile>(value);
+    unknownDisplay(decodeCe80Display(c, Ce80Direction::CameraToRemote, nullptr, 19),
+                   Ce80DisplayError::UnsupportedProfile);
+  }
+  for (unsigned value = 1; value <= 255; ++value)
+    unknownDisplay(
+        decodeCe80Display(displayConfig(), static_cast<Ce80Direction>(value), nullptr, 19),
+        Ce80DisplayError::WrongDirection);
+  for (size_t size : {size_t(0), size_t(5), size_t(257), size_t(-1)})
+    unknownDisplay(display(nullptr, size), Ce80DisplayError::InvalidSize);
+  unknownDisplay(display(nullptr, 6), Ce80DisplayError::InvalidBuffer);
+}
+void incomplete_extra_and_wrong_magic_frames_never_expose_state() {
+  uint8_t data[40] = {};
+  std::memcpy(data, insta360_fixture::kCe80Timer, sizeof insta360_fixture::kCe80Timer);
+  for (size_t n = 0; n < sizeof insta360_fixture::kCe80Timer; ++n)
+    unknownDisplay(display(data, n),
+                   n < 6 ? Ce80DisplayError::InvalidSize : Ce80DisplayError::LengthMismatch);
+  unknownDisplay(display(data, 20), Ce80DisplayError::LengthMismatch);
+  for (size_t i = 0; i < 3; ++i) {
+    data[i] ^= 1;
+    unknownDisplay(display(data, 19), Ce80DisplayError::UnsupportedHeader);
+    data[i] ^= 1;
+  }
+  for (unsigned value = 0; value <= 255; ++value) {
+    if (value == 13)
+      continue;
+    data[5] = static_cast<uint8_t>(value);
+    unknownDisplay(display(data, 19), Ce80DisplayError::LengthMismatch);
+  }
+}
+void unknown_types_and_full_capacity_do_not_inherit_previous_recording() {
+  uint8_t data[256] = {};
+  std::memcpy(data, insta360_fixture::kCe80Timer, 19);
+  for (unsigned type = 0; type <= 255; ++type) {
+    if (type == 0x10)
+      continue;
+    data[3] = static_cast<uint8_t>(type);
+    unknownDisplay(display(data, 19), Ce80DisplayError::None);
+  }
+  data[3] = 2;
+  data[5] = 250;
+  unknownDisplay(display(data, sizeof data), Ce80DisplayError::None);
+  unknownDisplay(display(data, 255), Ce80DisplayError::LengthMismatch);
+}
+void altered_display_controls_and_unrecognized_settings_remain_unknown() {
+  uint8_t data[19];
+  for (size_t index : {size_t(4), size_t(6), size_t(8), size_t(9)}) {
+    std::memcpy(data, insta360_fixture::kCe80Timer, 19);
+    for (unsigned value = 0; value <= 255; ++value) {
+      if (value == insta360_fixture::kCe80Timer[index] || (index == 4 && value == 0x81))
+        continue;
+      data[index] = static_cast<uint8_t>(value);
+      unknownDisplay(display(data, 19), Ce80DisplayError::UnsupportedDisplay);
+    }
+  }
+  std::memcpy(data, insta360_fixture::kCe80Video, sizeof insta360_fixture::kCe80Video);
+  data[10] = '9';
+  unknownDisplay(display(data, sizeof insta360_fixture::kCe80Video),
+                 Ce80DisplayError::UnsupportedDisplay);
+  data[10] = '5';
+  data[9] = 1;
+  unknownDisplay(display(data, sizeof insta360_fixture::kCe80Video),
+                 Ce80DisplayError::UnsupportedDisplay);
+}
+void elapsed_text_is_exact_and_checks_ranges_without_colon_heuristic() {
+  uint8_t data[20] = {};
+  const char *invalid[] = {"x00:00:05", ".00:60:05", ".00:00:60", ".0x:00:05",
+                           ".00;00:05", ".00:00:0x", "........."};
+  for (const auto text : invalid) {
+    std::memcpy(data, insta360_fixture::kCe80Timer, 19);
+    std::memcpy(data + 10, text, 9);
+    unknownDisplay(display(data, 19), Ce80DisplayError::UnsupportedDisplay);
+  }
+  std::memcpy(data, insta360_fixture::kCe80Timer, 19);
+  data[15] = 0;
+  unknownDisplay(display(data, 19), Ce80DisplayError::UnsupportedDisplay);
+  data[15] = '0';
+  data[19] = ':';
+  data[5] = 14;
+  unknownDisplay(display(data, 20), Ce80DisplayError::UnsupportedDisplay);
+  const char *valid[] = {".00:00:00", ".01:02:03", ".99:59:59"};
+  const uint32_t seconds[] = {0, 3723, 359999};
+  for (size_t i = 0; i < 3; ++i) {
+    std::memcpy(data, insta360_fixture::kCe80Timer, 19);
+    std::memcpy(data + 10, valid[i], 9);
+    const auto r = display(data, 19);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Ce80DisplayError::None), static_cast<int>(r.error));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ridesync::RecordingState::Recording),
+                          static_cast<int>(r.recording));
+    TEST_ASSERT_EQUAL_UINT32(seconds[i], r.elapsed_seconds);
+  }
+}
+
+void finite_ce80_display_corpus_rejects_every_proper_prefix_and_opaque_text() {
+  uint8_t data[256];
+  std::memset(data, 0xa5, sizeof data);
+  data[0] = 0xfe;
+  data[1] = 0xef;
+  data[2] = 0xfe;
+  data[3] = 0x10;
+  data[4] = 0x80;
+  data[6] = 1;
+  data[8] = 0x46;
+  data[9] = 1;
+  for (size_t total = 6; total <= sizeof data; ++total) {
+    data[5] = static_cast<uint8_t>(total - 6);
+    unknownDisplay(display(data, total), Ce80DisplayError::UnsupportedDisplay);
+    for (size_t prefix = 0; prefix < total; ++prefix)
+      unknownDisplay(display(data, prefix),
+                     prefix < 6 ? Ce80DisplayError::InvalidSize : Ce80DisplayError::LengthMismatch);
+  }
+  // A valid timer cannot carry state into subsequent malformed/other traffic.
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(ridesync::RecordingState::Recording),
+      static_cast<int>(
+          display(insta360_fixture::kCe80Timer, sizeof insta360_fixture::kCe80Timer).recording));
+  unknownDisplay(display(data, 256), Ce80DisplayError::UnsupportedDisplay);
+}
+
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -216,5 +402,14 @@ int main() {
   RUN_TEST(altered_response_signatures_do_not_expose_partial_envelopes);
   RUN_TEST(every_opaque_command_and_status_byte_remains_unknown);
   RUN_TEST(finite_receive_corpus_handles_each_complete_size_and_rejected_prefix);
+  RUN_TEST(captured_elapsed_display_reports_recording_with_owned_seconds);
+  RUN_TEST(captured_settings_report_stopped_with_distinct_modes);
+  RUN_TEST(remaining_runtime_and_count_do_not_prove_stopped_or_mode);
+  RUN_TEST(display_admission_checks_profile_direction_bounds_and_pointer);
+  RUN_TEST(incomplete_extra_and_wrong_magic_frames_never_expose_state);
+  RUN_TEST(unknown_types_and_full_capacity_do_not_inherit_previous_recording);
+  RUN_TEST(altered_display_controls_and_unrecognized_settings_remain_unknown);
+  RUN_TEST(elapsed_text_is_exact_and_checks_ranges_without_colon_heuristic);
+  RUN_TEST(finite_ce80_display_corpus_rejects_every_proper_prefix_and_opaque_text);
   return UNITY_END();
 }

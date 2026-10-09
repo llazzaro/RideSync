@@ -637,3 +637,32 @@ is for `16cd7ea534fe506a085db4f6660a75885a81ac2d`, including repository Python/n
 formatting, default/BLE/wake/HERO12 firmware, retained GPS audit and all three
 isolated bench builds. [Implementation decisions](superpowers/decisions/2026-10-09-insta360-wake.md)
 retain the review rulings and their costs after execution scratch cleanup.
+
+## CE80 display codec verification — October 10, 2026 (#19)
+
+The approved bounded decoder has eight new behavior tests that failed against
+an empty implementation while the twelve existing codec tests passed. After
+implementation, the focused suite passed20/20; a further finite receive corpus
+covers every supported size6..256 and every proper prefix, bringing it to21/21.
+The actual full codec suite also passed a strict C++11 warning-clean ASan/UBSan
+build. A private replay through the actual decoder matched all305 retained X5
+writes:69 elapsed/Recording,5 settings/Stopped with distinct Video/Photo modes,
+25 Remaining/Unknown and206 opaque/Unknown. Raw transcripts stay outside Git;
+only six reviewed display-only original packets are retained as fixtures.
+
+`scripts/check_pipeline.sh` passed:55 Python tests, all three existing bench
+harnesses,417 native cases and formatting. The pinned default ESP32 build passed
+(RAM37,816 bytes; flash355,869 bytes). These build sizes do not claim runtime
+activation: default camera capabilities remain disabled. Whitespace checks passed.
+One fresh read-only reviewer found no Critical/Important/Minor defects,
+independently matched every fixture to original private bytes and passed all21
+codec tests under sanitizers. No repeat review or firmware upload was performed.
+
+Review scope rulings: actual BLE transport/activation and generation/time,
+freshness, replay, identity, correlation and mode-safe command admission remain
+#3 responsibilities. ACK/query and BE80 state semantics remain unevidenced and
+unimplemented; unsupported settings/models/firmware stay Unknown. Physical
+reliability and exact action timing are not claimed from coarse operator
+annotations. These limitations do not replace the implemented known-field codec
+with a placeholder and do not close production camera support. Passing CI on
+the final source commit is required before closing #19's software acceptance.
