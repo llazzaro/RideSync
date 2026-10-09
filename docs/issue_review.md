@@ -13,7 +13,7 @@ evidence; it does not close a ticket or add acceptance requirements. The
 | #5 | ONE RS needs its own lens/module and recording-path evidence. The newly audited [licensed BE80 reference](insta360_protocol.md#licensed-be80-control-reference-19-5) supplies source-level command candidates for ONE R; it does not qualify ONE RS configurations or authoritative state. |
 | #21 | GO 3S/Action Pod control ownership and usable third-party recording path remain unresolved after #6. No enabled profile can be justified yet. |
 | #13 | The qualified static estimator and approved [runtime/MotionV4 logging](motion_logging.md#implemented-static-motion-logging-v4) integration are implemented and tested synthetically, with exact ABI/stack-frame evidence. Default activation remains disabled. Dynamic lean/gravity-free acceleration and physical accuracy remain unresolved and invalid. |
-| #29, #14 | A newly audited MPL-2.0 Garmin source provides a binary BE80 GPS candidate for ONE R, distinct from CE82 RMC. Numeric edge cases, independent expected fixtures and actual target applicability remain unresolved; see the [source audit](gps_protocol.md#licensed-binary-telemetry-reference-29). Encoder evidence precedes optional forwarding; local logging can proceed independently. |
+| #29, #14 | A newly audited MPL-2.0 Garmin source provides a binary BE80 GPS candidate for ONE R, distinct from CE82 RMC. The field-level audit now resolves source UTC as Unix seconds and identifies missing-field/negative-altitude limits. Numeric edge cases, independent expected fixtures and actual target applicability remain unresolved; see the [source audit](gps_protocol.md#licensed-binary-telemetry-reference-29). Encoder evidence precedes optional forwarding; local logging can proceed independently. |
 | #22 | The staged physical camera matrix remains open. Limited X5 probe results do not establish recording, production orchestration, other models or mixed-radio capacity. |
 | #30 | Actual supply/enclosure/mount selection and finite installed-hardware observations are still required. |
 | #31 | The declared integrated bench/controlled-ride campaign requires qualified enabled hardware and actual observations; synthetic software tests cannot complete it. |
@@ -21,7 +21,7 @@ evidence; it does not close a ticket or add acceptance requirements. The
 
 Evidence: [X5 pairing and shutter trial](hardware-results/2026-10-09-x5-pairing.md),
 [X5 wake](hardware-results/2026-10-09-x5-wake.md),
-[static estimator](motion_estimator.md), and the proposed
+[implemented static motion integration](motion_logging.md#implemented-static-motion-logging-v4), and its approved
 [motion runtime/logging spec](superpowers/specs/2026-10-09-motion-logging-design.md).
 
 ## Original review and subsequent scope changes

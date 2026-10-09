@@ -71,6 +71,44 @@ need independent expectations before enabling a profile. #29/#14 remain open;
 this finding supplies a licensed research path, not a CE82 encoder or metadata
 qualification.
 
+### Field-level evidence reconciliation — 2026-10-09
+
+Read the same pinned source again for #29. Garmin's primary API documentation
+resolves the time input: [`Time.Moment.value()`](https://developer.garmin.com/connect-iq/api-docs/Toybox/Time/Moment.html#value-instance_function)
+returns UTC seconds since 1970-01-01. In `sendPosition`, `info.when` supplies that
+Moment and `encodeNumber(...UINT32...)` writes four bytes at offsets 18..21.
+This establishes the source's timestamp convention; it is not a camera capture
+or proof of a camera's interpretation. The zero bytes at 22..25 must remain
+opaque; they cannot be claimed as a supported fractional-time field.
+
+| Packet offsets (inclusive) | Source-backed representation | Evidence limit |
+|---|---|---|
+| 0..17 | Fixed 18-byte video prefix, with byte 10 replaced by sendCMD sequence | Other header constants have no established semantics |
+| 18..21 | Little-endian uint32 UTC epoch seconds | Source/API convention; actual target interpretation unverified |
+| 22..28 | Fixed seven-byte filler | Includes unexplained constants; no optional-field flags inferred |
+| 29..36, 37 | Absolute latitude in degrees, little-endian binary64; ASCII N/S | Source chooses N for zero; no signed-coordinate field |
+| 38..45, 46 | Absolute longitude in degrees, little-endian binary64; ASCII E/W | Source chooses E for zero |
+| 47..54 | Nonnegative speed in m/s, little-endian binary64 | Source invents zero when speed is absent; not an availability encoding |
+| 55..62 | Heading in degrees, little-endian binary64 | Input is Garmin heading in radians; body yaw/stationary heading and GNSS course are not interchangeable claims |
+| 63..70 | Absolute altitude in metres, little-endian binary64 | Negative-altitude sign is discarded; signed altitude is not evidenced |
+
+Garmin's [`Position.Info`](https://developer.garmin.com/connect-iq/api-docs/Toybox/Position/Info.html)
+documents nullable fields. Missing speed, heading, altitude or UTC therefore
+cannot be represented honestly by silently inserting zero. No presence bits or
+shorter video variant were established. A prospective strict encoder must refuse
+missing required fields and unsupported negative altitude rather than invent a
+wire convention. These are proposed consumer policies, not observed protocol
+requirements. Sequence belongs to the caller's complete command stream: the
+source increments 1..254 at byte 10 before splitting into 20-byte writes. A pure
+encoder must not infer delivery success or consume a transport sequence itself.
+
+The helper first narrows each scalar to binary32 before constructing its binary64
+representation. Normal finite values have a source-derived numeric path; its
+zero/subnormal/NaN/Inf cases are not evidence for sensible wire values. Independent
+expected fixtures must distinguish canonical IEEE encoding policies from exact
+reproduction of the helper's mistakes. None of this enables a camera profile or
+completes #29: implementation, fixtures and verified error behavior remain absent.
+
 ## Local ride logger scope
 
 Local GPS logging is a core project goal. An external IMU will add raw motion
