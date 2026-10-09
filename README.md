@@ -15,7 +15,7 @@ Native tests cover camera/group state machines, button and LED behavior, session
 time, A7670E GNSS parsing/transport, bounded GPS/raw-IMU storage, configuration
 persistence, health supervision, the shared BLE central, the HERO12 adapter and
 correlated camera-event logging, opt-in static MotionV4 telemetry and the pure
-source-backed BE80 GPS encoder.
+source-backed BE80 GPS encoder and pure recording-request codecs.
 The retained ESP32 builds link the real BLE host and HERO12 composition. These
 checks establish software behavior and build compatibility; they do not prove
 camera or sensor operation on the motorcycle.

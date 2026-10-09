@@ -17,7 +17,7 @@ No official code or images are copied.
 | [theserialhobbyist/insta360_m5StickC_remote](https://github.com/theserialhobbyist/insta360_m5StickC_remote/tree/6ea50ed8a2b276cb2461b06de97d8a801386a309) | `6ea50ed8a2b276cb2461b06de97d8a801386a309` | MIT | Reference only; no code copied |
 | [xaionaro-go/insta360ctl](https://github.com/xaionaro-go/insta360ctl/tree/f94193ce03c5af0921a9992bfd1af6bd946150d0) | `f94193ce03c5af0921a9992bfd1af6bd946150d0` | No license detected (do not copy) | Reference only; no code copied |
 | [TheAngryRaven/insta360-ble-gps-spec](https://github.com/TheAngryRaven/insta360-ble-gps-spec/tree/7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199) | `7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199` | No license detected (do not copy) | Reference only; no code copied |
-| [arsfabula/Insta360-Remote-CIQ](https://github.com/arsfabula/Insta360-Remote-CIQ/tree/39c51b3aa7c453227831d811355899371bbb8b94) | `39c51b3aa7c453227831d811355899371bbb8b94` (inspected 2026-10-09) | MPL-2.0; root and BLE Barrel license files read | Binary BE80 GPS encoder and synthetic wire fixtures under MPL-2.0; control remains research only; see [audit](gps_protocol.md#licensed-binary-telemetry-reference-29) |
+| [arsfabula/Insta360-Remote-CIQ](https://github.com/arsfabula/Insta360-Remote-CIQ/tree/39c51b3aa7c453227831d811355899371bbb8b94) | `39c51b3aa7c453227831d811355899371bbb8b94` (inspected 2026-10-09) | MPL-2.0; root and BLE Barrel license files read | Binary BE80 GPS and pure recording-request codecs/fixtures under MPL-2.0; control responses remain research only; see [audit](gps_protocol.md#licensed-binary-telemetry-reference-29) |
 | [Xinyuan-LilyGO/LilyGo-Modem-Series](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/tree/e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00) | `e8d8b82a23f324ef2ac1a24efe1c3b6cbabcca00` | MIT | Reference only; no code copied |
 | [Insta360 GO Series: Action Pod Connection](https://onlinemanual.insta360.com/go3s/en-us/operating_tutorials/connect/actionpod) | Accessed 2026-10-07 | Official vendor support page; content reference only | GO 3S/Pod pairing prerequisites, control and stated Bluetooth range; no GATT protocol |
 | [Insta360: Using GO 3S and Action Pod](https://onlinemanual.insta360.com/go3s/en-us/camera/basicuse/go3s_actionpod) | Accessed 2026-10-07 | Official vendor support page; content reference only | Describes button/control behavior when docked and remote Bluetooth control when separated |
@@ -296,3 +296,16 @@ Packet coordinates and times are synthetic, independently calculated values.
 Validation, Gregorian arithmetic and canonical IEEE zero/subnormal conversion
 are RideSync policy, not camera acceptance evidence. No Garmin radio/controller
 implementation, queue or assets have been imported.
+
+## Pure BE80 recording request file licensing (#19)
+
+The request literals derive from `cmdStartRec`/`cmdStopRec` and sequence handling
+from `sendCMD` in `arsfabula/Insta360-Remote-CIQ`, `BLE Barrel/BLEBarrel.mc`,
+commit `39c51b3aa7c453227831d811355899371bbb8b94`. Attribution and MPL-2.0
+file notices are preserved in `include/protocol/insta360_be80_codec.h`,
+`src/protocol/insta360_be80_codec.cpp`, and
+`test/fixtures/insta360/be80_recording.h`. The full pinned license remains in
+`licenses/insta360-remote-ciq-MPL-2.0.txt`. Existing CE82 implementation and
+independently authored contract tests retain their existing licenses.
+No Garmin BLE/controller/state implementation or unrelated assets were copied.
+Source-derived fixtures are not camera captures.
