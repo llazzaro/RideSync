@@ -624,3 +624,9 @@ Final local native401/401, retained/default SDK builds, formatting and whitespac
 passed after the fixes. Final Python55/55 also passed locally. The final commit CI link is recorded
 below. The optional local project-health heuristic is skipped when
 its CLI is absent; this is not reported as a performed health check.
+
+Final code [CI verification](https://github.com/llazzaro/RideSync/actions/runs/37973836363)
+is for `16cd7ea534fe506a085db4f6660a75885a81ac2d`, including repository Python/native,
+formatting, default/BLE/wake/HERO12 firmware, retained GPS audit and all three
+isolated bench builds. [Implementation decisions](superpowers/decisions/2026-10-09-insta360-wake.md)
+retain the review rulings and their costs after execution scratch cleanup.
