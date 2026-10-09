@@ -1,8 +1,9 @@
 # Insta360 BLE research
 
-Research baseline: 2026-10-07; bench observations updated 2026-10-08. Limited
-X5-associated BE80 discovery and ESP32 CE80 advertising observations exist;
-camera-side remote pairing and recording control remain unverified.
+Research baseline: 2026-10-07; bench observations updated 2026-10-09. Limited
+X5-associated BE80 discovery, CE80 pairing/subscription and one owner-confirmed
+wake have been observed with isolated diagnostics. Recording control and
+authoritative state decoding remain unverified; X5 firmware is unrecorded.
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
@@ -104,7 +105,8 @@ The [GPS specification](https://github.com/TheAngryRaven/insta360-ble-gps-spec)
 reports iBeacon-like manufacturer advertisements containing a camera serial
 identifier, followed by a camera connection to the remote. It reports X4
 observations, not our target models. Wake identifier derivation, byte order,
-advertisement timing, shutdown window and pairing prerequisites remain untested.
+advertisement timing, shutdown window and pairing prerequisites remain
+unqualified across target models; the limited X5 wake observation is below.
 Do not assume a BLE MAC is interchangeable with a wake serial identifier.
 
 The [pinned MIT M5 fork's `camera.h`](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/camera.h)
