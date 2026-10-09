@@ -539,3 +539,11 @@ helper bodies are unavailable, and compiler integrity-abort is explicitly
 excluded. Neither this nor the compiler frame list measures runtime stack or
 latency. Camera capabilities/activation remain unchanged. CI discovers all
 native/Python tests and audits the retained ELF after its existing build.
+
+[Final full CI](https://github.com/llazzaro/RideSync/actions/runs/37926210431)
+passed on `c52d5bc93dcb315e817bf643f909e1257ed0e12d`: Python47/47, native364/364,
+formatting, all pinned default/BLE/HERO12 and bench builds, and retained GPS audit.
+A fresh independent reviewer found no encoder correctness defects. The audit
+indirect-tail-jump gap was reproduced RED, fixed GREEN, then verified by the
+full suite/CI. #29 is closed for software; forwarding and all physical gates
+remain with their original issues. No minor review finding was deferred.

@@ -1,6 +1,6 @@
 # Source-backed pure Insta360 GPS encoder (#29)
 
-Date: 2026-10-09. Status: written spec approved for implementation planning.
+Date: 2026-10-09. Status: implemented; #29 software acceptance complete.
 The user approved the proposed pure 71-byte encoder approach. This document
 makes its implementation contract reviewable. Work stays directly on main.
 
@@ -198,7 +198,8 @@ software gates pass; #14 and physical acceptance remain separate and open.
 
 ## Handoff
 
-The user approved this written contract on 2026-10-09. The concrete
-[implementation plan](../plans/2026-10-09-insta360-gps-encoder.md) awaits review
-before implementation. Preserve the selected native/inline execution, direct-main
-work and unchanged evidence. No product implementation was performed for this spec.
+The user approved this written contract on 2026-10-09. The
+[implementation plan](../plans/2026-10-09-insta360-gps-encoder.md) was approved
+and executed inline on main. Independent review and final CI passed at c52d5bc;
+#29 is closed for software. Camera forwarding and physical acceptance remain
+separate as specified above.
