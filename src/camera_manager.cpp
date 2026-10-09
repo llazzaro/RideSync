@@ -237,13 +237,15 @@ void CameraManager::tick() {
       fail(i, CameraError::Timeout);
   }
 }
-bool CameraManager::event(const Event &e) {
+bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionEvent,
+                                  uint32_t &intent_id, Operation &operation) {
   if (e.peer >= size() || sealed(e.peer))
     return false;
-  auto &p = peers_[e.peer];
+  peer = &peers_[e.peer];
+  auto &p = *peer;
   if (!p.state.token.valid())
     return false;
-  const bool connectionEvent =
+  connectionEvent =
       e.kind == EventKind::Disconnected || e.kind == EventKind::RecordingObserved;
   if (e.token.connection != p.state.token.connection ||
       (!connectionEvent && e.token.operation != p.state.token.operation))
@@ -264,50 +266,81 @@ bool CameraManager::event(const Event &e) {
   // A command observation may legitimately arrive during the group's Confirm
   // phase after Completed retired the active operation. Its unchanged token
   // still belongs to that completed intent until a new attempt or cancellation.
-  const uint32_t intent_id =
+  intent_id =
       !connectionEvent && (p.active || e.kind == EventKind::CommandRecordingObserved)
           ? p.active_intent_id
           : 0;
-  const Operation operation = p.current;
-  if (e.kind == EventKind::Completed) {
-    if (!p.active)
-      return false;
-    if (p.current == Operation::Connect)
-      p.state.capabilities = e.capabilities;
-    p.completed_observation_open = p.current != Operation::Connect;
-    p.completed_observation_deadline_ms = clock_.now() + kCompletedObservationMs;
-    p.active = false;
-    p.state.lifecycle = Lifecycle::Ready;
-    p.state.error = CameraError::None;
-    next(e.peer);
-  } else if (e.kind == EventKind::RecordingObserved ||
-             e.kind == EventKind::CommandRecordingObserved) {
-    if (l == Lifecycle::Connecting)
-      return false;
-    p.state.observed = e.recording;
-    p.state.last_observed_ms = clock_.now();
-    p.state.has_observation = true;
-  } else if (e.kind == EventKind::Disconnected) {
-    if (p.active)
-      transport_.cancel(e.peer, p.state.token);
-    Token::advance(p.state.token.connection);
-    Token::advance(p.state.token.operation);
-    p.active = false;
-    p.completed_observation_open = false;
-    p.queued = 0;
-    p.state.lifecycle = Lifecycle::Idle;
-    p.state.error = CameraError::Transport;
-    p.state.observed = RecordingState::Unknown;
-    p.state.has_observation = false;
-    p.state.capabilities = Capabilities{};
-  } else if (e.kind == EventKind::Failed) {
-    if (!p.active)
-      return false;
-    fail(e.peer, CameraError::Transport);
-  } else
+  operation = p.current;
+  return true;
+}
+
+bool CameraManager::handleCompleted(size_t peer, const Event &e, Peer &p) {
+  if (!p.active)
     return false;
-  p.state.last_seen_ms = clock_.now();
-  p.state.has_last_seen = true;
+  if (p.current == Operation::Connect)
+    p.state.capabilities = e.capabilities;
+  p.completed_observation_open = p.current != Operation::Connect;
+  p.completed_observation_deadline_ms = clock_.now() + kCompletedObservationMs;
+  p.active = false;
+  p.state.lifecycle = Lifecycle::Ready;
+  p.state.error = CameraError::None;
+  next(peer);
+  return true;
+}
+
+bool CameraManager::handleObservation(const Event &e, Peer &p) {
+  if (p.state.lifecycle == Lifecycle::Connecting)
+    return false;
+  p.state.observed = e.recording;
+  p.state.last_observed_ms = clock_.now();
+  p.state.has_observation = true;
+  return true;
+}
+
+bool CameraManager::handleDisconnected(size_t peer, Peer &p) {
+  if (p.active)
+    transport_.cancel(peer, p.state.token);
+  Token::advance(p.state.token.connection);
+  Token::advance(p.state.token.operation);
+  p.active = false;
+  p.completed_observation_open = false;
+  p.queued = 0;
+  p.state.lifecycle = Lifecycle::Idle;
+  p.state.error = CameraError::Transport;
+  p.state.observed = RecordingState::Unknown;
+  p.state.has_observation = false;
+  p.state.capabilities = Capabilities{};
+  return true;
+}
+
+bool CameraManager::handleFailed(size_t peer, Peer &p) {
+  if (!p.active)
+    return false;
+  fail(peer, CameraError::Transport);
+  return true;
+}
+
+bool CameraManager::event(const Event &e) {
+  Peer *peer = nullptr;
+  bool connectionEvent = false;
+  uint32_t intent_id = 0;
+  Operation operation = Operation::Connect;
+  if (!validateEvent(e, peer, connectionEvent, intent_id, operation))
+    return false;
+  bool accepted = false;
+  if (e.kind == EventKind::Completed)
+    accepted = handleCompleted(e.peer, e, *peer);
+  else if (e.kind == EventKind::RecordingObserved ||
+           e.kind == EventKind::CommandRecordingObserved)
+    accepted = handleObservation(e, *peer);
+  else if (e.kind == EventKind::Disconnected)
+    accepted = handleDisconnected(e.peer, *peer);
+  else if (e.kind == EventKind::Failed)
+    accepted = handleFailed(e.peer, *peer);
+  if (!accepted)
+    return false;
+  peer->state.last_seen_ms = clock_.now();
+  peer->state.has_last_seen = true;
   if (audit_ && e.kind != EventKind::Failed)
     audit_->accepted(e, operation, intent_id);
   return true;
