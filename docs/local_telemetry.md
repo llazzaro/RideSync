@@ -133,3 +133,15 @@ qualification, storage power-loss durability, BLE capacity, camera-storm latency
 queue loss rates, watchdog, soak and ride acceptance remain open under #22/#31
 and component hardware tickets. No physical device operations or flashing are
 part of these software checks.
+
+
+## Static motion integration
+
+`motion_enabled=false` preserves CameraV3. Requested motion selects
+[MotionV4](motion_logging.md#implemented-static-motion-logging-v4) even when refused.
+Supply `motion_config`, `motion_snapshot_max_age_ms` and an optional caller-owned
+static reference source through the final constructor argument. Conversion runs
+only in admission; no sensor-worker estimator or extra logger exists. Status
+separates expiring current output from copied historical rows. Source and resource
+lifetime extends through `canRelease()`. Dynamic lean and gravity subtraction
+remain unsupported; motion does not activate hardware in default firmware.

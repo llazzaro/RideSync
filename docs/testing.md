@@ -501,3 +501,15 @@ beforeAdvance 32, control observe 272, handlebar status 896, GPS tick 256, SD/BM
 wrappers 32 each, health/config tasks 64 each, setup 192 and loop 208 bytes.
 These are individual emitted frames, not nested call-chain sums or runtime
 high-water measurements. The physical acceptance boundaries above remain open.
+
+
+### MotionV4 integration evidence
+
+The approved static integration has native route/age/reference/queue tests,
+independent strict CSV parsing and a concrete ESP32 runtime-to-sink fixture.
+See [motion logging](motion_logging.md#measured-software-resources-2026-10-09)
+for commands, exact before/after ABI sizes and compiler frames. The current
+supervised application service frame is 672 bytes plus its 32-byte wrapper;
+older measurements above predate motion status growth. No hardware accuracy,
+throughput or stack high-water result is implied; #13 dynamic scope and #31
+reference measurements remain open.

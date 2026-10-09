@@ -67,7 +67,7 @@ int main() {
             harness.write_text(main)
             executable = Path(folder) / 'test'
             subprocess.run(['c++', '-std=c++11', '-pthread', '-I', str(ROOT / 'include'),
-                            str(cpp), str(harness), '-o', str(executable)], check=True,
+                            str(cpp), str(ROOT / 'src/motion_estimator.cpp'), str(harness), '-o', str(executable)], check=True,
                            capture_output=True)
             result = subprocess.run([str(executable)], capture_output=True, timeout=10)
             self.assertEqual(0, result.returncode, result.stderr.decode())

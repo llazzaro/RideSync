@@ -42,6 +42,37 @@ def _motion(row):
             raise ValueError('nonfinite motion number')
         return parsed
 
+    # V4 retains typed raw evidence, including coefficients consumed by conversion.
+    def signed(field, lo, hi):
+        value = row[field]
+        if not re.fullmatch(r'-?[0-9]+', value) or not lo <= int(value) <= hi:
+            raise ValueError('invalid signed raw integer '+field)
+    for field in ('batch_sequence frame_sequence byte_position sensor_epoch generation sensor_id '
+                  'mount_id calibration_id accel_range_mg gyro_range_mdps accel_scale_numerator '
+                  'accel_scale_denominator gyro_scale_numerator gyro_scale_denominator '
+                  'accel_odr_millihz gyro_odr_millihz accel_filter gyro_filter calibration_method '
+                  'event_count accepted dropped rejected lost written flushed').split():
+        integer(field)
+    for field in ('sensor_state','mount_state','calibration_state',
+                  'accel_offset_compensation','gyro_offset_compensation'):
+        integer(field,0,2)
+    integer('timing_flags',0,15)
+    integer('event_code',0,9)
+    integer('event_length',0,4)
+    integer('event_count_lower_bound',0,1)
+    for field in ('receipt_millis32','drain_start_millis32','drain_end_millis32'):
+        if row[field]: integer(field)
+    if row['sensor_time_ticks24']: integer('sensor_time_ticks24',0,0xffffff)
+    if row['calibration_utc_ms']: signed('calibration_utc_ms',-(1<<63),(1<<63)-1)
+    if row['calibration_temperature_millic']:
+        signed('calibration_temperature_millic',-(1<<31),(1<<31)-1)
+    for prefix in ('accel','gyro'):
+        for axis in ('x','y','z'):
+            offset=prefix+'_offset_'+axis
+            if row[offset]: signed(offset,-32768,32767)
+            for ratio in ('numerator','denominator'):
+                field=prefix+'_gain_'+axis+'_'+ratio
+                if row[field]: integer(field,1)
     state = integer('motion_state', 0, 3)
     flags = MOTION[24:28]
     if any(row[f] not in ('0', '1') for f in flags) or any(row[f] != '0' for f in flags[2:]):
@@ -84,15 +115,18 @@ def _motion(row):
                                ('accel_offset_compensation','motion_accel_compensation'),
                                ('gyro_offset_compensation','motion_gyro_compensation')):
             if row[raw] != row[qualified]: raise ValueError('motion raw context')
-        if not int(row['sensor_id']) or not int(row['generation']) or                 row['calibration_offsets_known'] != '1' or row['calibration_gains_known'] != '1':
+        if not integer('sensor_id',1) or not integer('generation',1) or \
+                row['calibration_offsets_known'] != '1' or row['calibration_gains_known'] != '1':
             raise ValueError('missing raw calibration')
         for f in ('accel_scale_numerator','accel_scale_denominator','gyro_scale_numerator','gyro_scale_denominator'):
-            if not int(row[f]): raise ValueError('motion scale')
+            integer(f,1)
         if int(row['timing_flags']) & 8 or any(abs(int(row[p+'_'+axis])) >= 32767
                                               for p in ('accel','gyro') for axis in ('x','y','z')):
             raise ValueError('saturated motion')
     if tilt:
-        if not measured or row['motion_reference_stationary'] != '1' or                 row['receipt_known'] != '1' or int(row['timing_flags']) & 7 or                 not int(row['motion_reference_declaration']):
+        if not measured or row['motion_reference_stationary'] != '1' or \
+                row['receipt_known'] != '1' or int(row['timing_flags']) & 7 or \
+                not int(row['motion_reference_declaration']):
             raise ValueError('invalid static reference')
         for raw, reference in (('session_id','motion_reference_session_id'),
                                ('generation','motion_reference_generation'),

@@ -1,10 +1,10 @@
 # Qualified static motion logging in the existing runtime
 
-Date: 2026-10-09. Status: approved by the user for implementation planning.
-The user approved this specification in chat on October 9. The implementation
-plan still requires review and an execution-method selection before product
-implementation. Work stays on `main`; this document creates no hardware
-qualification or ticket-completion claim.
+Date: 2026-10-09. Status: user-approved; software implementation verified.
+The user approved this specification and inline implementation plan in chat.
+Work stays on `main`; this document creates no hardware qualification or
+ticket-completion claim. [Implementation evidence](../../motion_logging.md#measured-software-resources-2026-10-09)
+records synthetic tests, measured ABI sizes and compiler frames.
 
 ## Intent and scope
 

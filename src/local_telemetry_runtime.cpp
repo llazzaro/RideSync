@@ -110,6 +110,8 @@ void LocalTelemetryRuntime::service() {
       active_ = new (&memory_) Active(raw_, sd_.sink(), uart_, adapter_, manager_, group_,
                                       status_.identity.id, config_, power_, source_);
       auto &s = active_->session;
+      if (motion_revoked_)
+        s.admission().revokeMotion();
       const auto t = s.clock().snapshot();
       if (!s.storage().configValid() || active_->modem.snapshot(t).state == ModemState::Disabled) {
         status_.fault = TelemetryFault::Configuration;
@@ -215,6 +217,7 @@ void LocalTelemetryRuntime::requestStop() {
       status_.phase == TelemetryPhase::Stopping)
     return;
   status_.phase = TelemetryPhase::Stopping;
+  revokeMotion();
   if (control_)
     control_->revoke();
   if (status_.camera == CameraAdmission::Admitted) {
@@ -250,8 +253,8 @@ void LocalTelemetryRuntime::currentAdmission(bool cameras, bool safe_mode) {
     if (active_ && bound_ && config_.cameras_qualified)
       adapter_.stop();
   }
-  if (safe_mode && active_)
-    active_->session.admission().revokeMotion();
+  if (safe_mode)
+    revokeMotion();
   current_safe_mode_ = safe_mode;
   status_.safe_mode = safe_mode;
 }
@@ -259,8 +262,8 @@ void LocalTelemetryRuntime::supervision(uint8_t stalls, uint8_t refused, bool fa
   status_.worker_stalls = stalls;
   status_.worker_refused = refused;
   status_.supervision_fault = fault;
-  if (active_ && (fault || ((stalls | refused) & (1u << static_cast<unsigned>(Worker::Imu)))))
-    active_->session.admission().revokeMotion();
+  if (fault || ((stalls | refused) & (1u << static_cast<unsigned>(Worker::Imu))))
+    revokeMotion();
 }
 void LocalTelemetryRuntime::detachControl(HandlebarControl &c) {
   if (control_ == &c && canRelease())
@@ -291,6 +294,14 @@ void LocalTelemetryRuntime::observe() {
   }
   if (control_)
     control_->observe(status_);
+}
+void LocalTelemetryRuntime::revokeMotion() {
+  if (status_.motion_admission == MotionAdmission::Enabled) {
+    status_.motion_admission = MotionAdmission::Revoked;
+    motion_revoked_ = true;
+  }
+  if (active_)
+    active_->session.admission().revokeMotion();
 }
 void LocalTelemetryRuntime::withdrawMotionReference() {
   if (active_)

@@ -145,6 +145,8 @@ private:
   bool started_ = false, sd_started_ = false, bound_ = false, imu_started_ = false;
   bool imu_finished_ = false, logged_ = false, anchored_ = false, servicing_ = false;
   bool current_camera_ = true, current_safe_mode_ = false, session_stop_requested_ = false;
+  bool motion_revoked_ = false;
+  void revokeMotion();
   uint32_t startup_ms_ = 0;
   uint64_t logged_ms_ = 0, anchored_receipt_ = 0;
   void observe();

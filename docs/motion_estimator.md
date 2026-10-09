@@ -1,10 +1,10 @@
 # Experimental static motion core
 
 `MotionEstimator` consumes the existing `ImuEvidence` raw-count contract. It is
-fixed-size, performs no allocation, and is not yet connected to application
-telemetry. This implements the feasible static portion of the
-[estimator plan](motion_estimator_plan.md); #13 remains open for integration and
-resolution of its dynamic lean/gravity-free acceleration goal. Physical accuracy
+fixed-size, performs no allocation, and is connected to opt-in serialized
+[MotionV4 telemetry](motion_logging.md#implemented-static-motion-logging-v4).
+This implements the feasible static portion of the
+[estimator plan](motion_estimator_plan.md); #13 remains open for resolution of its dynamic lean/gravity-free acceleration goal. Physical accuracy
 is unmeasured; independent reference measurements belong to #31.
 
 ## Frames and calibration
@@ -77,8 +77,9 @@ as measured zero attitude.
 does not infer external stationarity, propagate attitude using fabricated sample
 epochs, subtract gravity during motion, or claim that unit-norm low-rate force is
 gravity. Motorcycle turning and sustained acceleration remain ambiguous with the
-current evidence. Telemetry/configuration/runtime integration and any dynamic
-estimator require separate implementation within #13's remaining scope.
+current evidence. Static telemetry/configuration/runtime integration is implemented
+with default-off commissioning; any dynamic estimator remains within #13's
+unresolved scope.
 
 ## Verification
 
