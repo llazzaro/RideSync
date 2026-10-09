@@ -107,7 +107,8 @@ A subsequent fresh-boot attempt reconnected/subscribed without a shutter
 submission. The later [three-cycle session](hardware-results/2026-10-09-x5-pairing.md#three-remote-recording-cycles--owner-confirmed)
 completed three camera-observed remote Start/Stop cycles, with the last Stop
 submitted after reconnect. An expired-window request was refused locally; no
-automatic shutter replay occurred. Incoming bytes remain unclassified. Keep NVS refusal guards;
+automatic shutter replay occurred. Incoming display framing is now classified by the published-capture comparison below;
+production state decoding remains unimplemented. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Licensed BE80 control reference (#19, #5)
@@ -234,6 +235,43 @@ concurrently mutated caller buffers; those remain outside this pure complete-fra
 contract, not silently enabled capabilities. Repository and firmware acceptance
 were verified separately from that focused review.
 
+## Published CE80 capture compared with retained X5 data (#19)
+
+On October 10, the owner requested online capture research rather than more
+repeated camera runs. [TheAngryRaven's X4 capture report](https://github.com/TheAngryRaven/insta360-ble-gps-spec/blob/7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199/README.md#61-camera-state-including-recording)
+describes passive-sniffer observations, six-byte framing, display message type
+`0x10`, four display-control bytes and an elapsed-time text format. The report
+warns that type `0x02` is not a reliable recording flag. Its repository contains
+only the report, not a downloadable pcap or license; no source code, prose,
+external capture or packet fixture is copied into RideSync.
+
+Independent comparison against our two private X5 transcripts found all 305
+writes have the documented prefix and exact `6 + byte[5]` frame length. All 99
+`0x10` messages have four control bytes followed by text at byte 10. Strict
+elapsed text `.HH:MM:SS` accounts for 69 messages (42 in the first run, elapsed
+0–41 s; 27 in the follow-up, elapsed 0–11 s, including duplicates). Both elapsed
+sequences are nondecreasing. Four messages contain video settings; one contains
+photo settings, consistent with the completed manual sequence. Eighteen contain
+remaining-runtime text; seven contain a numeric remaining count. Remaining
+runtime/count is not promoted into a stopped observation.
+
+This explains the formerly opaque length groups: eleven-byte writes are mainly
+type `0x02`; fifteen-byte writes are display runtime; nineteen-byte writes include
+both elapsed timers and photo settings. A length/colon search discards these
+field distinctions. We now have externally documented framing and independently
+matched X5 display evidence, sufficient to work on a strict typed display decoder
+from retained data without another generic capture run. Its model qualification,
+connection freshness, command correlation and mode-safe control still require
+explicit implementation; silence/disconnect remains Unknown. A display parser
+is distinct from a dedicated recording-state query.
+
+The separate [insta360ctl protocol report](https://github.com/xaionaro-go/insta360ctl/blob/f94193ce03c5af0921a9992bfd1af6bd946150d0/doc/protocol.md)
+identifies BE80 capture-status command candidates but documents model-specific
+GO 3 deviations and a different transport. No license is declared in the
+inspected tree. It does not establish a CE80 query or X5 response mapping, and
+its code/protobuf definitions are not copied. The selected next step stays on
+the already evidenced CE80 route. See the [local capture record](hardware-results/2026-10-10-x5-receive-capture.md).
+
 ## Wake and identification
 
 The [GPS specification](https://github.com/TheAngryRaven/insta360-ble-gps-spec)
@@ -324,7 +362,9 @@ name match, accepted BLE write or timer heuristic into confirmed recording.
 Repeat qualification for ONE RS and GO 3S; neither inherits X5 results. Wake
 advertisements need their own serial/timing tests. The first X5-associated BE80
 discovery/notification observation and subsequent CE80 pairing are linked above;
-annotated recording-state captures are still missing.
+annotated manual recording/mode captures are now retained, with explicit timing
+uncertainty. Use the published-capture comparison above before requesting another
+physical run; repeat only a named unresolved check after software integration.
 
 Use the pinned NimBLE transport/routing and queue ownership in
 [ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).

@@ -343,3 +343,18 @@ private NVS/RAM and SMP test excerpts retain the upstream Apache2 notices in
 NVS, resolver and transport boundaries, including behavior before the SDK's
 remote-feature/version-deferred CONNECT notification. They do not establish
 physical camera behavior or eliminate the need for a qualified recovery adapter.
+
+### CE80 published-capture comparison — October 10, 2026
+
+- [TheAngryRaven/insta360-ble-gps-spec](https://github.com/TheAngryRaven/insta360-ble-gps-spec/tree/7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199),
+  pin `7964f1133e5d0f2c7eb73aaaaf5d6ebdd2127199`: author-reported passive X4
+  capture and decoded examples. Tree has README only; no licensed implementation
+  or downloadable pcap. Used as protocol-fact research, independently compared
+  with retained private X5 writes; no external code, prose or fixtures copied.
+- [xaionaro-go/insta360ctl](https://github.com/xaionaro-go/insta360ctl/tree/f94193ce03c5af0921a9992bfd1af6bd946150d0),
+  pin `f94193ce03c5af0921a9992bfd1af6bd946150d0`: inspected protocol documentation
+  distinguishes CE80 remote and BE80 direct routes, with model-specific
+  notification deviations. No license declared; implementation/schema not copied
+  and no X5 capability enabled from its command table.
+
+See [comparison and local evidence](insta360_protocol.md#published-ce80-capture-compared-with-retained-x5-data-19).
