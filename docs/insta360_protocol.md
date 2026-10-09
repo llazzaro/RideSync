@@ -2,8 +2,11 @@
 
 Research baseline: 2026-10-07; bench observations updated 2026-10-09. Limited
 X5-associated BE80 discovery, CE80 pairing/subscription and one owner-confirmed
-wake have been observed with isolated diagnostics. Recording control and
-authoritative state decoding remain unverified; X5 firmware is unrecorded.
+wake have been observed with isolated diagnostics. A card-ready retry on
+owner-reported X5 firmware 1.11.10 established one remote recording start, a
+playable clip after manual stop, and a subsequent reconnect. Remote Stop,
+three complete remote REC/STOP cycles and authoritative state decoding remain
+unverified.
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
@@ -78,8 +81,9 @@ This pure primitive has no BLE delivery or automatic repeat and is not an
 idempotent Start/Stop API. No receive parser, ACK, sequence field or recording
 observation is invented from these opaque bytes. Explicit Start/Stop and state
 decoding remain unsupported pending licensed source facts or annotated evidence.
-Issue #19 remains open: the shutter primitive and bench submission do not
-establish successful recording or authoritative state. Unknown incoming data
+Issue #19 remains open: the shutter primitive itself and SDK submission do not
+establish authoritative state. The later card-ready trial established a
+camera-observed recording start, without decoding the incoming state packets. Unknown incoming data
 stays unclassified; private bounded captures must not be promoted into state
 from a colon or a missing timer.
 
@@ -95,8 +99,12 @@ returned SDK status 0, without replay. SDK status 0 does not prove camera delive
 The owner answered yes about an indicator/timer but also reported that the X5
 had no SD card and could not record. Recording
 remains unclassified; no completed recording or saved media was established.
-The next REC/STOP test needs a card in the camera, recorded firmware and
-camera-observed results. Keep NVS refusal guards;
+That no-card observation was superseded by the [card-ready retry](hardware-results/2026-10-09-x5-pairing.md#card-ready-recording-retry--firmware-11110):
+the owner reported firmware 1.11.10, confirmed video mode/stopped before one
+shutter submission, then a running timer and a playable clip after manual stop.
+A subsequent fresh-boot attempt reconnected/subscribed without a shutter
+submission. Remote Stop and three complete remote REC/STOP cycles remain
+outstanding. Incoming bytes remain unclassified. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Licensed BE80 control reference (#19, #5)
