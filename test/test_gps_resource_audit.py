@@ -10,6 +10,10 @@ spec.loader.exec_module(audit)
 
 
 class ResourceAuditTests(unittest.TestCase):
+    def test_parse_direct_call_target(self):
+        self.assertEqual(audit.parse_direct_call_target(
+            '400d0000: 0008e0 call8 400d0010 <memcpy>'), 'memcpy')
+
     def test_literal_loaded_call_resolves_to_actual_target(self):
         dump = '''400d0000 <encoder>:
 400d0000: 000081 l32r a8, 400c0000 <literal>
