@@ -344,10 +344,93 @@ void v4_refuses_nonfinite_dynamic_and_inconsistent_presence() {
   TEST_ASSERT_EQUAL_UINT32(4, s.kindHealth(RecordKind::ImuSample).rejected);
   TEST_ASSERT_EQUAL_UINT32(1, s.kindHealth(RecordKind::ImuSample).written);
 }
+struct ReferenceSource : StaticMotionReferenceSource {
+  unsigned calls = 0;
+  uint32_t declaration = 0;
+  bool stationary = true, reuse = false;
+  StaticMotionReference referenceFor(const ImuEvidence &e) override {
+    ++calls;
+    StaticMotionReference r;
+    r.externally_stationary = stationary;
+    r.session_id = e.session_id;
+    r.config_generation = e.config.generation;
+    r.batch_sequence = e.batch_sequence;
+    r.declaration = reuse ? declaration : ++declaration;
+    return r;
+  }
+};
+MotionAdmissionConfig motionOptions(MotionInputRoute route = MotionInputRoute::Inbox) {
+  MotionAdmissionConfig m;
+  m.requested = m.imu_qualified = true;
+  m.estimator = motion_fixture::config();
+  m.snapshot_max_age_ms = 100;
+  m.route = route;
+  return m;
+}
+void motion_route_current_and_declaration_lifetime() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV4});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  ReferenceSource source;
+  TelemetryAdmission a(clock, s, inbox, nullptr, motionOptions(), &source);
+  ImuBatch b;
+  b.count = 1;
+  b.records[0] = motion_fixture::sample(42, 0);
+  TEST_ASSERT_TRUE(inbox.publish(b));
+  a.beginMotionPass();
+  TEST_ASSERT_EQUAL_UINT8(1, a.tick());
+  auto current = a.motionSnapshot(0);
+  TEST_ASSERT_TRUE(current.current);
+  TEST_ASSERT_TRUE(current.estimate.static_tilt_valid);
+  TEST_ASSERT_FLOAT_WITHIN(.0001, 9.80665, current.estimate.specific_force_mps2.z);
+  TEST_ASSERT_FALSE(a.motionSnapshot(101).current);
+  a.withdrawMotionReference();
+  source.reuse = true;
+  TEST_ASSERT_TRUE(inbox.publish(b));
+  a.tick();
+  TEST_ASSERT_TRUE(a.motionSnapshot(0).current);
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).estimate.static_tilt_valid);
+  TEST_ASSERT_TRUE(inbox.publish(b));
+  TEST_ASSERT_TRUE(a.event(b.records[0]));
+  TEST_ASSERT_EQUAL_INT(MotionAdmission::Revoked, a.motionAdmission());
+  a.tick();
+  TEST_ASSERT_EQUAL_UINT32(2, source.calls);
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  drain(s);
+  TEST_ASSERT_EQUAL_UINT32(4, s.kindHealth(RecordKind::ImuSample).accepted);
+}
+void motion_direct_timing_and_stop() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV4});
+  TestClock raw;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  TelemetryAdmission a(clock, s, inbox, nullptr, motionOptions(MotionInputRoute::Direct));
+  auto e = motion_fixture::sample(42, 0);
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_TRUE(a.motionSnapshot(0).current);
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).estimate.static_tilt_valid);
+  a.beginMotionPass();
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  e.receipt_known = false;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  e.receipt_known = true;
+  e.timing_flags = 1;
+  TEST_ASSERT_TRUE(a.event(e));
+  TEST_ASSERT_FALSE(a.motionSnapshot(0).current);
+  a.requestStop();
+  TEST_ASSERT_EQUAL_INT(MotionAdmission::Revoked, a.motionAdmission());
+  drain(s);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(motion_route_current_and_declaration_lifetime);
+  RUN_TEST(motion_direct_timing_and_stop);
   RUN_TEST(v4_copies_paired_evidence_and_preserves_raw_rows);
   RUN_TEST(v4_refuses_nonfinite_dynamic_and_inconsistent_presence);
   RUN_TEST(copied_config_old_anchor_and_kind_health);

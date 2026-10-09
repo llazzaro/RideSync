@@ -1,5 +1,6 @@
 #pragma once
 #include "camera_manager.h"
+#include "motion_admission.h"
 #include "storage.h"
 #include <atomic>
 namespace ridesync {
@@ -49,8 +50,8 @@ class TelemetryAdmission {
 public:
   static constexpr uint8_t kQuota = 2;
   TelemetryAdmission(SessionClock &clock, Storage &storage, ImuInbox &inbox,
-                     CameraInbox *camera = nullptr)
-      : clock_(clock), storage_(storage), inbox_(inbox), camera_(camera) {}
+                     CameraInbox *camera = nullptr, const MotionAdmissionConfig &motion = {},
+                     StaticMotionReferenceSource *source = nullptr);
   // Prefer this overload with the same owner snapshot used by Modem::snapshot.
   bool gps(const RecordTimestamp &timestamp, const ModemSnapshot &sample);
   bool gps(const ModemSnapshot &sample);
@@ -58,12 +59,26 @@ public:
   uint8_t tick();
   void requestStop();
   bool stopped() const { return stopped_; }
+  void beginMotionPass();
+  void withdrawMotionReference();
+  void revokeMotion();
+  void refuseMotion();
+  MotionAdmission motionAdmission() const { return motion_state_; }
+  MotionCurrentSnapshot motionSnapshot(uint32_t now) const;
 
 private:
   SessionClock &clock_;
   Storage &storage_;
   ImuInbox &inbox_;
   CameraInbox *camera_;
+  const MotionAdmissionConfig motion_options_;
+  MotionEstimator estimator_;
+  StaticMotionReferenceSource *source_;
+  MotionAdmission motion_state_ = MotionAdmission::Disabled;
+  MotionCurrentSnapshot current_;
+  uint32_t admitted_raw_ = 0;
+  bool imu_admission_started_ = false;
+  bool admitImu(const ImuEvidence &, MotionInputRoute, bool reserve);
   uint8_t index_ = 0;
   bool camera_turn_ = false;
   uint32_t camera_dropped_seen_ = 0, camera_rejected_seen_ = 0;
