@@ -2,7 +2,7 @@
 
 ## Remaining work — 2026-10-09
 
-GitHub currently has 12 open issues. This reconciliation reuses the retained
+GitHub currently has 11 open issues. This reconciliation reuses the retained
 evidence; it does not close a ticket or add acceptance requirements. The
 [finite acceptance policy](acceptance_policy.md) remains authoritative.
 
@@ -13,7 +13,7 @@ evidence; it does not close a ticket or add acceptance requirements. The
 | #5 | ONE RS needs its own lens/module and recording-path evidence. The newly audited [licensed BE80 reference](insta360_protocol.md#licensed-be80-control-reference-19-5) supplies source-level command candidates for ONE R; it does not qualify ONE RS configurations or authoritative state. |
 | #21 | GO 3S/Action Pod control ownership and usable third-party recording path remain unresolved after #6. No enabled profile can be justified yet. |
 | #13 | The qualified static estimator and approved [runtime/MotionV4 logging](motion_logging.md#implemented-static-motion-logging-v4) integration are implemented and tested synthetically, with exact ABI/stack-frame evidence. Default activation remains disabled. Dynamic lean/gravity-free acceleration and physical accuracy remain unresolved and invalid. |
-| #29, #14 | The licensed source-backed [pure BE80 encoder](gps_protocol.md#implemented-pure-encoder-29) is implemented with independent packets, strict UTC/freshness/numeric errors and retained-target evidence. The [approved plan](superpowers/plans/2026-10-09-insta360-gps-encoder.md) is executing its final CI/review gates. No camera capability is enabled. #14 still requires a real forwarding profile and #22 owns stored metadata qualification. |
+| #14 (encoder #29 complete) | The licensed source-backed [pure BE80 encoder](gps_protocol.md#implemented-pure-encoder-29) is implemented with independent packets, strict UTC/freshness/numeric errors and retained-target evidence. The [approved plan](superpowers/plans/2026-10-09-insta360-gps-encoder.md) passed fresh review and [final CI](https://github.com/llazzaro/RideSync/actions/runs/37926210431); #29 is closed for its software scope. No camera capability is enabled. #14 still requires a real forwarding profile and #22 owns stored metadata qualification. |
 | #22 | The staged physical camera matrix remains open. Limited X5 probe results do not establish recording, production orchestration, other models or mixed-radio capacity. |
 | #30 | Actual supply/enclosure/mount selection and finite installed-hardware observations are still required. |
 | #31 | The declared integrated bench/controlled-ride campaign requires qualified enabled hardware and actual observations; synthetic software tests cannot complete it. |

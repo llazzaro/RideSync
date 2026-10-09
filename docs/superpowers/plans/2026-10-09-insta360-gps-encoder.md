@@ -1,6 +1,6 @@
 # Pure Insta360 GPS Encoder Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Preserve the user's selected native/inline execution using executing-plans.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking. Preserve the user's selected native/inline execution using executing-plans.
 
 **Goal:** Complete #29's software boundary with an independently verified, source-backed 71-byte GPS encoder.
 
@@ -76,7 +76,7 @@ GpsEncodingResult encodeGps(const GpsEncoderConfig&, const RecordTimestamp&,
 
 **Files:** Create the public header, source, Unity test, packet fixture and license listed above. Update `docs/sources.md` with exact file coverage and pinned provenance in this task.
 
-- [ ] Write a valid input helper and full literal packet test before the public API exists. Use member assignments because C++11 structs with member initializers are not aggregates:
+- [x] Write a valid input helper and full literal packet test before the public API exists. Use member assignments because C++11 structs with member initializers are not aggregates:
 
 ```cpp
 struct Inputs {
@@ -136,8 +136,8 @@ void expectError(const Inputs& i, uint8_t sequence,
 }
 ```
 
-- [ ] Run `.venv/bin/pio test -e native -f test_insta360_gps_encoder`; expect missing-header/API failure. Register each Unity test in `main()` with `RUN_TEST`; use empty `setUp`/`tearDown`.
-- [ ] Add parameterized cases using `validInputs`/`expectError`, resetting inputs per case. Each row below is a required test with the named expected error; assertions also check zero payload. Commit no incomplete success path.
+- [x] Run `.venv/bin/pio test -e native -f test_insta360_gps_encoder`; expect missing-header/API failure. Register each Unity test in `main()` with `RUN_TEST`; use empty `setUp`/`tearDown`.
+- [x] Add parameterized cases using `validInputs`/`expectError`, resetting inputs per case. Each row below is a required test with the named expected error; assertions also check zero payload. Commit no incomplete success path.
 
 | Mutation / input | Expected |
 |---|---|
@@ -180,8 +180,8 @@ void course_rounding_is_rejected() {
 }
 ```
 
-- [ ] Implement the public types and encoder. Validate in the spec's eight stages, returning a fresh zero-initialized result on failure. Use local Gregorian arithmetic: start with 10957 days from 1970 to 2000, sum years before the selected year, then months before selected month and day-1; leap predicate `y%4==0 && (y%100!=0 || y%400==0)`. Accumulate epoch in uint64, check uint32 bound. Validate calendar before indexing month lengths.
-- [ ] Serialize only after all validation succeeds. Require `sizeof(float)==4`, `sizeof(double)==8`, IEC559 and radix 2/digits 24/53. Use these private helpers (no public shared-clock refactor):
+- [x] Implement the public types and encoder. Validate in the spec's eight stages, returning a fresh zero-initialized result on failure. Use local Gregorian arithmetic: start with 10957 days from 1970 to 2000, sum years before the selected year, then months before selected month and day-1; leap predicate `y%4==0 && (y%100!=0 || y%400==0)`. Accumulate epoch in uint64, check uint32 bound. Validate calendar before indexing month lengths.
+- [x] Serialize only after all validation succeeds. Require `sizeof(float)==4`, `sizeof(double)==8`, IEC559 and radix 2/digits 24/53. Use these private helpers (no public shared-clock refactor):
 
 ```cpp
 bool narrowScalar(double value, double& wire) {
@@ -203,9 +203,9 @@ void writeDouble(uint8_t* out, double value) {
 
 Coordinates narrow their absolute magnitude after range checks; hemisphere uses original `<0` comparison. Narrow all five scalars and reject promoted course >=360. Copy the specified 18-byte prefix, insert sequence at 10, epoch at 18, filler at 22..28, then write scalars/hemispheres at the exact spec offsets. Set error None/size71 last.
 
-- [ ] Attribute the pinned reference in header/source/derived fixture, copy its full MPL-2.0 text into the listed license file, and document ownership/coverage. Independently written arithmetic tests use synthetic data; no camera captures are claimed.
-- [ ] Run focused Unity tests and format changed C++ with `.venv/bin/clang-format -i`; run `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python scripts/check_format.py` and `git diff --check`. Review tests against every table row and the spec; fix failures before committing.
-- [ ] Commit and push the encoder/tests/license/source documentation as `feat(gps): add source-backed pure BE80 encoder` on main.
+- [x] Attribute the pinned reference in header/source/derived fixture, copy its full MPL-2.0 text into the listed license file, and document ownership/coverage. Independently written arithmetic tests use synthetic data; no camera captures are claimed.
+- [x] Run focused Unity tests and format changed C++ with `.venv/bin/clang-format -i`; run `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python scripts/check_format.py` and `git diff --check`. Review tests against every table row and the spec; fix failures before committing.
+- [x] Commit and push the encoder/tests/license/source documentation as `feat(gps): add source-backed pure BE80 encoder` on main.
 
 ### Task 2: Check actual C++ packets with an independent Python oracle
 
@@ -213,8 +213,8 @@ Coordinates narrow their absolute magnitude after range checks; hemisphere uses 
 
 **Files:** Create the probe and Python oracle listed in the file map; derived expected packet data carries attribution. No production changes except correction of a demonstrated defect.
 
-- [ ] Write Python tests that compile the probe in `TemporaryDirectory` with `c++ -std=c++11 -Iinclude test/fixtures/insta360/gps_encoder_probe.cpp src/insta360_gps_encoder.cpp -o <temporary executable>` using `subprocess.run(check=True)`. Expected initial failure: probe missing. In the probe, explicitly construct the same copied input values as Task 1; never include its test helper or expected-packet fixture.
-- [ ] Implement the independent decoder and arithmetic oracle:
+- [x] Write Python tests that compile the probe in `TemporaryDirectory` with `c++ -std=c++11 -Iinclude test/fixtures/insta360/gps_encoder_probe.cpp src/insta360_gps_encoder.cpp -o <temporary executable>` using `subprocess.run(check=True)`. Expected initial failure: probe missing. In the probe, explicitly construct the same copied input values as Task 1; never include its test helper or expected-packet fixture.
+- [x] Implement the independent decoder and arithmetic oracle:
 
 ```python
 import calendar
@@ -244,7 +244,7 @@ assert expected_scalar(2.0**-149) == struct.pack("<d", 2.0**-149)
 assert expected_scalar(0.0) != struct.pack("<d", 2.0**-127)
 ```
 
-- [ ] Add concrete oracle assertions to a `unittest.TestCase`, with `self.probe` set to the compiled executable path in `setUpClass`:
+- [x] Add concrete oracle assertions to a `unittest.TestCase`, with `self.probe` set to the compiled executable path in `setUpClass`:
 
 ```python
 def test_zero_and_packet_bounds(self):
@@ -259,8 +259,8 @@ def test_zero_and_packet_bounds(self):
             decode_packet(invalid)
 ```
 
-- [ ] Implement probe inputs: ordinary=(1,-2,3,90,4), south-east=(-1,2,3,90,4), zero=(-0,-0,-0,-0,-0), subnormal=(1,-2,2^-149,90,2^-149), precision=(1.1,-2.2,3.3,90.1,4.4). For each actual packet, check complete bytes built independently using literal prefix/filler, Python epoch and scalar functions, and explicit hemisphere bytes. Check 70/72-byte decoder failures and original packet after copied-byte mutation. Label fixtures synthetic/source-derived, never captured.
-- [ ] Run `.venv/bin/python -m unittest discover -s test -p test_insta360_gps_oracle.py -v`; run Task 1 focused Unity suite if production changed. Expect all pass; commit/push as `test(gps): independently verify emitted BE80 packets`.
+- [x] Implement probe inputs: ordinary=(1,-2,3,90,4), south-east=(-1,2,3,90,4), zero=(-0,-0,-0,-0,-0), subnormal=(1,-2,2^-149,90,2^-149), precision=(1.1,-2.2,3.3,90.1,4.4). For each actual packet, check complete bytes built independently using literal prefix/filler, Python epoch and scalar functions, and explicit hemisphere bytes. Check 70/72-byte decoder failures and original packet after copied-byte mutation. Label fixtures synthetic/source-derived, never captured.
+- [x] Run `.venv/bin/python -m unittest discover -s test -p test_insta360_gps_oracle.py -v`; run Task 1 focused Unity suite if production changed. Expect all pass; commit/push as `test(gps): independently verify emitted BE80 packets`.
 
 ### Task 3: Retain target code, document evidence and complete software acceptance
 
@@ -268,8 +268,8 @@ def test_zero_and_packet_bounds(self):
 
 **Files:** Modify source, `platformio.ini`, CI and five documentation files listed in the file map. Create the resource script.
 
-- [ ] Write the audit to require the anchor and demangled encoder symbol in the retained ELF, resolve its referenced encoder function, reject allocator/driver/IO calls reachable from encoder helpers, and report the encoder/helper `.su` individual frames (reject dynamic/unbounded markers or missing entries). Record ELF/section/symbol evidence separately from physical claims. Use `subprocess.run` argument arrays; reuse the existing `scripts/probe_motion_resources.py` tool-path conventions. Run against the current retained image: expect missing encoder/anchor failure.
-- [ ] Add a constant, externally visible function-pointer anchor in the encoder translation unit:
+- [x] Write the audit to require the anchor and demangled encoder symbol in the retained ELF, resolve its referenced encoder function, reject allocator/driver/IO calls reachable from encoder helpers, and report the encoder/helper `.su` individual frames (reject dynamic/unbounded markers or missing entries). Record ELF/section/symbol evidence separately from physical claims. Use `subprocess.run` argument arrays; reuse the existing `scripts/probe_motion_resources.py` tool-path conventions. Run against the current retained image: expect missing encoder/anchor failure.
+- [x] Add a constant, externally visible function-pointer anchor in the encoder translation unit:
 
 ```cpp
 extern "C" {
@@ -281,14 +281,37 @@ extern ridesync::insta360::GpsEncodingResult (*const ridesync_insta360_gps_encod
 
 Add `-Wl,-u,ridesync_insta360_gps_encoder_backend` only to `hero12_adapter_compile`, which already enables `-fstack-usage`. No application call site is added. Confirm target return ABI by emitted disassembly, result storage and successful link; report observed sizes rather than assuming host padding equals target padding.
 
-- [ ] Build `.venv/bin/pio run -e lilygo_t_a7670e_r2` and `.venv/bin/pio run -e hero12_adapter_compile`. Run resource audit on `.pio/build/hero12_adapter_compile/firmware.elf` and its build directory with the pinned Xtensa nm/objdump under `$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/`. Confirm anchor references actual encoder and camera activation/capability declarations remain unchanged.
-- [ ] Add an explicit CI resource-audit step after retained HERO12 build using those same arguments. Existing Python discovery/native jobs already discover Tasks 1/2. Do not change dependency pins.
-- [ ] Update docs with exact source/functions/offsets, UTC and numeric policy, fixed-result/errors, license coverage, test commands/results, retained symbols/observed frames and experimental profile limits. Remove obsolete statements that no real encoding path exists; preserve unsupported photo/accuracy/signed-altitude/optional variants and all physical gates. Update #29 software status in issue review while keeping #14 separate.
-- [ ] Run focused Python/Unity tests, C++ format and diff checks. Push the verified commit `build(gps): retain and audit pure encoder on ESP32`; wait for the full existing main CI run and fix any new failure. No hardware result is inferred.
-- [ ] Once full CI passes, update #29 with concise evidence links and close its software outcome. This goal authorizes issue maintenance; do not message other people. Leave #14/#22/#30/#31 and other hardware issues open. Report completed software work, main commit, tests and remaining physical limits to the user.
+- [x] Build `.venv/bin/pio run -e lilygo_t_a7670e_r2` and `.venv/bin/pio run -e hero12_adapter_compile`. Run resource audit on `.pio/build/hero12_adapter_compile/firmware.elf` and its build directory with the pinned Xtensa nm/objdump under `$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/`. Confirm anchor references actual encoder and camera activation/capability declarations remain unchanged.
+- [x] Add an explicit CI resource-audit step after retained HERO12 build using those same arguments. Existing Python discovery/native jobs already discover Tasks 1/2. Do not change dependency pins.
+- [x] Update docs with exact source/functions/offsets, UTC and numeric policy, fixed-result/errors, license coverage, test commands/results, retained symbols/observed frames and experimental profile limits. Remove obsolete statements that no real encoding path exists; preserve unsupported photo/accuracy/signed-altitude/optional variants and all physical gates. Update #29 software status in issue review while keeping #14 separate.
+- [x] Run focused Python/Unity tests, C++ format and diff checks. Push the verified commit `build(gps): retain and audit pure encoder on ESP32`; wait for the full existing main CI run and fix any new failure. No hardware result is inferred.
+- [x] Once full CI passes, update #29 with concise evidence links and close its software outcome. This goal authorizes issue maintenance; do not message other people. Leave #14/#22/#30/#31 and other hardware issues open. Report completed software work, main commit, tests and remaining physical limits to the user.
 
 ## Plan self-review and execution handoff
 
 Spec coverage: Task 1 owns API, all validation stages, exact packet, numerical policy and license; Task 2 owns independent actual-output arithmetic; Task 3 owns retained target proof, CI, documentation and software acceptance. All five Review Focus conditions have owning tests/checks. No shared parser/calendar refactor or new runtime scope is needed. Public names/signatures are identical throughout; source fixtures remain explicitly synthetic.
 
 Written spec approved on 2026-10-09. The user approved this implementation plan on 2026-10-09. Preserve native/inline execution, using executing-plans, and continue direct-main commits. Implementation progress is recorded in the execution ledger and task commits.
+
+## Completed execution — 2026-10-09
+
+Implemented inline directly on main in `7f14629`, `8fd1045`, `b787328`,
+then reviewer-driven audit fix `c52d5bc`. Fresh independent review found no
+encoder correctness defects; the indirect-tail-jump audit gap was regraded
+Important, reproduced RED, fixed GREEN and verified without a second review.
+No minor finding was deferred. [Full CI](https://github.com/llazzaro/RideSync/actions/runs/37926210431)
+passed: Python47/47, native364/364, formatting, all pinned firmware/bench builds
+and retained GPS audit. #29 was updated with evidence and closed; #14/#22/#30/#31
+remain open. Documentation-only completion synchronization reuses this evidence.
+
+Execution rulings (including limitations accepted during review):
+
+- Ruling: Work directly on main and push completed verified tasks — explicit user authorization and AGENTS.md override skill isolation/push defaults — cost if wrong: shared-main changes, mitigated by verification and reversible commits.
+- Task 3: Ruling: retained pre-anchor ELF was absent locally — built existing retained configuration before running RED audit — cost if wrong: one unnecessary compile, no hardware access.
+- Task 3: Ruling: pinned Xtensa long calls use callx8 after l32r for static targets — audit resolves linked literal addresses and rejects unresolved/clobbered register calls; pure ROM memcpy/memset are trusted byte operations — cost if wrong: audit could miss a toolchain dependency; regression tests and fail-closed targets mitigate it.
+- Task 3: Ruling: compiler stack protector adds __stack_chk_fail — preserve protection and report it as exceptional integrity-abort leaf, not normal encoding IO; audit rejects unknown ordinary dependencies — cost if wrong: compile audit overstates purity, mitigated by explicitly documenting excluded abort path.
+- Task 3: Ruling: pinned arithmetic helpers have absolute ROM symbols with no ELF bodies — trust only explicit arithmetic/byte allowlist AND nm type A; report exact trusted names — cost if wrong: ROM semantics are not measured by this build audit.
+- Task 3: Ruling: close #29 only after fresh review plus CI — preserve acceptance truth although plan lists closure as Task3 step — cost if wrong: issue closure delayed, no reduced verification.
+- Final: Ruling: BLE forwarding/camera/storage acceptance remains #14/#22 — encoder cannot establish delivery — cost if wrong: camera capability must be separately requalified.
+- Final: Ruling: installed accuracy/latency/physical stack remains hardware acceptance — compiled frames are individual static facts — cost if wrong: actual runtime budget remains unknown.
+- Final: Ruling: ROM helper internals/integrity abort retain explicit trust/exclusion — ordinary emitted-code audit cannot inspect ROM bodies — cost if wrong: ROM numerical behavior needs physical qualification.
