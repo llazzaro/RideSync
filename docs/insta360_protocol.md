@@ -1,8 +1,9 @@
 # Insta360 BLE research
 
-Research baseline: 2026-10-07; bench observations updated 2026-10-08. Limited
-X5-associated BE80 discovery and ESP32 CE80 advertising observations exist;
-camera-side remote pairing and recording control remain unverified.
+Research baseline: 2026-10-07; bench observations updated 2026-10-09. Limited
+X5-associated BE80 discovery, CE80 pairing/subscription and one owner-confirmed
+wake have been observed with isolated diagnostics. Recording control and
+authoritative state decoding remain unverified; X5 firmware is unrecorded.
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
@@ -98,13 +99,33 @@ The next REC/STOP test needs a card in the camera, recorded firmware and
 camera-observed results. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
+## Licensed BE80 control reference (#19, #5)
+
+The October 9 audit found another licensed direct-control reference:
+[Garmin BLEBarrel](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/BLE%20Barrel/BLEBarrel.mc),
+pinned with its MPL-2.0 licenses in [sources](sources.md). It declares distinct
+18-byte video-start and stop packets, changes a one-byte sequence at offset 10,
+and writes BE81 with notifications on BE82. This supplies source-level command
+expectations separately from the CE82 shutter toggle. No code or fixture is
+copied and no RideSync profile enables this route.
+
+Its receive callback reads a command byte and byte 17 from the first fragment,
+ignores later fragments, and can label stopped after command/service errors.
+Those decisions do not establish fresh authoritative recording state for
+RideSync. Full framing, response-versus-observation identity and error semantics
+still need independent validation. The source's ONE R 360-mod testing report
+does not qualify ONE RS modules, X5 or GO 3S; no actual camera firmware is
+recorded in this audit. Keep reset/disconnect/errors Unknown and do not
+automatically replay an ambiguous command. #19/#5 remain open.
+
 ## Wake and identification
 
 The [GPS specification](https://github.com/TheAngryRaven/insta360-ble-gps-spec)
 reports iBeacon-like manufacturer advertisements containing a camera serial
 identifier, followed by a camera connection to the remote. It reports X4
 observations, not our target models. Wake identifier derivation, byte order,
-advertisement timing, shutdown window and pairing prerequisites remain untested.
+advertisement timing, shutdown window and pairing prerequisites remain
+unqualified across target models; the limited X5 wake observation is below.
 Do not assume a BLE MAC is interchangeable with a wake serial identifier.
 
 The [pinned MIT M5 fork's `camera.h`](https://github.com/marcelpallares/insta360-m5stick-remote/blob/c76e140396de8b2404cdd36d17cf0d1a251a9dcc/camera.h)
@@ -172,7 +193,7 @@ Missing timer traffic must become unknown in RideSync. See pinned file links in
 | Path | ESP32 role / direction | Current evidence | Gate before production |
 |---|---|---|---|
 | CE80 remote | Peripheral; camera writes CE81, ESP32 notifies CE82 | MIT community examples, shutter event | Per-model pairing/subscription capture, state semantics, addressed delivery |
-| BE80 direct | Central; ESP32 writes BE81, camera notifies BE82 | Unlicensed research reference only | Independently captured GATT, authorization, framing, explicit REC/STOP and state |
+| BE80 direct | Central; ESP32 writes BE81, camera notifies BE82 | MPL-2.0 Garmin ONE R source plus unlicensed research references | Target applicability, GATT/authorization, complete framing, REC/STOP responses and authoritative state |
 
 For X5 first, record model/firmware, address type, GATT UUID/properties, MTU,
 security/bonding, CCCD writes, CE83 reads and handshake order with timestamps.
@@ -187,5 +208,7 @@ annotated recording-state captures are still missing.
 
 Use the pinned NimBLE transport/routing and queue ownership in
 [ADR-001](architecture.md#adr-001-ble-qualification-stack-and-roles-2026-10-07).
-No code or packet implementation from the unlicensed direct-control/GPS sources
+The newly audited licensed Garmin source is a separate reference, not a
+replacement for the selected target's qualification. No code or packet
+implementation from the unlicensed direct-control/GPS sources
 may be copied; their reports only identify questions for independent captures.
