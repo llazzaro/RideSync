@@ -8,7 +8,7 @@ from telemetry_parser import parse
 ROOT = Path(__file__).resolve().parents[1]
 
 SOURCE = r'''
-#include "storage.h"
+#include "telemetry_admission.h"
 #include "camera_manager.h"
 #include "test/fixtures/motion/evidence.h"
 #include <cassert>
@@ -22,9 +22,18 @@ struct S : StorageSink {
  size_t write(const char *p,size_t n) override { assert(n<=256); bytes.append(p,n); return n; }
  bool flush() override {return true;} void close() override {}
 };
+struct Reference : StaticMotionReferenceSource {
+ StaticMotionReference referenceFor(const ImuEvidence &e) override {
+  StaticMotionReference r; r.externally_stationary=true; r.session_id=e.session_id;
+  r.config_generation=e.config.generation; r.batch_sequence=e.batch_sequence; r.declaration=1; return r;
+ }
+};
 int main() {
  S sink; Storage s(sink,{42,"motion-fixture","synthetic",2,4,StorageFormat::MotionV4});
  C raw; SessionClock clock(raw,42,1000); auto t=clock.snapshot();
+ ImuInbox inbox; Reference source; MotionAdmissionConfig options;
+ options.requested=options.imu_qualified=true; options.estimator=motion_fixture::config();options.snapshot_max_age_ms=100;
+ TelemetryAdmission admission(clock,s,inbox,nullptr,options,&source);
  for (unsigned state=0; state<4; ++state) {
    auto e=motion_fixture::sample(42,0);
    MotionEvidence m; m.state=static_cast<MotionAdmission>(state);
@@ -35,7 +44,9 @@ int main() {
      m.estimate.measurements_valid=m.estimate.static_tilt_valid=true;
      m.estimate.specific_force_mps2.z=9.80665f;
    }
-   assert(s.enqueueImu(t,e,false,m));
+   if(state==2) {
+     assert(admission.event(e)); admission.withdrawMotionReference(); admission.revokeMotion();
+   } else assert(s.enqueueImu(t,e,false,m));
  }
  auto e=motion_fixture::sample(42,0);e.kind=RecordKind::ImuConfig;
  MotionEvidence m; m.state=MotionAdmission::Enabled; m.config=motion_fixture::config();m.snapshot_max_age_ms=100;
@@ -57,7 +68,7 @@ class MotionDiskTest(unittest.TestCase):
         p = Path(cls.directory.name)
         (p/'fixture.cpp').write_text(SOURCE)
         subprocess.run(['c++','-std=c++11','-I'+str(ROOT/'include'),'-I'+str(ROOT),str(p/'fixture.cpp'),
-                        str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),str(ROOT/'src/session_clock.cpp'),'-o',str(p/'fixture')],check=True)
+                        str(ROOT/'src/telemetry_admission.cpp'),str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),str(ROOT/'src/session_clock.cpp'),'-o',str(p/'fixture')],check=True)
         cls.data = subprocess.check_output([str(p/'fixture')],text=True)
 
     @classmethod

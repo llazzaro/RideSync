@@ -73,6 +73,83 @@ bool CameraInbox::publish(const CameraEvidence &e) {
 }
 void CameraInbox::finish() { finished_.store(true, std::memory_order_release); }
 bool CameraInbox::stopRequested() const { return stop_.load(std::memory_order_acquire); }
+TelemetryAdmission::TelemetryAdmission(SessionClock &clock, Storage &storage, ImuInbox &inbox,
+                                       CameraInbox *camera, const MotionAdmissionConfig &motion,
+                                       StaticMotionReferenceSource *source)
+    : clock_(clock), storage_(storage), inbox_(inbox), camera_(camera), motion_options_(motion),
+      estimator_(motion.estimator), source_(source) {
+  if (motion.requested)
+    motion_state_ = motion.imu_qualified && MotionEstimator::configValid(motion.estimator) &&
+                            motion.snapshot_max_age_ms && motion.snapshot_max_age_ms <= 60000
+                        ? MotionAdmission::Enabled
+                        : MotionAdmission::Refused;
+}
+void TelemetryAdmission::beginMotionPass() { current_ = {}; }
+void TelemetryAdmission::withdrawMotionReference() {
+  current_ = {};
+  estimator_.reset();
+}
+void TelemetryAdmission::revokeMotion() {
+  if (motion_state_ == MotionAdmission::Enabled)
+    motion_state_ = MotionAdmission::Revoked;
+  withdrawMotionReference();
+}
+void TelemetryAdmission::refuseMotion() {
+  if (!imu_admission_started_ && motion_state_ == MotionAdmission::Enabled)
+    motion_state_ = MotionAdmission::Refused;
+  withdrawMotionReference();
+}
+MotionCurrentSnapshot TelemetryAdmission::motionSnapshot(uint32_t now) const {
+  if (!current_.current || motion_state_ != MotionAdmission::Enabled)
+    return {};
+  const uint64_t elapsed = current_.admitted_at.monotonic_ms + uint32_t(now - admitted_raw_);
+  const uint32_t age = now - current_.source.receipt_millis32;
+  if (elapsed > SessionClock::kMaxDurationMs || age > motion_options_.snapshot_max_age_ms ||
+      age > elapsed)
+    return {};
+  return current_;
+}
+bool TelemetryAdmission::admitImu(const ImuEvidence &e, MotionInputRoute route, bool reserve) {
+  if (e.kind > RecordKind::Gps && e.kind < RecordKind::Camera) {
+    imu_admission_started_ = true;
+    if (route != motion_options_.route)
+      revokeMotion();
+  }
+  uint32_t raw;
+  const auto timestamp = clock_.snapshotWithRaw(raw);
+  MotionEvidence motion;
+  motion.state = motion_state_;
+  withdrawMotionReference();
+  if (motion_state_ == MotionAdmission::Enabled) {
+    motion.config = motion_options_.estimator;
+    motion.snapshot_max_age_ms = motion_options_.snapshot_max_age_ms;
+    if (e.kind == RecordKind::ImuSample) {
+      if (source_)
+        motion.reference = source_->referenceFor(e);
+      motion.estimate = estimator_.update(e, motion.reference);
+    }
+  }
+  const bool accepted = storage_.enqueueImu(timestamp, e, reserve, motion);
+  const uint32_t age = raw - e.receipt_millis32;
+  if (accepted && motion.estimate.measurements_valid && e.receipt_known && !(e.timing_flags & 7) &&
+      timestamp.monotonic_quality == MonotonicQuality::Valid &&
+      age <= motion_options_.snapshot_max_age_ms && age <= timestamp.monotonic_ms) {
+    current_.current = true;
+    current_.estimate = motion.estimate;
+    current_.admitted_at = timestamp;
+    current_.source.session_id = e.session_id;
+    current_.source.generation = e.config.generation;
+    current_.source.batch = e.batch_sequence;
+    current_.source.frame = e.frame_sequence;
+    current_.source.byte_position = e.byte_position;
+    current_.source.sensor_epoch = e.sensor_epoch;
+    current_.source.receipt_millis32 = e.receipt_millis32;
+    current_.source.receipt_known = e.receipt_known;
+    current_.source.timing_flags = e.timing_flags;
+    admitted_raw_ = raw;
+  }
+  return accepted;
+}
 bool TelemetryAdmission::gps(const ModemSnapshot &sample) { return gps(clock_.snapshot(), sample); }
 bool TelemetryAdmission::gps(const RecordTimestamp &timestamp, const ModemSnapshot &sample) {
   if (stopping_) {
@@ -86,7 +163,7 @@ bool TelemetryAdmission::event(const ImuEvidence &evidence) {
     storage_.drop(evidence.kind);
     return false;
   }
-  return storage_.enqueueImu(clock_.snapshot(), evidence, evidence.kind == RecordKind::ImuSample);
+  return admitImu(evidence, MotionInputRoute::Direct, evidence.kind == RecordKind::ImuSample);
 }
 uint8_t TelemetryAdmission::tick() {
   if (stopped_)
@@ -119,7 +196,7 @@ uint8_t TelemetryAdmission::tick() {
     const uint32_t r = inbox_.read_.load(std::memory_order_relaxed);
     if (r != inbox_.write_.load(std::memory_order_acquire)) {
       const auto &batch = inbox_.slots_[r % ImuInbox::kCapacity];
-      storage_.enqueueImu(clock_.snapshot(), batch.records[index_], true);
+      admitImu(batch.records[index_], MotionInputRoute::Inbox, true);
       if (++index_ == batch.count) {
         index_ = 0;
         inbox_.read_.store(r + 1, std::memory_order_release);
@@ -161,6 +238,7 @@ uint8_t TelemetryAdmission::tick() {
   return processed;
 }
 void TelemetryAdmission::requestStop() {
+  revokeMotion();
   stopping_ = true;
   inbox_.stop_.store(true, std::memory_order_release);
   if (camera_)
