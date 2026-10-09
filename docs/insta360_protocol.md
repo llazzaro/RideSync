@@ -4,9 +4,10 @@ Research baseline: 2026-10-07; bench observations updated 2026-10-09. Limited
 X5-associated BE80 discovery, CE80 pairing/subscription and one owner-confirmed
 wake have been observed with isolated diagnostics. A card-ready retry on
 owner-reported X5 firmware 1.11.10 established one remote recording start, a
-playable clip after manual stop, and a subsequent reconnect. Remote Stop,
-three complete remote REC/STOP cycles and authoritative state decoding remain
-unverified.
+playable clip after manual stop. A later probe session completed three
+camera-observed remote Start/Stop cycles and reconnect. The production X5
+adapter and authoritative state decoding remain unimplemented; camera-dependent
+follow-up checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
@@ -103,8 +104,10 @@ That no-card observation was superseded by the [card-ready retry](hardware-resul
 the owner reported firmware 1.11.10, confirmed video mode/stopped before one
 shutter submission, then a running timer and a playable clip after manual stop.
 A subsequent fresh-boot attempt reconnected/subscribed without a shutter
-submission. Remote Stop and three complete remote REC/STOP cycles remain
-outstanding. Incoming bytes remain unclassified. Keep NVS refusal guards;
+submission. The later [three-cycle session](hardware-results/2026-10-09-x5-pairing.md#three-remote-recording-cycles--owner-confirmed)
+completed three camera-observed remote Start/Stop cycles, with the last Stop
+submitted after reconnect. An expired-window request was refused locally; no
+automatic shutter replay occurred. Incoming bytes remain unclassified. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Licensed BE80 control reference (#19, #5)
@@ -202,7 +205,9 @@ or infer recording state from a wake or connection response.
 Multi-camera wake is a hypothesis to test by rotating identifiers with deadlines
 while preserving existing connections. Advertising support under multiple links
 must be measured on the selected ESP32 stack. The isolated wake-only diagnostic
-is available; no production wake implementation exists.
+is available. The opt-in bounded production wake encoder, scheduler and shared
+host worker are implemented below; the actual Insta360 reconnect/state/control
+provider is still absent.
 
 ## Model differences and evidence labels
 
@@ -217,8 +222,10 @@ That BE80 observation does not establish remote pairing or recording control.
 The later [CE80 pairing trial](hardware-results/2026-10-09-x5-pairing.md) includes
 subscription and owner-confirmed connection. The separate one-shot trial records
 one shutter submission with SDK status 0 and an unresolved camera recording result.
-No Confirmed-by-testing control result exists; X5 firmware is unrecorded and
-GO 3S target/protocol remain unresolved.
+The later card-ready and three-cycle trials record owner-reported X5 firmware
+1.11.10 and confirmed camera-observed shutter control through the isolated
+probe. This does not qualify the unimplemented production adapter or state
+decoder. GO 3S target/protocol remain unresolved.
 
 ## Implementation prerequisites from pinned sources
 

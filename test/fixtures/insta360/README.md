@@ -32,5 +32,6 @@ surface. Do not infer a length field, sequence counter, ACK or state from its
 opaque bytes. There is no receive parser and no supported idempotent Start/Stop.
 Mode-dependent shutter/button toggling must never be automatically repeated
 after ambiguous delivery or reset. The bench has a connected/subscribed X5
-submission path; successful REC/STOP and authoritative state semantics remain
-unverified. Issue #19 is not complete from this fixture or submission alone.
+submission path. Later owner-observed tests confirmed three remote Start/Stop
+cycles and reconnect on owner-reported firmware 1.11.10; authoritative receive
+state semantics remain unverified. See the result log’s three-cycle section. Issue #19 is not complete from this fixture or submission alone.
