@@ -501,8 +501,8 @@ bool BleCentral::eventComplete(const BleEvent &e) {
     return true;
   }
   if (p.phase == BlePhase::Read || p.phase == BlePhase::Write)
-    emit(e.peer, p.phase == BlePhase::Read ? BleResultKind::ReadComplete : BleResultKind::WriteComplete,
-         e);
+    emit(e.peer,
+         p.phase == BlePhase::Read ? BleResultKind::ReadComplete : BleResultKind::WriteComplete, e);
   p.complete = true;
   return true;
 }
