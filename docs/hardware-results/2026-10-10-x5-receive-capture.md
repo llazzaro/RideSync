@@ -113,8 +113,21 @@ of shutter events were checked against the private transcript.
 
 This follow-up supplies the previously missing completed sequence, confirmed
 photo-mode interval and playable new clip. Exact per-action timing and an
-evidenced state/query interpretation are still missing. Keep the full #46 row
-unchecked rather than treating coarse operator intervals as precise camera-display
-timestamps. The next protocol work is to establish the meaning and freshness of
-specific fields; neither another generic shutter smoke test nor a timer heuristic
-closes #19. Production integration remains unqualified.
+evidenced state/query interpretation are still missing. The timing uncertainty is retained rather than reported as precise action
+timestamps. The online comparison below supplies field classification without
+a further physical run. Production integration remains unqualified.
+
+## Online-source reconciliation: retained captures are sufficient for decoding work
+
+At the owner's request, an online search found a published X4 passive-capture
+report with matching CE80 framing and typed display fields. The [protocol
+comparison](../insta360_protocol.md#published-ce80-capture-compared-with-retained-x5-data-19)
+records the pinned source and independent X5 counts. All 305 writes match its
+framing; all 99 display messages can be classified structurally into elapsed
+text, settings or remaining runtime/count. This supersedes the earlier claim
+that all incoming fields are unclassified, while preserving the coarse timing
+and production limitations. The completed manual sequence, mode observation,
+playback and zero-loss transcripts satisfy the finite capture collection step
+in #46 with recorded annotation uncertainty. No repeat of this generic sequence
+is needed to start the typed decoder. State/query interpretation and final real
+adapter checks remain separate incomplete rows.
