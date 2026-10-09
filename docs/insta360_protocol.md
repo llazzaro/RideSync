@@ -106,8 +106,8 @@ The October 9 audit found another licensed direct-control reference:
 pinned with its MPL-2.0 licenses in [sources](sources.md). It declares distinct
 18-byte video-start and stop packets, changes a one-byte sequence at offset 10,
 and writes BE81 with notifications on BE82. This supplies source-level command
-expectations separately from the CE82 shutter toggle. No code or fixture is
-copied and no RideSync profile enables this route.
+expectations separately from the CE82 shutter toggle. The pure source-derived request encoder and fixtures now retain MPL-2.0; no
+RideSync camera profile enables this route.
 
 Its receive callback reads a command byte and byte 17 from the first fragment,
 ignores later fragments, and can label stopped after command/service errors.
@@ -117,6 +117,45 @@ still need independent validation. The source's ONE R 360-mod testing report
 does not qualify ONE RS modules, X5 or GO 3S; no actual camera firmware is
 recorded in this audit. Keep reset/disconnect/errors Unknown and do not
 automatically replay an ambiguous command. #19/#5 remain open.
+
+### Implemented pure BE80 recording requests (#19, partial)
+
+`encodeRecordingCommand(const Be80ControlConfig&, Be80RecordingCommand, uint8_t)`
+in `protocol/insta360_be80_codec.h` is a stateless, request-only codec, separate
+from the existing CE82 shutter toggle. `Be80ControlConfig::profile` defaults
+Disabled; `GarminBe80ControlV1` explicitly selects the pinned source's default
+`cmdStartRec`/`cmdStopRec` wire literals. This is a wire-format opt-in, not a
+camera-model capability or recording-state qualification.
+
+| Command | Complete source-derived bytes (SS is caller sequence) |
+|---|---|
+| StartVideo | `12 00 00 00 04 00 00 04 00 02 SS 00 00 80 00 00 08 01` |
+| Stop | `12 00 00 00 04 00 00 05 00 02 SS 00 00 80 00 00 10 01` |
+
+Byte10 uses caller sequence1..254, matching the pinned `sendCMD` sequence range.
+The codec does not increment, queue, transmit, retry or reset that sequence.
+Other fixed bytes are retained without inventing header/framing meanings.
+Success is None/size18 with fixed `std::array<uint8_t,18>` storage. Every error
+has size0 and all-zero bytes. Validation precedence is Disabled profile,
+UnsupportedProfile, InvalidCommand, then InvalidSequence (0/255). Unknown enum
+values fail; no partial packet is exposed. No heap, driver, clock or IO is used.
+
+The independent literal fixtures are source-derived rather than camera captures.
+Tests preserve the existing shutter primitive and verify both full requests,
+every valid sequence, all unknown uint8 profile/command values, invalid sequence
+endpoints, zeroed errors, precedence and repeatable independent result copies.
+The new header/source/fixture use MPL-2.0 with the existing pinned license text;
+[license coverage](sources.md#pure-be80-recording-request-file-licensing-19).
+
+An explicit request is distinct from a shutter toggle, but camera-level
+idempotence/ACK/state semantics have not been established. Submission never
+becomes an observation, and ambiguous delivery does not justify automatic replay.
+No receive decoder or camera profile is enabled by this extension; reset,
+disconnect and unknown responses retain existing Unknown semantics. Source ONE R
+reporting does not qualify X5, fitted ONE RS modules or GO 3S. #19 remains open
+for its usable target/recording-state and finite receive/malformed-frame corpus;
+#3/#22 retain real camera checks. This codec is concrete progress on known fields,
+not a substitute for those remaining requirements.
 
 ## Wake and identification
 

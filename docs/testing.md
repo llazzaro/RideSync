@@ -547,3 +547,21 @@ A fresh independent reviewer found no encoder correctness defects. The audit
 indirect-tail-jump gap was reproduced RED, fixed GREEN, then verified by the
 full suite/CI. #29 is closed for software; forwarding and all physical gates
 remain with their original issues. No minor review finding was deferred.
+
+## Pure BE80 recording request checks (#19, partial)
+
+The request-only codec uses pinned source literals, not camera captures or state
+observations. Run `pio test -e native -f test_insta360_codec` for the existing
+CE82 shutter plus four BE80 request tests: full StartVideo/Stop literals, every
+sequence1..254, unknown profile/command values, sequence0/255, error precedence,
+all-zero failures and repeatable output copies. `pio run -e lilygo_t_a7670e_r2`
+compiles the portable implementation under the pinned ESP32 toolchain; there is
+no production call site or camera activation. Full native/CI and formatting
+checks accompany this code change. BLE delivery, ACK/state decoding, camera-level
+idempotence and actual recording remain unqualified in #19/#3/#22.
+
+October9 local verification: focused5/5 and full native368/368 passed, pinned
+default ESP32 build passed, formatting and diff-whitespace checks passed.
+The initial focused RED run failed on the missing BE80 codec header, then the
+implemented codec passed the independent fixtures and finite invalid-input
+cases. Existing hardware and receive-state gaps are unchanged.

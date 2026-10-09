@@ -8,7 +8,7 @@ evidence; it does not close a ticket or add acceptance requirements. The
 
 | Issues | Current evidence and next dependency |
 |---|---|
-| #3, #19 | Isolated X5 CE80 pairing/subscription and one source-derived shutter submission are recorded. Recording was not established because the owner reported no camera SD card; firmware and annotated recording-state packets are missing. Resume the existing three-cycle/reconnect milestone with a camera card and recorded firmware. |
+| #3, #19 | Isolated X5 CE80 pairing/subscription and one source-derived shutter submission are recorded. Recording was not established because the owner reported no camera SD card; firmware and annotated recording-state packets are missing. The [pure BE80 request codec](insta360_protocol.md#implemented-pure-be80-recording-requests-19-partial) now encodes source-backed StartVideo/Stop with independent fixtures, but usable target/state and receive-corpus requirements remain open. Resume the existing three-cycle/reconnect milestone with a camera card and recorded firmware. |
 | #9 | The isolated source-derived advertisement produced one owner-confirmed X5 wake. Production bounded advertising/connect/observe/start orchestration is still absent; reuse this observation rather than repeating it without a new question. |
 | #5 | ONE RS needs its own lens/module and recording-path evidence. The newly audited [licensed BE80 reference](insta360_protocol.md#licensed-be80-control-reference-19-5) supplies source-level command candidates for ONE R; it does not qualify ONE RS configurations or authoritative state. |
 | #21 | GO 3S/Action Pod control ownership and usable third-party recording path remain unresolved after #6. No enabled profile can be justified yet. |
