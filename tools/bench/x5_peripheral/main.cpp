@@ -602,8 +602,9 @@ void reportSummary(uint32_t now, const LoopState &state, char *line) {
         "sdk_last_op/rc=%u/%d shutter_pending=%u wake_only=%u "
         "nvs_refused_init/open/erase=%lu/%lu/%lu recording=UNKNOWN kind_counts=",
         static_cast<unsigned long>(now), state.used, state.active, state.synced,
-        state.synced ? unsigned(ble_gap_adv_active()) : 0, state.conn, unsigned(state.reason), private_hex,
-        static_cast<unsigned long>(stats.seen), static_cast<unsigned long>(stats.reported), depth,
+        state.synced ? unsigned(ble_gap_adv_active()) : 0, state.conn, unsigned(state.reason),
+        private_hex, static_cast<unsigned long>(stats.seen),
+        static_cast<unsigned long>(stats.reported), depth,
         static_cast<unsigned long>(stats.dropped), static_cast<unsigned long>(stats.truncated),
         sdk.stop_requested, sdk.in_flight, unsigned(sdk.action),
         static_cast<unsigned long>(sdk.accepted), static_cast<unsigned long>(sdk.returned),
