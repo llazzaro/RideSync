@@ -2,10 +2,12 @@
 #include "local_telemetry_esp32.h"
 #include "pairing_proof_esp32.h"
 #include "profiles/gopro_hero12_esp32.h"
+#include "test/fixtures/motion/evidence.h"
 #include <array>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <functional>
@@ -15,6 +17,19 @@
 #include <vector>
 using namespace ridesync;
 SerialPort Serial;
+bool test_motion_fixture = false;
+struct FixtureMotionSource : StaticMotionReferenceSource {
+  uint32_t declaration = 0;
+  StaticMotionReference referenceFor(const ImuEvidence &e) override {
+    StaticMotionReference r;
+    r.externally_stationary = true;
+    r.session_id = e.session_id;
+    r.config_generation = e.config.generation;
+    r.batch_sequence = e.batch_sequence;
+    r.declaration = ++declaration;
+    return r;
+  }
+};
 std::vector<uint8_t> proof_marker;
 unsigned proof_sets = 0, proof_commits = 0, proof_reads = 0, proof_closes = 0;
 int proof_set_error = 0, proof_commit_error = 0, proof_read_error = 0;
@@ -186,11 +201,24 @@ int main(int argc, char **argv) {
   SPIClass spi;
   TwoWire wire;
   auto q = qualified();
+  FixtureMotionSource motion_source;
+  if (mode == "motion-csv") {
+    test_motion_fixture = true;
+    q.runtime.motion_enabled = true;
+    q.runtime.motion_config = motion_fixture::config();
+    q.runtime.motion_snapshot_max_age_ms = 100;
+    q.metadata = motion_fixture::sample().config;
+  }
   commission();
   pairingProofMaintenance().beginOwner();
   wire.payload[0] = 0x8c;
   wire.payload[1] = 7;
   wire.payload[7] = 6;
+  if (mode == "motion-csv") {
+    for (unsigned i = 1; i < 13; ++i)
+      wire.payload[i] = 0;
+    wire.payload[12] = 8;
+  }
   if (mode == "camera" || mode == "control" || mode == "control-route-refusal") {
     auto camera = hero12Runtime();
     SourceConfig source;
@@ -255,7 +283,8 @@ int main(int argc, char **argv) {
     q.runtime.safe_mode = true;
   if (mode == "close-barrier")
     block_close.store(true);
-  auto runtime = std::unique_ptr<Esp32LocalTelemetry>(new Esp32LocalTelemetry(uart, spi, wire, q));
+  auto runtime = std::unique_ptr<Esp32LocalTelemetry>(
+      new Esp32LocalTelemetry(uart, spi, wire, q, mode == "motion-csv" ? &motion_source : nullptr));
   RouteSink route_sink;
   RouteClock route_clock;
   std::unique_ptr<CameraEventSession> legacy;
@@ -409,4 +438,8 @@ int main(int argc, char **argv) {
   }
   if (mode == "camera")
     assert(csv.find("camera,") != std::string::npos);
+  if (mode == "motion-csv") {
+    assert(motion_source.declaration > 0);
+    std::fwrite(csv.data(), 1, csv.size(), stdout);
+  }
 }

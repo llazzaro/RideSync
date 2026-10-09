@@ -2,20 +2,40 @@
 #include "handlebar_control.h"
 #include <new>
 namespace ridesync {
+namespace {
+MotionAdmissionConfig motionOptions(const LocalTelemetryConfig &c) {
+  MotionAdmissionConfig m;
+  m.requested = c.motion_enabled;
+  m.imu_qualified = c.imu_enabled && c.imu_qualified;
+  m.estimator = c.motion_config;
+  m.snapshot_max_age_ms = c.motion_snapshot_max_age_ms;
+  m.route = MotionInputRoute::Inbox;
+  return m;
+}
+} // namespace
 LocalTelemetryRuntime::Active::Active(Clock &raw, StorageSink &sink, ModemUart &uart,
                                       Hero12Adapter &adapter, CameraManager &manager,
                                       RecordingManager &group, uint64_t id,
-                                      const LocalTelemetryConfig &config, GnssPowerControl *power)
-    : session(raw, sink, adapter, manager, group, id, config.firmware, config.provenance),
+                                      const LocalTelemetryConfig &config, GnssPowerControl *power,
+                                      StaticMotionReferenceSource *source)
+    : session(raw, sink, adapter, manager, group, id, config.firmware, config.provenance,
+              motionOptions(config), source),
       modem(uart, config.modem), gps(session.clock(), modem, power, config.power_timing) {}
 LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
                                              TelemetryStorageWorker &sd, TelemetryImuWorker &imu,
                                              Hero12Adapter &adapter, CameraManager &manager,
                                              RecordingManager &group,
                                              const LocalTelemetryConfig &config,
-                                             GnssPowerControl *power)
+                                             GnssPowerControl *power,
+                                             StaticMotionReferenceSource *source)
     : raw_(raw), uart_(uart), sd_(sd), imu_(imu), adapter_(adapter), manager_(manager),
-      group_(group), config_(config), power_(power) {
+      group_(group), config_(config), power_(power), source_(source) {
+  const auto m = motionOptions(config);
+  if (m.requested)
+    status_.motion_admission = m.imu_qualified && MotionEstimator::configValid(m.estimator) &&
+                                       m.snapshot_max_age_ms && m.snapshot_max_age_ms <= 60000
+                                   ? MotionAdmission::Enabled
+                                   : MotionAdmission::Refused;
   current_safe_mode_ = config.safe_mode;
   status_.safe_mode = config.safe_mode;
 }
@@ -29,6 +49,8 @@ void LocalTelemetryRuntime::refuseStart(TelemetryFault fault) {
     return;
   started_ = true;
   status_.phase = TelemetryPhase::Refused;
+  if (status_.motion_admission == MotionAdmission::Enabled)
+    status_.motion_admission = MotionAdmission::Refused;
   status_.fault = fault;
 }
 bool LocalTelemetryRuntime::start() {
@@ -42,11 +64,15 @@ bool LocalTelemetryRuntime::start() {
        (!config_.power_timing.key_active_ms || !config_.power_timing.settle_ms ||
         config_.power_timing.key_active_ms > 60000 || config_.power_timing.settle_ms > 60000))) {
     status_.phase = TelemetryPhase::Refused;
+    if (status_.motion_admission == MotionAdmission::Enabled)
+      status_.motion_admission = MotionAdmission::Refused;
     status_.fault = TelemetryFault::Qualification;
     return false;
   }
   if (!sd_.start()) {
     status_.phase = TelemetryPhase::Refused;
+    if (status_.motion_admission == MotionAdmission::Enabled)
+      status_.motion_admission = MotionAdmission::Refused;
     status_.fault = TelemetryFault::StorageTask;
     return false;
   }
@@ -61,6 +87,8 @@ void LocalTelemetryRuntime::service() {
   if (servicing_)
     return;
   servicing_ = true;
+  if (active_)
+    active_->session.admission().beginMotionPass();
   if (!sd_started_ || status_.phase == TelemetryPhase::Finished) {
     if (control_)
       control_->observe(status_);
@@ -80,7 +108,7 @@ void LocalTelemetryRuntime::service() {
       requestStop();
     } else {
       active_ = new (&memory_) Active(raw_, sd_.sink(), uart_, adapter_, manager_, group_,
-                                      status_.identity.id, config_, power_);
+                                      status_.identity.id, config_, power_, source_);
       auto &s = active_->session;
       const auto t = s.clock().snapshot();
       if (!s.storage().configValid() || active_->modem.snapshot(t).state == ModemState::Disabled) {
@@ -113,6 +141,7 @@ void LocalTelemetryRuntime::service() {
                                             : SensorAdmission::TaskRefused;
         }
         if (!imu_started_) {
+          s.admission().refuseMotion();
           s.finishImu();
           imu_finished_ = true;
         }
@@ -152,8 +181,14 @@ void LocalTelemetryRuntime::service() {
         logged_ms_ = t.monotonic_ms;
       }
     }
+    if (current_safe_mode_ || status_.supervision_fault ||
+        ((status_.worker_stalls | status_.worker_refused) &
+         (1u << static_cast<unsigned>(Worker::Imu))))
+      s.admission().revokeMotion();
     if (imu_started_) {
       status_.imu_worker = imu_.observation();
+      if (status_.imu_worker.outcome != DeviceHealth::Ok)
+        s.admission().revokeMotion();
       if (status_.imu_worker.finished && !imu_finished_) {
         s.finishImu(); // Acquire final worker publication before inbox finish.
         imu_finished_ = true;
@@ -186,8 +221,10 @@ void LocalTelemetryRuntime::requestStop() {
     group_.cancel();
     adapter_.stop();
   }
-  if (active_)
+  if (active_) {
+    active_->session.admission().revokeMotion();
     active_->gps.cancel();
+  }
   if (imu_started_)
     imu_.requestStop();
   if (!active_ || !bound_)
@@ -213,6 +250,8 @@ void LocalTelemetryRuntime::currentAdmission(bool cameras, bool safe_mode) {
     if (active_ && bound_ && config_.cameras_qualified)
       adapter_.stop();
   }
+  if (safe_mode && active_)
+    active_->session.admission().revokeMotion();
   current_safe_mode_ = safe_mode;
   status_.safe_mode = safe_mode;
 }
@@ -220,6 +259,8 @@ void LocalTelemetryRuntime::supervision(uint8_t stalls, uint8_t refused, bool fa
   status_.worker_stalls = stalls;
   status_.worker_refused = refused;
   status_.supervision_fault = fault;
+  if (active_ && (fault || ((stalls | refused) & (1u << static_cast<unsigned>(Worker::Imu)))))
+    active_->session.admission().revokeMotion();
 }
 void LocalTelemetryRuntime::detachControl(HandlebarControl &c) {
   if (control_ == &c && canRelease())
@@ -232,6 +273,11 @@ void LocalTelemetryRuntime::observe() {
   if (active_) {
     auto &s = active_->session;
     status_.storage = s.storage().health();
+    const auto motion = s.admission().motionSnapshot(raw_.now());
+    status_.motion_admission = s.admission().motionAdmission();
+    status_.motion_current = motion.current;
+    status_.motion_estimate = motion.estimate;
+    status_.motion_source = motion.source;
     for (unsigned i = 0; i < static_cast<unsigned>(RecordKind::Count); ++i)
       status_.kinds[i] = s.storage().kindHealth(static_cast<RecordKind>(i));
     for (unsigned i = 0; i < 5; ++i)
@@ -245,6 +291,22 @@ void LocalTelemetryRuntime::observe() {
   }
   if (control_)
     control_->observe(status_);
+}
+void LocalTelemetryRuntime::withdrawMotionReference() {
+  if (active_)
+    active_->session.admission().withdrawMotionReference();
+}
+LocalTelemetryStatus LocalTelemetryRuntime::status() const {
+  auto result = status_;
+  if (active_) {
+    const auto &admission = active_->session.admission();
+    const auto motion = admission.motionSnapshot(raw_.now());
+    result.motion_admission = admission.motionAdmission();
+    result.motion_current = motion.current;
+    result.motion_estimate = motion.estimate;
+    result.motion_source = motion.source;
+  }
+  return result;
 }
 CameraEventSession *LocalTelemetryRuntime::session() {
   return active_ ? &active_->session : nullptr;

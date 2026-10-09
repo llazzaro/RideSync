@@ -2,10 +2,14 @@
 namespace ridesync {
 CameraEventSession::CameraEventSession(Clock &raw, StorageSink &sink, Hero12Adapter &adapter,
                                        CameraManager &manager, RecordingManager &group, uint64_t id,
-                                       const char *firmware, const char *provenance)
+                                       const char *firmware, const char *provenance,
+                                       const MotionAdmissionConfig &motion,
+                                       StaticMotionReferenceSource *source)
     : adapter_(adapter), manager_(manager), group_(group), clock_(raw, id, 1000),
-      storage_(sink, {id, firmware, provenance, 2, 4, StorageFormat::CameraV3}),
-      admission_(clock_, storage_, imu_, &camera_), logger_(camera_, raw, id, group) {}
+      storage_(sink, {id, firmware, provenance, 2, 4,
+                      motion.requested ? StorageFormat::MotionV4 : StorageFormat::CameraV3}),
+      admission_(clock_, storage_, imu_, &camera_, motion, source),
+      logger_(camera_, raw, id, group) {}
 CameraEventSession::~CameraEventSession() {
   if (route_owned_) {
     manager_.detachAudit(&logger_);
@@ -40,6 +44,7 @@ bool CameraEventSession::binds(const Hero12Adapter &adapter, const CameraManager
   return &adapter_ == &adapter && &manager_ == &manager && &group_ == &group;
 }
 void CameraEventSession::service(CameraServiceAction *action) {
+  admission_.beginMotionPass();
   if (!route_owned_) {
     // Local mode advances only telemetry; a refused session drains only on stop.
     if (active_ || stopping_)
@@ -69,7 +74,10 @@ void CameraEventSession::requestStop() {
   admission_.requestStop();
   stopping_ = true;
 }
-void CameraEventSession::finishImu() { imu_.finish(); }
+void CameraEventSession::finishImu() {
+  admission_.revokeMotion();
+  imu_.finish();
+}
 bool CameraEventSession::stopped() const {
   return stopping_ && camera_finished_ && admission_.stopped() && storage_.health().stopped &&
          (!route_owned_ || adapter_.canDestroy());

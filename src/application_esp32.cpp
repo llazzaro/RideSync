@@ -7,8 +7,10 @@
 namespace ridesync {
 SupervisedEsp32Application::SupervisedEsp32Application(
     HardwareSerial &u, SPIClass &s, TwoWire &w, const QualifiedLocalTelemetry &q,
-    const QualifiedHandlebar &h, const std::array<Hero12Qualification, kMaxCameras> &c)
-    : uart_(u), spi_(s), wire_(w), qualification_(q), handlebar_(h), cameras_(c) {}
+    const QualifiedHandlebar &h, const std::array<Hero12Qualification, kMaxCameras> &c,
+    StaticMotionReferenceSource *source)
+    : uart_(u), spi_(s), wire_(w), qualification_(q), handlebar_(h), cameras_(c),
+      motion_source_(source) {}
 SupervisedEsp32Application::~SupervisedEsp32Application() {
   // No waits or filesystem access. Boot-lifetime caller retains this object and
   // all its resources until the actual worker barriers permit destruction.
@@ -83,7 +85,8 @@ void SupervisedEsp32Application::launch() {
   if (!prepared_ || launched_)
     return;
   launched_ = true;
-  telemetry_ = new (&telemetry_memory_) Esp32LocalTelemetry(uart_, spi_, wire_, qualification_);
+  telemetry_ = new (&telemetry_memory_)
+      Esp32LocalTelemetry(uart_, spi_, wire_, qualification_, motion_source_);
   telemetry_->owner().configurationStartup(configuration_);
   telemetry_->owner().currentAdmission(camera_allowed_, qualification_.runtime.safe_mode);
   if (button_allowed_) {
@@ -371,8 +374,9 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
 extern "C" ridesync::SupervisedEsp32Application &ridesync_supervised_application(
     HardwareSerial &uart, SPIClass &spi, TwoWire &wire, const ridesync::QualifiedLocalTelemetry &q,
     const ridesync::QualifiedHandlebar &h,
-    const std::array<ridesync::Hero12Qualification, ridesync::kMaxCameras> &c) {
-  static ridesync::SupervisedEsp32Application application(uart, spi, wire, q, h, c);
+    const std::array<ridesync::Hero12Qualification, ridesync::kMaxCameras> &c,
+    ridesync::StaticMotionReferenceSource *source) {
+  static ridesync::SupervisedEsp32Application application(uart, spi, wire, q, h, c, source);
   return application;
 }
 #endif

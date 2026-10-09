@@ -53,6 +53,9 @@ struct LocalTelemetryConfig {
   bool opt_in = false, gps_qualified = false, imu_enabled = false, imu_qualified = false;
   bool safe_mode = false, cameras_qualified = false;
   uint32_t gps_record_ms = 1000;
+  bool motion_enabled = false;
+  MotionEstimatorConfig motion_config;
+  uint32_t motion_snapshot_max_age_ms = 0;
   ModemConfig modem;
   // Qualified already-powered modem is supported without any GPIO operations.
   QualifiedPowerTiming power_timing;
@@ -65,6 +68,10 @@ struct LocalTelemetryStatus {
   TelemetryFault fault = TelemetryFault::None;
   SensorAdmission imu = SensorAdmission::Disabled;
   CameraAdmission camera = CameraAdmission::Disabled;
+  MotionAdmission motion_admission = MotionAdmission::Disabled;
+  bool motion_current = false;
+  MotionEstimate motion_estimate;
+  MotionSampleIdentity motion_source;
   IdentityAllocation identity;
   RecordTimestamp timestamp;
   ModemSnapshot gps;
@@ -88,7 +95,8 @@ class LocalTelemetryRuntime {
 public:
   LocalTelemetryRuntime(Clock &, ModemUart &, TelemetryStorageWorker &, TelemetryImuWorker &,
                         Hero12Adapter &, CameraManager &, RecordingManager &,
-                        const LocalTelemetryConfig &, GnssPowerControl *power = nullptr);
+                        const LocalTelemetryConfig &, GnssPowerControl *power = nullptr,
+                        StaticMotionReferenceSource *source = nullptr);
   ~LocalTelemetryRuntime();
   LocalTelemetryRuntime(const LocalTelemetryRuntime &) = delete;
   LocalTelemetryRuntime &operator=(const LocalTelemetryRuntime &) = delete;
@@ -97,7 +105,8 @@ public:
   void refuseStart(TelemetryFault);
   void service();
   void requestStop();
-  LocalTelemetryStatus status() const { return status_; }
+  void withdrawMotionReference();
+  LocalTelemetryStatus status() const;
   bool canRelease() const { return status_.releasable; }
   bool binds(const Hero12Adapter &, const CameraManager &, const RecordingManager &) const;
   // Control-owner access for #41. Never tick managers/admission again after
@@ -116,7 +125,8 @@ private:
     ModemGnss modem;
     GpsManager gps;
     Active(Clock &, StorageSink &, ModemUart &, Hero12Adapter &, CameraManager &,
-           RecordingManager &, uint64_t, const LocalTelemetryConfig &, GnssPowerControl *);
+           RecordingManager &, uint64_t, const LocalTelemetryConfig &, GnssPowerControl *,
+           StaticMotionReferenceSource *);
   };
   Clock &raw_;
   ModemUart &uart_;
@@ -127,6 +137,7 @@ private:
   RecordingManager &group_;
   const LocalTelemetryConfig config_;
   GnssPowerControl *power_;
+  StaticMotionReferenceSource *source_;
   typename std::aligned_storage<sizeof(Active), alignof(Active)>::type memory_;
   Active *active_ = nullptr;
   HandlebarControl *control_ = nullptr;

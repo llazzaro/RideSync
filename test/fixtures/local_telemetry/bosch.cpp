@@ -1,5 +1,6 @@
 #include <bmi270_api/bmi270.h>
 #include <cstring>
+extern bool test_motion_fixture;
 static bmi2_sens_config profile[2];
 static uint16_t fifo_config;
 static uint8_t filters[3]{}, downsampling[3] = {2, 2, 2};
@@ -47,7 +48,7 @@ int8_t bmi2_get_fifo_length(uint16_t *n, bmi2_dev *) {
   return 0;
 }
 int8_t bmi2_get_saturation_status(uint8_t *s, bmi2_dev *) {
-  *s = 1;
+  *s = test_motion_fixture ? 0 : 1;
   return 0;
 }
 int8_t bmi2_set_command_register(uint8_t, bmi2_dev *) { return 0; }
