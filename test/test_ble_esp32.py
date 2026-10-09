@@ -307,6 +307,7 @@ HARNESS = r'''
 static ridesync::NvsBootStatus boot_status;
 namespace ridesync { NvsBootStatus nvsBootStatus(){return boot_status;} }
 #include "src/ble_esp32.cpp"
+#include "src/ble_wake_esp32.cpp"
 #include "src/pairing_proof_esp32.cpp"
 using namespace ridesync;
 struct Receiver:BleCallbacks { unsigned copies=0; BleEvent latest;
@@ -382,6 +383,44 @@ int main(int argc,char**argv){
   boot_status.format_refused=true;ble_store_value value;
   assert(ble_hs_cfg.store_write_cb(1,&value)!=0);assert(written==0);
   assert(host.fault()==BleFault::Store);return 0;
+ }
+ if(scenario==25 || scenario==26 || scenario==27){
+  WakeOperation op;op.peer=0;op.generation=1;op.id=1;
+  if(scenario==26){
+   gap_scan=true;assert(host.reserveWake(op,100,0)==WakeSubmit::Busy);gap_scan=false;
+   gap_connect=true;assert(host.reserveWake(op,100,0)==WakeSubmit::Busy);gap_connect=false;
+   gap_adv=true;assert(host.reserveWake(op,100,0)==WakeSubmit::Busy);gap_adv=false;
+  }
+  assert(host.reserveWake(op,100,0)==WakeSubmit::Accepted);
+  Receiver receiver;BleContext ctx;ctx.receiver=&receiver;ctx.peer=0;ctx.phase=BlePhase::Scan;
+  BleCommand cmd;cmd.phase=BlePhase::Scan;cmd.duration_ms=30;
+  assert(host.submit(cmd,ctx)==kBleHostReserved);
+  cmd.phase=BlePhase::Connect;ctx.phase=BlePhase::Connect;
+  assert(host.submit(cmd,ctx)==kBleHostReserved);
+  BondIdentity id;id.type=IdentityType::Public;id.verified=true;id.address[0]=2;
+  assert(host.requestBondReset(id,1,100,0)==BondResetSubmission::Busy);
+  assert(deleted==0);
+  if(scenario==27){
+   ctx.phase=BlePhase::Read;ctx.connection=10;ctx.terminal=false;
+   cmd.phase=BlePhase::Read;cmd.connection=10;cmd.handle=3;
+   assert(host.submit(cmd,ctx)==0);
+  }
+  host.sealWake(op);assert(!host.admitWakeStart(op,1));assert(!host.releaseWake(op));
+  host.wakeTerminal(op);host.wakeBarrierReleased(op);assert(host.releaseWake(op));
+  return 0;
+ }
+ if(scenario==28){
+  Receiver receiver;BleContext scan;scan.receiver=&receiver;scan.peer=kBlePeers;scan.phase=BlePhase::Scan;
+  scan.terminal=false;BleCommand cmd;cmd.phase=BlePhase::Scan;cmd.duration_ms=30;
+  assert(host.submit(cmd,scan)==0);
+  WakeOperation op;op.peer=0;op.generation=1;op.id=1;
+  assert(host.reserveWake(op,100,0)==WakeSubmit::Busy);
+  assert(host.cancelScan(scan)==0);
+  assert(host.reserveWake(op,100,0)==WakeSubmit::Busy);
+  pump();assert(host.releaseContext(scan));
+  assert(host.reserveWake(op,100,0)==WakeSubmit::Accepted);
+  host.sealWake(op);host.wakeTerminal(op);host.wakeBarrierReleased(op);assert(host.releaseWake(op));
+  return 0;
  }
  if(scenario==23){
   Receiver receiver;BleContext scan;scan.receiver=&receiver;scan.peer=kBlePeers;
@@ -465,8 +504,8 @@ class BleEsp32(unittest.TestCase):
             binary = temp / "harness"
             subprocess.run(["clang++", "-std=c++11", "-DARDUINO_ARCH_ESP32", "-fsanitize=address,undefined",
                             "-fno-sanitize-recover=all", "-g", "-O0", "-I", str(temp), "-I", str(ROOT / "include"),
-                            "-I", str(ROOT), str(temp / "harness.cpp"), str(ROOT / "src/pairing_reset.cpp"),
+                            "-I", str(ROOT), str(temp / "harness.cpp"), str(ROOT / "src/pairing_reset.cpp"), str(ROOT / "src/wake_radio_policy.cpp"), str(ROOT / "src/wake_manager.cpp"), str(ROOT / "src/insta360_wake_encoder.cpp"),
                             "-o", str(binary)], check=True)
-            for scenario in range(25):
+            for scenario in range(29):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")

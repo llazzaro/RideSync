@@ -1,5 +1,6 @@
 #pragma once
 #include "ble_pairing_reset.h"
+#include "wake_radio_policy.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include <NimBLEDevice.h>
 #include <nimble/nimble/host/include/host/ble_gatt.h>
@@ -46,8 +47,30 @@ public:
   // storage based on a timeout: only the host callback's final release permits it.
   BleBondResetResult bondResetResult(uint32_t operation, uint32_t now);
 
+  // One wake-only GAP lease. No host/store initialization occurs here.
+  WakeSubmit reserveWake(const WakeOperation &, uint32_t deadline, uint32_t now);
+  bool admitWakeStart(const WakeOperation &, uint32_t now);
+  void sealWake(const WakeOperation &);
+  bool releaseWake(const WakeOperation &);
+  bool wakeReserved() const { return wake_reserved_.load(std::memory_order_acquire); }
+  bool wakeCancelled() const { return wake_sealed_.load(std::memory_order_acquire); }
+  uint8_t wakeOwnAddressType() const { return own_address_type_; }
+  WakeRadioResult wakeStatus();
+  void wakeReturned(const WakeOperation &, int);
+  bool wakeIncoming(const WakeOperation &, uint16_t);
+  void wakeDisconnected(const WakeOperation &, uint16_t);
+  void wakeTerminal(const WakeOperation &);
+  void wakeCallbackEnter();
+  void wakeCallbackExit();
+  void wakeBarrierReleased(const WakeOperation &);
+  void quarantineWake();
+
 private:
   Esp32BleHost() = default;
+  std::atomic<bool> wake_reserved_{false}, wake_sealed_{false}, wake_quarantined_{false};
+  std::atomic_flag wake_lock_ = ATOMIC_FLAG_INIT;
+  WakeRadioPolicy wake_policy_;
+
   struct Slot {
     BleContext *context = nullptr;
     BondIdentity identity;

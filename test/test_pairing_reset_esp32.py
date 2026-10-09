@@ -120,6 +120,7 @@ HARNESS = r'''
 static ridesync::NvsBootStatus boot_status;
 namespace ridesync { NvsBootStatus nvsBootStatus(){return boot_status;} }
 #include "src/ble_esp32.cpp"
+#include "src/ble_wake_esp32.cpp"
 #include "src/pairing_proof_esp32.cpp"
 using namespace ridesync;
 #include "src/ble_remote.cpp"
@@ -279,6 +280,16 @@ int main(int argc,char**argv){
   assert(pairingProofMaintenance().release(1));
  }
  auto submitted=host.requestBondReset(id,1,reset_deadline,reset_now);
+ if(scenario==104){
+  assert(submitted==BondResetSubmission::Queued);
+  WakeOperation op;op.peer=0;op.generation=1;op.id=1;
+  assert(host.reserveWake(op,100,0)==WakeSubmit::Busy);
+  assert(host.cancelBondReset(1));pump();assert(!host.bondResetResult(1,0).mutation);
+  assert(host.reserveWake(op,100,0)==WakeSubmit::Accepted);
+  host.sealWake(op);host.wakeTerminal(op);host.wakeBarrierReleased(op);assert(host.releaseWake(op));
+  assert(nvs_entries==store_before&&deleted==0);return 0;
+ }
+
  if(scenario==13){assert(submitted==BondResetSubmission::Busy);assert(host.bondResetResult(1,0).releasable);assert(deleted==0&&queue_wait==0);return 0;}
  assert(submitted==BondResetSubmission::Queued);
  assert(!host.bondResetResult(1,0).finished);
@@ -397,15 +408,15 @@ class PairingResetEsp32(unittest.TestCase):
             binary = temp / 'harness'
             subprocess.run(['clang++', '-std=c++11', '-DARDUINO_ARCH_ESP32', '-fsanitize=address,undefined',
                             '-fno-sanitize-recover=all', '-ffunction-sections', '-g', '-O0', '-I', str(temp), '-I', str(ROOT / 'include'),
-                            '-I', str(ROOT), str(source), str(ROOT / 'src/pairing_reset.cpp'), str(ROOT/'src/health_supervisor.cpp'), str(temp/'sdk.o'), '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections', '-o', str(binary)], check=True)
-            for scenario in list(range(104)):
+                            '-I', str(ROOT), str(source), str(ROOT / 'src/pairing_reset.cpp'), str(ROOT / 'src/wake_radio_policy.cpp'), str(ROOT / 'src/wake_manager.cpp'), str(ROOT / 'src/insta360_wake_encoder.cpp'), str(ROOT/'src/health_supervisor.cpp'), str(temp/'sdk.o'), '-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections', '-o', str(binary)], check=True)
+            for scenario in list(range(105)):
                 result = subprocess.run([str(binary),str(scenario)], capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, f'scenario {scenario}: {result.stderr}')
                 if scenario>=83:print(f'membership scenario={scenario} exit={result.returncode}: {result.stderr.strip()}')
             original=sdk_source.replace(patch.PRIVATE_FIXED,patch.PRIVATE_ORIGINAL)
             (temp/'sdk.c').write_text(original)
             subprocess.run(['clang','-fno-common','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-c',str(temp/'sdk.c'),'-o',str(temp/'sdk.o')],check=True)
-            subprocess.run(['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-fsanitize=address,undefined','-fno-sanitize-recover=all','-ffunction-sections','-g','-O0','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(source),str(ROOT/'src/pairing_reset.cpp'),str(ROOT/'src/health_supervisor.cpp'),str(temp/'sdk.o'),'-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections','-o',str(binary)],check=True)
+            subprocess.run(['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-fsanitize=address,undefined','-fno-sanitize-recover=all','-ffunction-sections','-g','-O0','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(source),str(ROOT/'src/pairing_reset.cpp'),str(ROOT/'src/wake_radio_policy.cpp'),str(ROOT/'src/wake_manager.cpp'),str(ROOT/'src/insta360_wake_encoder.cpp'),str(ROOT/'src/health_supervisor.cpp'),str(temp/'sdk.o'),'-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections','-o',str(binary)],check=True)
             for scenario in (57,58,59):
                 result=subprocess.run([str(binary),str(scenario)],capture_output=True,text=True,timeout=15)
                 if scenario==57:
