@@ -9,7 +9,8 @@ class CameraEventSession {
 public:
   CameraEventSession(Clock &raw, StorageSink &sink, Hero12Adapter &adapter, CameraManager &manager,
                      RecordingManager &group, uint64_t session_id, const char *firmware,
-                     const char *provenance);
+                     const char *provenance, const MotionAdmissionConfig &motion = {},
+                     StaticMotionReferenceSource *source = nullptr);
   ~CameraEventSession();
   CameraEventSession(const CameraEventSession &) = delete;
   CameraEventSession &operator=(const CameraEventSession &) = delete;

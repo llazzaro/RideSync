@@ -1,3 +1,4 @@
+#include "../fixtures/motion/evidence.h"
 #include "handlebar_control.h"
 #include "local_telemetry_runtime.h"
 #include "session_storage_owner.h"
@@ -844,8 +845,70 @@ void invalid_clock_records_the_completed_terminal_at_pass_without_restarting() {
   TEST_ASSERT_EQUAL_UINT(bytes, f.uart.tx.size());
   f.finish(r);
 }
+struct MotionSource : StaticMotionReferenceSource {
+  unsigned calls = 0;
+  StaticMotionReference referenceFor(const ImuEvidence &e) override {
+    StaticMotionReference r;
+    r.externally_stationary = true;
+    r.session_id = e.session_id;
+    r.config_generation = e.config.generation;
+    r.batch_sequence = e.batch_sequence;
+    r.declaration = ++calls;
+    return r;
+  }
+};
+void runtime_motion_current_expiry_revocation_and_refusal() {
+  for (unsigned mode = 0; mode < 6; ++mode) {
+    Rig f;
+    auto c = qualified();
+    MotionSource source;
+    c.motion_enabled = true;
+    c.motion_config = motion_fixture::config();
+    c.motion_snapshot_max_age_ms = 100;
+    if (mode == 4)
+      f.imu.refuse = true;
+    if (mode == 5)
+      c.motion_config.mount_qualified = false;
+    LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c, nullptr,
+                            &source);
+    TEST_ASSERT_TRUE(r.start());
+    f.pass(r);
+    f.pass(r);
+    if (mode >= 4) {
+      TEST_ASSERT_EQUAL_INT(MotionAdmission::Refused, r.status().motion_admission);
+      TEST_ASSERT_FALSE(r.status().motion_current);
+      f.finish(r);
+      continue;
+    }
+    ImuBatch b;
+    b.count = 1;
+    b.records[0] = motion_fixture::sample(f.imu.id, f.raw.value);
+    TEST_ASSERT_TRUE(f.imu.inbox->publish(b));
+    r.service();
+    TEST_ASSERT_TRUE(r.status().motion_current);
+    TEST_ASSERT_TRUE(r.status().motion_estimate.static_tilt_valid);
+    f.raw.value += 101;
+    TEST_ASSERT_FALSE(r.status().motion_current);
+    TEST_ASSERT_TRUE(f.imu.inbox->publish(b));
+    if (mode == 0)
+      r.requestStop();
+    if (mode == 1)
+      r.currentAdmission(true, true);
+    if (mode == 2)
+      r.supervision(1 << static_cast<unsigned>(Worker::Imu), 0, false);
+    if (mode == 3)
+      f.imu.finished = true;
+    r.service();
+    TEST_ASSERT_EQUAL_INT(MotionAdmission::Revoked, r.status().motion_admission);
+    TEST_ASSERT_FALSE(r.status().motion_current);
+    TEST_ASSERT_EQUAL_UINT32(1, source.calls);
+    f.finish(r);
+    TEST_ASSERT_NOT_EQUAL(std::string::npos, f.sd.fs.bytes.find("#ridesync_telemetry,4"));
+  }
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(runtime_motion_current_expiry_revocation_and_refusal);
   RUN_TEST(invalid_clock_records_the_completed_terminal_at_pass_without_restarting);
   RUN_TEST(late_identity_completion_cannot_bypass_owner_startup_deadline);
   RUN_TEST(blocked_identity_startup_cancels_at_deadline_without_releasing_worker);

@@ -6,6 +6,7 @@ clock, modem, IMU manager and stop code execute unchanged.
 """
 from pathlib import Path
 import re
+from telemetry_parser import parse
 import subprocess
 import tempfile
 import unittest
@@ -187,3 +188,14 @@ int test_close(int);
                 with self.subTest(mode=mode):
                     run = subprocess.run([str(exe), mode], capture_output=True, timeout=10)
                     self.assertEqual(0, run.returncode, run.stderr.decode())
+
+            run = subprocess.run([str(exe), 'motion-csv'], capture_output=True, timeout=10)
+            self.assertEqual(0, run.returncode, run.stderr.decode())
+            rows = parse(run.stdout.decode('ascii'))
+            samples = [r for r in rows if r['kind']=='imu' and r['motion_measurements_valid']=='1']
+            self.assertTrue(samples)
+            sample = samples[0]
+            self.assertEqual('2048', sample['accel_z'])
+            self.assertAlmostEqual(9.80665, float(sample['motion_force_z_mps2']), places=5)
+            self.assertEqual('0', sample['motion_dynamic_lean_valid'])
+            self.assertTrue(any(r['motion_static_tilt_valid']=='1' for r in samples))

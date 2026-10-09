@@ -22,7 +22,8 @@ struct QualifiedLocalTelemetry {
 // the bound ridesync_hero12_service route exactly once, including GPS/admission.
 class Esp32LocalTelemetry {
 public:
-  Esp32LocalTelemetry(HardwareSerial &, SPIClass &, TwoWire &, const QualifiedLocalTelemetry &);
+  Esp32LocalTelemetry(HardwareSerial &, SPIClass &, TwoWire &, const QualifiedLocalTelemetry &,
+                      StaticMotionReferenceSource *source = nullptr);
   ~Esp32LocalTelemetry();
   Esp32LocalTelemetry(const Esp32LocalTelemetry &) = delete;
   Esp32LocalTelemetry &operator=(const Esp32LocalTelemetry &) = delete;
@@ -82,7 +83,8 @@ private:
 } // namespace ridesync
 extern "C" ridesync::Esp32LocalTelemetry &
 ridesync_local_telemetry_runtime(HardwareSerial &, SPIClass &, TwoWire &,
-                                 const ridesync::QualifiedLocalTelemetry &);
+                                 const ridesync::QualifiedLocalTelemetry &,
+                                 ridesync::StaticMotionReferenceSource *source = nullptr);
 extern "C" bool ridesync_local_telemetry_start(ridesync::Esp32LocalTelemetry &);
 extern "C" void ridesync_local_telemetry_service(ridesync::Esp32LocalTelemetry &);
 #endif

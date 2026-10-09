@@ -30,7 +30,8 @@ class SupervisedEsp32Application final : public ApplicationWorkers {
 public:
   SupervisedEsp32Application(HardwareSerial &, SPIClass &, TwoWire &,
                              const QualifiedLocalTelemetry &, const QualifiedHandlebar & = {},
-                             const std::array<Hero12Qualification, kMaxCameras> & = {});
+                             const std::array<Hero12Qualification, kMaxCameras> & = {},
+                             StaticMotionReferenceSource *source = nullptr);
   CameraPeers peers() const override { return qualification_.runtime.peers; }
   ~SupervisedEsp32Application(); // caller must first observe canRelease()
   std::array<WorkerPolicy, 4> prepare(const SettingsSnapshot &, bool, bool,
@@ -67,6 +68,7 @@ private:
       telemetry_memory_;
   typename std::aligned_storage<sizeof(Esp32HandlebarControl), alignof(Esp32HandlebarControl)>::type
       control_memory_;
+  StaticMotionReferenceSource *motion_source_ = nullptr;
   Esp32LocalTelemetry *telemetry_ = nullptr;
   Esp32HandlebarControl *control_ = nullptr;
   ApplicationPairingResetStatus reset_;
@@ -90,5 +92,6 @@ private:
 extern "C" ridesync::SupervisedEsp32Application &ridesync_supervised_application(
     HardwareSerial &, SPIClass &, TwoWire &, const ridesync::QualifiedLocalTelemetry &,
     const ridesync::QualifiedHandlebar &,
-    const std::array<ridesync::Hero12Qualification, ridesync::kMaxCameras> &);
+    const std::array<ridesync::Hero12Qualification, ridesync::kMaxCameras> &,
+    ridesync::StaticMotionReferenceSource *source = nullptr);
 #endif

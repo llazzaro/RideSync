@@ -43,10 +43,11 @@ ImuWorkerObservation Esp32LocalTelemetry::ImuWorker::observation() const {
   return result;
 }
 Esp32LocalTelemetry::Esp32LocalTelemetry(HardwareSerial &serial, SPIClass &spi, TwoWire &wire,
-                                         const QualifiedLocalTelemetry &q)
+                                         const QualifiedLocalTelemetry &q,
+                                         StaticMotionReferenceSource *source)
     : sd_(spi, q.sd), imu_(wire, q.imu, q.metadata), uart_(serial), qualification_(q),
       runtime_(clock_, uart_, sd_, imu_, hero12Runtime().adapter, hero12Runtime().manager,
-               hero12Runtime().group, q.runtime) {}
+               hero12Runtime().group, q.runtime, nullptr, source) {}
 Esp32LocalTelemetry::~Esp32LocalTelemetry() {
   // Caller has observed final IMU/SD access. No bus or filesystem cleanup here.
   if (route_bound_ && runtime_.canRelease())
@@ -103,10 +104,11 @@ void Esp32LocalTelemetry::service() {
 } // namespace ridesync
 extern "C" ridesync::Esp32LocalTelemetry &
 ridesync_local_telemetry_runtime(HardwareSerial &uart, SPIClass &spi, TwoWire &wire,
-                                 const ridesync::QualifiedLocalTelemetry &q) {
+                                 const ridesync::QualifiedLocalTelemetry &q,
+                                 ridesync::StaticMotionReferenceSource *source) {
   // One boot-lifetime owner. First call fixes caller resource references/config;
   // repeated calls cannot replace an active or terminal session with another ID.
-  static ridesync::Esp32LocalTelemetry runtime(uart, spi, wire, q);
+  static ridesync::Esp32LocalTelemetry runtime(uart, spi, wire, q, source);
   return runtime;
 }
 extern "C" bool ridesync_local_telemetry_start(ridesync::Esp32LocalTelemetry &runtime) {
