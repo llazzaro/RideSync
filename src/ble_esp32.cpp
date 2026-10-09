@@ -465,8 +465,28 @@ bool validResetIdentity(const BondIdentity &id) {
           (id.type == IdentityType::RandomStatic && (id.address[5] & 0xc0) == 0xc0));
 }
 } // namespace
+namespace {
+class RoutingLease {
+public:
+  explicit RoutingLease(std::atomic_flag &flag)
+      : flag_(flag), held_(!flag.test_and_set(std::memory_order_acquire)) {}
+  ~RoutingLease() {
+    if (held_)
+      flag_.clear(std::memory_order_release);
+  }
+  bool held() const { return held_; }
+
+private:
+  std::atomic_flag &flag_;
+  bool held_;
+};
+} // namespace
+
 BondResetSubmission Esp32BleHost::requestBondReset(const BondIdentity &id, uint32_t operation,
                                                    uint32_t deadline, uint32_t now) {
+  RoutingLease admission(routing_lock_);
+  if (!admission.held() || wakeReserved())
+    return BondResetSubmission::Busy;
   if (reset_.phase.load(std::memory_order_acquire) == 1 || reset_.phase.load() == 2)
     return BondResetSubmission::Busy;
   if (!operation || operation <= reset_.last_operation)
@@ -803,8 +823,9 @@ void Esp32BleHost::performBondReset() {
   result.outcome = BondOutcome::Refused;
   if (!resetAllowed())
     return;
-  if (sdk_calls_.load(std::memory_order_acquire) || ble_gap_disc_active() || ble_gap_adv_active() ||
-      ble_gap_conn_active() || routing_lock_.test_and_set(std::memory_order_acquire)) {
+  if (wakeReserved() || sdk_calls_.load(std::memory_order_acquire) || ble_gap_disc_active() ||
+      ble_gap_adv_active() || ble_gap_conn_active() ||
+      routing_lock_.test_and_set(std::memory_order_acquire)) {
     result.outcome = BondOutcome::Busy;
     return;
   }
@@ -1026,7 +1047,8 @@ uint16_t Esp32BleHost::mtu(uint16_t connection) const {
 }
 int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   CallbackAccess sdk(sdk_calls_);
-  if (reset_gate_.load(std::memory_order_acquire)) {
+  if (reset_gate_.load(std::memory_order_acquire) ||
+      (wakeReserved() && (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
     if (cmd.phase != BlePhase::Security)
       ctx.terminal.store(true);
     return kBleHostReserved;
