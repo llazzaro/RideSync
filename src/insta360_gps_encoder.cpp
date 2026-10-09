@@ -131,3 +131,11 @@ GpsEncodingResult encodeGps(const GpsEncoderConfig &config, const RecordTimestam
 }
 } // namespace insta360
 } // namespace ridesync
+
+// Link-only data anchor: retaining the pure encoder does not call it or enable
+// a camera capability. The opt-in target adds -u for this symbol explicitly.
+extern "C" {
+extern ridesync::insta360::GpsEncodingResult (*const ridesync_insta360_gps_encoder_backend)(
+    const ridesync::insta360::GpsEncoderConfig &, const ridesync::RecordTimestamp &,
+    const ridesync::ModemSnapshot &, uint8_t) = &ridesync::insta360::encodeGps;
+}

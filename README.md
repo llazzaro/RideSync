@@ -14,7 +14,8 @@ telemetry forwarding depend on each model's verified capabilities.
 Native tests cover camera/group state machines, button and LED behavior, session
 time, A7670E GNSS parsing/transport, bounded GPS/raw-IMU storage, configuration
 persistence, health supervision, the shared BLE central, the HERO12 adapter and
-correlated camera-event logging and opt-in static MotionV4 telemetry.
+correlated camera-event logging, opt-in static MotionV4 telemetry and the pure
+source-backed BE80 GPS encoder.
 The retained ESP32 builds link the real BLE host and HERO12 composition. These
 checks establish software behavior and build compatibility; they do not prove
 camera or sensor operation on the motorcycle.
@@ -67,6 +68,11 @@ identity/API qualification and explicit start/stop with observed Encoding
 confirmation. Its tests use schema-derived synthetic host packets; physical
 pairing, recording and wake remain untested. External GPS/IMU injection into GoPro
 is not assumed; local microSD ride logging remains independent. See [GoPro plan](docs/gopro_plan.md).
+
+The [pure GPS encoder](docs/gps_protocol.md#implemented-pure-encoder-29) has a
+source-backed experimental 71-byte binary path with independent byte/error tests.
+It does not transmit or enable GPS on any camera; profile forwarding and actual
+stored metadata qualification remain open in #14/#22.
 
 These statuses refer to RideSync, not claims made by upstream projects.
 See [protocol research](docs/insta360_protocol.md) and
