@@ -212,64 +212,64 @@ void SupervisedEsp32Application::finishReset() {
   reset_.phase = ApplicationResetPhase::Finished;
   hero12Runtime().adapter.finishMaintenanceDrain();
 }
-void SupervisedEsp32Application::serviceReset() {
-  if (reset_.releasable)
-    return;
-  uint32_t now = 0;
-  if (!resetNow(now) || !resetAdmitted())
-    revokeReset();
-  else if (now - reset_deadline_ < 0x80000000UL)
-    revokeReset(true);
-  if (proof_pending_) {
-    const auto result = pairingProofMaintenance().result(reset_.operation);
-    if (!result.releasable)
-      return;
-    reset_.proof_denied = result.durable;
-    reset_.proof_write_attempted = result.write_attempted;
-    reset_.requalification_required = result.durable || result.write_attempted;
-    reset_.error = result.error;
-    pairingProofMaintenance().release(reset_.operation);
-    proof_pending_ = false;
-    if (result.cancelled || result.timed_out || !result.durable) {
-      if (result.cancelled || result.timed_out)
-        revokeReset(result.timed_out);
-      else {
-        reset_.finished = true;
-        reset_.outcome = BondOutcome::Refused;
-      }
-      finishReset();
-      return;
-    }
-    reset_.phase = ApplicationResetPhase::Submitting;
-  }
-  if (host_pending_) {
-    const auto result = Esp32BleHost::instance().bondResetResult(reset_host_operation_, now);
-    reset_.mutation = reset_.mutation || result.mutation;
-    reset_.requalification_required =
-        reset_.requalification_required || result.requalification_required;
+bool SupervisedEsp32Application::serviceResetProof() {
+  if (!proof_pending_)
+    return true;
+  const auto result = pairingProofMaintenance().result(reset_.operation);
+  if (!result.releasable)
+    return false;
+  reset_.proof_denied = result.durable;
+  reset_.proof_write_attempted = result.write_attempted;
+  reset_.requalification_required = result.durable || result.write_attempted;
+  reset_.error = result.error;
+  pairingProofMaintenance().release(reset_.operation);
+  proof_pending_ = false;
+  if (result.cancelled || result.timed_out || !result.durable) {
     if (result.cancelled || result.timed_out)
       revokeReset(result.timed_out);
-    // Revocation can precede our first observation of an admitted mutation.
-    // Merge that evidence before either held or final host-resource release.
-    if (reset_.finished && reset_.mutation)
-      reset_.outcome = BondOutcome::Indeterminate;
-    if (!result.releasable)
-      return;
-    host_pending_ = false;
-    reset_.error = result.error;
-    if (!reset_.finished && result.outcome == BondOutcome::Busy && !retried_) {
-      retried_ = true;
-      retry_wait_ = true;
-      retry_at_ = now + 100;
-      reset_.phase = ApplicationResetPhase::Submitting;
-    } else {
-      if (!reset_.finished)
-        reset_.outcome = result.outcome;
+    else {
       reset_.finished = true;
-      finishReset();
-      return;
+      reset_.outcome = BondOutcome::Refused;
     }
+    finishReset();
+    return false;
   }
+  reset_.phase = ApplicationResetPhase::Submitting;
+  return true;
+}
+
+bool SupervisedEsp32Application::serviceResetHost(uint32_t now) {
+  if (!host_pending_)
+    return true;
+  const auto result = Esp32BleHost::instance().bondResetResult(reset_host_operation_, now);
+  reset_.mutation = reset_.mutation || result.mutation;
+  reset_.requalification_required =
+      reset_.requalification_required || result.requalification_required;
+  if (result.cancelled || result.timed_out)
+    revokeReset(result.timed_out);
+  // Revocation can precede our first observation of an admitted mutation.
+  // Merge that evidence before either held or final host-resource release.
+  if (reset_.finished && reset_.mutation)
+    reset_.outcome = BondOutcome::Indeterminate;
+  if (!result.releasable)
+    return false;
+  host_pending_ = false;
+  reset_.error = result.error;
+  if (!reset_.finished && result.outcome == BondOutcome::Busy && !retried_) {
+    retried_ = true;
+    retry_wait_ = true;
+    retry_at_ = now + 100;
+    reset_.phase = ApplicationResetPhase::Submitting;
+    return true;
+  }
+  if (!reset_.finished)
+    reset_.outcome = result.outcome;
+  reset_.finished = true;
+  finishReset();
+  return false;
+}
+
+void SupervisedEsp32Application::serviceResetPhase(uint32_t now) {
   if (reset_.finished) {
     finishReset();
     return;
@@ -324,6 +324,21 @@ void SupervisedEsp32Application::serviceReset() {
     reset_.finished = true;
     finishReset();
   }
+}
+
+void SupervisedEsp32Application::serviceReset() {
+  if (reset_.releasable)
+    return;
+  uint32_t now = 0;
+  if (!resetNow(now) || !resetAdmitted())
+    revokeReset();
+  else if (now - reset_deadline_ < 0x80000000UL)
+    revokeReset(true);
+  if (!serviceResetProof())
+    return;
+  if (!serviceResetHost(now))
+    return;
+  serviceResetPhase(now);
 }
 void SupervisedEsp32Application::publish(Worker w, uint32_t n, DeviceHealth outcome, bool done,
                                          bool refused) {
