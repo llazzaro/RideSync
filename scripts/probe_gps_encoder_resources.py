@@ -29,6 +29,38 @@ def symbols_from(text):
     return entries
 
 
+def parse_direct_call_target(line):
+    match = re.search(r'\b(?:call(?:0|4|8|12)|j)\s+[0-9a-fA-F]+ <([^>]+)>', line)
+    return match[1].split('+0x')[0] if match else None
+
+
+def _record_indirect_call(graph, owner, opcode, operands, addresses, literal_value, registers):
+    destination = operands.split(',')[0].strip()
+    if opcode == 'l32r':
+        literal = re.match(r'a\d+,\s*([0-9a-fA-F]+)', operands)
+        if literal:
+            registers[destination] = addresses.get(literal_value(int(literal[1], 16)))
+    elif opcode == 'jx':
+        graph[owner].add('<unresolved-register-call>')
+        registers.clear()
+    elif opcode.startswith('callx'):
+        graph[owner].add(registers.get(destination) or '<unresolved-register-call>')
+        registers.clear()
+    else:
+        target = parse_direct_call_target(operands)
+        if target and target != owner:
+            graph[owner].add(target)
+        registers.pop(destination, None)
+        if opcode.startswith(('call', 'b')) or opcode == 'j':
+            registers.clear()
+
+
+def _record_instruction(graph, owner, line, addresses, literal_value, registers):
+    instruction = re.match(r'\s*[0-9a-fA-F]+:\s+[0-9a-fA-F]+\s+([\w.]+)\s*(.*)', line)
+    if instruction:
+        _record_indirect_call(graph, owner, *instruction.groups(), addresses, literal_value, registers)
+
+
 def call_graph(disassembly, addresses, literal_value):
     graph, instructions = {}, {}
     owner, registers = None, {}
@@ -40,32 +72,7 @@ def call_graph(disassembly, addresses, literal_value):
             instructions.setdefault(owner, [])
         elif owner:
             instructions[owner].append(line)
-            instruction = re.match(r'\s*[0-9a-fA-F]+:\s+[0-9a-fA-F]+\s+([\w.]+)\s*(.*)', line)
-            if not instruction:
-                continue
-            opcode, operands = instruction.groups()
-            destination = operands.split(',')[0].strip()
-            if opcode == 'l32r':
-                literal = re.match(r'a\d+,\s*([0-9a-fA-F]+)', operands)
-                if literal:
-                    registers[destination] = addresses.get(literal_value(int(literal[1], 16)))
-            elif opcode == 'jx':
-                # No indirect tail transfer is part of the qualified artifact.
-                graph[owner].add('<unresolved-register-call>')
-                registers.clear()
-            elif opcode.startswith('callx'):
-                target = registers.get(destination)
-                graph[owner].add(target or '<unresolved-register-call>')
-                registers.clear()
-            else:
-                call = re.search(r'\b(?:call(?:0|4|8|12)|j)\s+[0-9a-fA-F]+ <([^>]+)>', line)
-                if call:
-                    target = call[1].split('+0x')[0]
-                    if target != owner:
-                        graph[owner].add(target)
-                registers.pop(destination, None)
-                if opcode.startswith(('call', 'b')) or opcode == 'j':
-                    registers.clear()
+            _record_instruction(graph, owner, line, addresses, literal_value, registers)
     return graph, instructions
 
 
@@ -125,8 +132,7 @@ char gps_bytes_offset_plus_one[offsetof(GpsEncodingResult, bytes)+1];
     return result
 
 
-def inspect(elf, build_dir, nm, objdump):
-    symbols = symbols_from(run(nm, '-S', elf))
+def _anchor_encoder(symbols, elf, objdump):
     assert ANCHOR in symbols, 'missing GPS data-only retention anchor'
     encoders = [name for name in symbols if name.startswith(ENCODER)]
     assert len(encoders) == 1, 'missing/ambiguous real encoder'
@@ -139,6 +145,10 @@ def inspect(elf, build_dir, nm, objdump):
     assert match, 'missing anchor contents'
     pointer = struct.unpack('<I', bytes.fromhex(match[1]))[0]
     assert pointer == symbols[encoder][0], 'anchor does not reference real encodeGps'
+    return encoder
+
+
+def _raw_symbols_and_rom(nm, elf):
     raw_names, rom = {}, set()
     for line in run(nm, elf).splitlines():
         match = re.fullmatch(r'([0-9a-fA-F]+)\s+\w\s+(.+)', line)
@@ -146,6 +156,10 @@ def inspect(elf, build_dir, nm, objdump):
             raw_names[int(match[1], 16)] = match[2]
             if line.split()[1] == 'A':
                 rom.add(match[2])
+    return raw_names, rom
+
+
+def _section_memory(elf, objdump):
     # Load allocated literal-bearing sections once; do not launch objdump for
     # every long call in the full firmware image.
     memory = {}
@@ -156,13 +170,20 @@ def inspect(elf, build_dir, nm, objdump):
             address = int(match[1], 16)
             data = bytes.fromhex(match[2])
             memory.update((address+n, byte) for n, byte in enumerate(data))
+    return memory
+
+
+def _literal_reader(memory):
     def literal_value(address):
         try:
             return struct.unpack('<I', bytes(memory[address+n] for n in range(4)))[0]
         except KeyError:
             return None
-    graph, instructions = call_graph(run(objdump, '-d', elf), raw_names, literal_value)
-    reachable = audit_calls(graph, instructions, encoder, rom)
+
+    return literal_value
+
+
+def _encoder_frames(build_dir):
     frames = []
     for file in build_dir.rglob('insta360_gps_encoder*.su'):
         for line in file.read_text().splitlines():
@@ -170,11 +191,27 @@ def inspect(elf, build_dir, nm, objdump):
             assert kind == 'static', f'unbounded/dynamic encoder frame: {line}'
             frames.append((function, int(count)))
     assert frames and any('encodeGps(' in name for name, _ in frames), 'missing emitted encoder frame'
+    return frames
+
+
+def _assert_helper_frames(reachable, frames, nm):
     for name in reachable:
         if name.startswith('_ZN8ridesync8insta36012_GLOBAL__N_1'):
             demangled = run(Path(nm).with_name('xtensa-esp32-elf-c++filt'), name).strip()
             basename = demangled.split('::')[-1].split('(')[0]
             assert any(basename+'(' in entry for entry, _ in frames), f'missing helper frame: {demangled}'
+
+
+def inspect(elf, build_dir, nm, objdump):
+    symbols = symbols_from(run(nm, '-S', elf))
+    encoder = _anchor_encoder(symbols, elf, objdump)
+    raw_names, rom = _raw_symbols_and_rom(nm, elf)
+    memory = _section_memory(elf, objdump)
+    literal_value = _literal_reader(memory)
+    graph, instructions = call_graph(run(objdump, '-d', elf), raw_names, literal_value)
+    reachable = audit_calls(graph, instructions, encoder, rom)
+    frames = _encoder_frames(build_dir)
+    _assert_helper_frames(reachable, frames, nm)
     print('PASS: retained data anchor points to real encoder; ordinary calls resolve to pure helpers')
     print('Exceptional compiler integrity trap __stack_chk_fail is retained; abort path excluded.')
     print('Reachable emitted functions:', ', '.join(sorted(reachable)))
