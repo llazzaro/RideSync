@@ -326,3 +326,11 @@ its actual public/private store schemas; the compile-only retained target
 checks SDK compatibility. No advertisement return code is treated as a camera
 state fact, and no production recovery provider or hardware qualification is
 inferred from the source fixtures.
+
+The wake refusal patches additionally verify the exact hashes of pinned
+`ble_store_nvs.c`, `ble_hs_resolv.c` and `ble_sm.c` before installation. Their
+private NVS/RAM and SMP test excerpts retain the upstream Apache2 notices in
+`test/fixtures/wake/`. These execute actual SDK function bodies with synthetic
+NVS, resolver and transport boundaries, including behavior before the SDK's
+remote-feature/version-deferred CONNECT notification. They do not establish
+physical camera behavior or eliminate the need for a qualified recovery adapter.

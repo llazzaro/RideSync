@@ -150,9 +150,11 @@ void Esp32BleHost::wakeBarrierReleased(const WakeOperation &op) {
 bool Esp32BleHost::wakeOwnsConnection(uint16_t handle) const {
   return wakeReserved() && handle != kBleNoHandle && wake_connection_.load() == handle;
 }
-bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle) {
+bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle, bool reported_success) {
   wake_identity_pending_.store(true, std::memory_order_release);
   WakeGate routing(routing_lock_);
+  if (handle == kBleNoHandle && !reported_success)
+    return false;
   if (!routing.held() || handle == kBleNoHandle) {
     quarantineWake();
     return false;
@@ -162,18 +164,30 @@ bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle) {
       quarantineWake();
       return false; // Never terminate an established foreign handle.
     }
+  ble_gap_conn_desc description{};
+  const int found = ble_gap_conn_find(handle, &description);
+  if (!reported_success && found == BLE_HS_ENOTCONN)
+    return false; // Pinned metadata proves absence; status alone does not.
   if (!wakeIncoming(op, handle)) {
     quarantineWake();
     return false;
   }
   wake_connection_.store(handle, std::memory_order_release);
-  ble_gap_conn_desc description{};
-  if (ble_gap_conn_find(handle, &description)) {
+  if (found) {
     quarantineWake();
     return true; // Actual new handle is owned; identity stays ambiguous.
   }
   WakeGate policy(wake_lock_);
   if (!policy.held()) {
+    quarantineWake();
+    return true;
+  }
+  bool nonzero = false;
+  for (auto byte : description.peer_id_addr.val)
+    nonzero |= byte != 0;
+  if (!nonzero || description.peer_id_addr.type > BLE_ADDR_RANDOM ||
+      (description.peer_id_addr.type == BLE_ADDR_RANDOM &&
+       (description.peer_id_addr.val[5] & 0xc0) != 0xc0)) {
     quarantineWake();
     return true;
   }
@@ -188,17 +202,33 @@ bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const voi
     return true;
   if (wake_identity_pending_.load(std::memory_order_acquire))
     return false;
+  WakeGate routing(routing_lock_);
   WakeGate policy(wake_lock_);
-  if (!policy.held()) {
+  if (!routing.held() || !policy.held()) {
     quarantineWake();
     return false;
   }
-  if (!wake_identity_known_)
-    return true;
   const auto same = [](const ble_addr_t &a, const ble_addr_t &b) {
     return a.type == b.type && std::memcmp(a.val, b.val, 6) == 0;
   };
   const auto allowed = [&](const ble_addr_t &address) {
+    if (!wake_identity_known_) {
+      // CONNECT is delayed by pinned remote feature/version processing. During
+      // that interval only independently owned established central identities
+      // are attributable; never interpret missing wake identity as permission.
+      for (const auto &entry : slots_) {
+        if (!entry.context || entry.context->connection.load() == kBleNoHandle ||
+            !entry.identity.verified)
+          continue;
+        ble_addr_t owned{};
+        owned.type =
+            entry.identity.type == IdentityType::Public ? BLE_ADDR_PUBLIC : BLE_ADDR_RANDOM;
+        std::memcpy(owned.val, entry.identity.address.data(), 6);
+        if (same(owned, address))
+          return true;
+      }
+      return false;
+    }
     bool nonzero = false;
     for (auto byte : address.val)
       nonzero |= byte != 0;
@@ -231,6 +261,8 @@ bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const voi
     const auto &record = *static_cast<const ble_hs_dev_records *>(value_pointer);
     if (!allowed(record.peer_sec.peer_addr))
       return false;
+    if (!wake_identity_known_)
+      return true; // Typed record belongs to an independently owned foreign link.
     for (const auto *alias : {record.identity_addr, record.rand_addr, record.pseudo_addr})
       if (std::memcmp(alias, wake_identity_.val, 6) == 0 ||
           std::memcmp(alias, wake_ota_.val, 6) == 0)
@@ -242,5 +274,34 @@ bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const voi
     return false;
   }
 }
+bool Esp32BleHost::wakeSecurityAllowed(uint16_t handle) {
+  if (!wakeReserved())
+    return true;
+  if (wakeOwnsConnection(handle) || handle == kBleNoHandle)
+    return false;
+  WakeGate routing(routing_lock_);
+  if (!routing.held()) {
+    quarantineWake();
+    return false;
+  }
+  for (const auto &entry : slots_)
+    if (entry.context && entry.context->phase == BlePhase::Connect &&
+        entry.context->connection.load() == handle)
+      return true;
+  return false;
+}
 } // namespace ridesync
+extern "C" int ridesync_ble_wake_store_allowed(int type, const void *key, const void *value) {
+  return ridesync::Esp32BleHost::instance().wakeStoreAllowed(type, key, value);
+}
+extern "C" int ridesync_ble_wake_peer_allowed(uint8_t type, const uint8_t *address) {
+  ble_store_key key{};
+  key.sec.peer_addr.type = type;
+  std::memcpy(key.sec.peer_addr.val, address, 6);
+  return ridesync::Esp32BleHost::instance().wakeStoreAllowed(BLE_STORE_OBJ_TYPE_PEER_SEC, &key,
+                                                             nullptr);
+}
+extern "C" int ridesync_ble_wake_security_allowed(uint16_t handle) {
+  return ridesync::Esp32BleHost::instance().wakeSecurityAllowed(handle);
+}
 #endif

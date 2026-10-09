@@ -60,11 +60,18 @@ WakeRadioResult Esp32Insta360Wake::poll(const WakeOperation &op, uint32_t now) {
   result.released = false;
   if (control_.test_and_set(std::memory_order_acquire))
     return result;
-  if (work_phase_.load(std::memory_order_acquire) == 3 && !lease_.queued.load() &&
-      !lease_.barrier_running.load() && !lease_.callbacks.load() && host.releaseWake(op)) {
-    occupied_ = false;
-    work_phase_.store(0, std::memory_order_release);
-    result.released = true;
+  unsigned finished = 3;
+  if (work_phase_.compare_exchange_strong(finished, 4, std::memory_order_acq_rel)) {
+    // Claim final release before inspecting other owners. A late incoming
+    // callback can retain the lease, but the worker cannot race payload reuse.
+    if (!lease_.queued.load() && !lease_.barrier_running.load() && !lease_.callbacks.load() &&
+        lease_.connection.load() == kBleNoHandle && host.releaseWake(op)) {
+      occupied_ = false;
+      work_phase_.store(0, std::memory_order_release);
+      result.released = true;
+    } else {
+      work_phase_.store(3, std::memory_order_release);
+    }
   }
   control_.clear(std::memory_order_release);
   return result;
@@ -77,7 +84,12 @@ void Esp32Insta360Wake::worker(void *argument) {
   auto &self = *static_cast<Esp32Insta360Wake *>(argument);
   for (;;) {
     unsigned waiting = 1;
-    if (self.work_phase_.compare_exchange_strong(waiting, 2, std::memory_order_acq_rel)) {
+    bool acquired = self.work_phase_.compare_exchange_strong(waiting, 2, std::memory_order_acq_rel);
+    if (!acquired && self.lease_.connection.load(std::memory_order_acquire) != kBleNoHandle) {
+      unsigned finished = 3;
+      acquired = self.work_phase_.compare_exchange_strong(finished, 2, std::memory_order_acq_rel);
+    }
+    if (acquired) {
       self.cycle();
       self.work_phase_.store(self.worker_done_ ? 3 : 1, std::memory_order_release);
     }
@@ -93,6 +105,15 @@ void Esp32Insta360Wake::finish() {
 void Esp32Insta360Wake::cycle() {
   auto &host = Esp32BleHost::instance();
   const auto &op = lease_.operation;
+  if (worker_done_) {
+    const auto late = lease_.connection.load(std::memory_order_acquire);
+    if (late != kBleNoHandle && !terminate_attempted_) {
+      terminate_attempted_ = true;
+      if (ble_gap_terminate(late, BLE_ERR_REM_USER_CONN_TERM))
+        host.quarantineWake();
+    }
+    return;
+  }
   if (!prepared_) {
     prepared_ = true;
     int rc = 0;
@@ -164,7 +185,7 @@ int Esp32Insta360Wake::gap(ble_gap_event *event, void *argument) {
     host.wakeTerminal(lease.operation);
     break;
   case BLE_GAP_EVENT_CONNECT:
-    if (!event->connect.status && host.wakeIdentify(lease.operation, event->connect.conn_handle))
+    if (host.wakeIdentify(lease.operation, event->connect.conn_handle, !event->connect.status))
       lease.connection.store(event->connect.conn_handle, std::memory_order_release);
     lease.complete.store(true, std::memory_order_release);
     host.wakeTerminal(lease.operation);

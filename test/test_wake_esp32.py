@@ -27,13 +27,13 @@ static std::vector<uint8_t> captured_adv,captured_rsp;
 static int (*adv_callback)(ble_gap_event*,void*)=nullptr;
 static void *adv_arg=nullptr;
 static int captured_duration=0,starts=0,stops=0,start_error=0,stop_error=0;
-static std::function<void()> data_hook,rsp_hook,start_hook;
+static std::function<void()> data_hook,rsp_hook,start_hook,stop_hook;
 static int ble_gap_adv_set_data(const uint8_t*p,int n){captured_adv.assign(p,p+n);if(data_hook)data_hook();return 0;}
 static int ble_gap_adv_rsp_set_data(const uint8_t*p,int n){captured_rsp.assign(p,p+n);if(rsp_hook)rsp_hook();return 0;}
 static int ble_gap_adv_start(uint8_t,const ble_addr_t*,int duration,const ble_gap_adv_params*params,int(*cb)(ble_gap_event*,void*),void*arg){
  assert(params->conn_mode==2&&params->disc_mode==2);++starts;captured_duration=duration;adv_callback=cb;adv_arg=arg;if(start_hook)start_hook();gap_adv=!start_error;return start_error;
 }
-static int ble_gap_adv_stop(){++stops;if(!stop_error)gap_adv=false;return stop_error;}
+static int ble_gap_adv_stop(){++stops;if(stop_hook)stop_hook();if(!stop_error)gap_adv=false;return stop_error;}
 static std::vector<uint16_t> terminated;
 static int terminate_error=0,find_error=0;
 static int wake_terminate(uint16_t handle,int){terminated.push_back(handle);return terminate_error;}
@@ -43,9 +43,12 @@ HARNESS = r'''
 #include "standin.h"
 #include "nvs_boot_guard.h"
 static ridesync::NvsBootStatus boot_status;
+static std::function<void()> submit_pause,reserve_pause;
+static void testWakeSubmitPause(){if(submit_pause)submit_pause();}
+static void testWakeReservePause(){if(reserve_pause)reserve_pause();}
 namespace ridesync { NvsBootStatus nvsBootStatus(){return boot_status;} }
-#include "src/ble_esp32.cpp"
-#include "src/ble_wake_esp32.cpp"
+#include "wake_host.cpp"
+#include "wake_lease.cpp"
 #include "src/pairing_proof_esp32.cpp"
 #include "src/insta360_wake_esp32.cpp"
 using namespace ridesync;
@@ -85,9 +88,16 @@ class WakeEsp32(unittest.TestCase):
                 "nimble/porting/nimble/include/os/os_mbuf.h"]
             for name in includes:
                 target=temp/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text('#include "standin.h"\n')
+            host=(ROOT/'src/ble_esp32.cpp').read_text()
+            position=host.index('  if (routing_lock_.test_and_set',host.index('int Esp32BleHost::submit'))
+            (temp/'wake_host.cpp').write_text(host[:position]+'  testWakeSubmitPause();\n'+host[position:])
+            lease=(ROOT/'src/ble_wake_esp32.cpp').read_text()
+            anchor='  WakeGate policy(wake_lock_);'
+            (temp/'wake_lease.cpp').write_text(lease.replace(anchor,'  testWakeReservePause();\n'+anchor,1))
             (temp/'harness.cpp').write_text(HARNESS)
             binary=temp/'harness'
             subprocess.run(['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(temp/'harness.cpp'),str(ROOT/'src/pairing_reset.cpp'),str(ROOT/'src/wake_radio_policy.cpp'),str(ROOT/'src/wake_manager.cpp'),str(ROOT/'src/insta360_wake_encoder.cpp'),'-o',str(binary)],check=True)
-            for scenario in range(19):
+            for scenario in range(26):
                 result=subprocess.run([str(binary),str(scenario)],capture_output=True,text=True)
-                self.assertEqual(result.returncode,0,f'scenario {scenario}: {result.stderr}')
+                with self.subTest(scenario=scenario):
+                    self.assertEqual(result.returncode,0,f'scenario {scenario}: {result.stderr}')

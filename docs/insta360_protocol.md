@@ -282,11 +282,16 @@ It prepares raw AD/scan-response bytes and admits bounded connectable advertisin
 only after rechecking current time and cancellation. Advertising excludes new
 scan/connect and targeted bond reset; established unrelated ATT remains usable.
 It never initializes another host, changes global bonding, or erases bonds.
-Cleanup attempts stop/terminate once; errors quarantine rather than manufacture
+Cleanup attempts stop/terminate once; late incoming handles remain eligible for
+retirement until final release is claimed. A failed CONNECT status is not proof
+of no live handle. Errors quarantine rather than manufacture
 release. Callback references, host barriers and the worker's last access must
 all finish before storage reuse. The incoming peripheral handle is wake-only:
 refuse its security/store records, retire only that new handle, and require its
-actual disconnect. Foreign established handles are never terminated. Known
+actual disconnect. Public store refusal starts before the delayed CONNECT notification. Exact-pin
+SDK hooks also refuse incoming SMP dispatch/initiation, early RAM privacy-record
+mutations, and private NVS read/write/delete paths that bypass public callbacks.
+Foreign established handles are never terminated. Known
 foreign stable identities remain usable; unknown private aliases, wildcard keys
 and unknown private-key schemas are conservatively refused during that lease.
 
