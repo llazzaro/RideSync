@@ -51,7 +51,8 @@ struct Rig {
   SettingsRequests requests;
   ConfigBootstrap owner;
   SettingsSnapshot snapshot;
-  explicit Rig(const CameraPeers &p = {}) : owner(persistence, publication, requests, 7, p) {}
+  explicit Rig(const CameraPeers &p = {}, const SourceConfig *defaults = nullptr)
+      : owner(persistence, publication, requests, 7, p, defaults) {}
   void start() {
     owner.start(false, true);
     TEST_ASSERT_TRUE(publication.take(snapshot));
@@ -76,6 +77,33 @@ void startup_is_barrier_and_defaults_inactive() {
   r.owner.service(90000, false, true);
   TEST_ASSERT_EQUAL(0, r.store.writes);
   TEST_ASSERT_FALSE(r.publication.take(r.snapshot));
+}
+void commissioned_defaults_only_apply_to_missing_store_without_writes() {
+  auto defaults = camera("Commissioned");
+  Rig fresh(peers(), &defaults);
+  defaults.cameras[0].name = "Mutated";
+  fresh.start();
+  TEST_ASSERT_EQUAL_STRING("Commissioned", fresh.snapshot.settings.cameras[0].name);
+  TEST_ASSERT_TRUE(fresh.snapshot.peers_valid);
+  TEST_ASSERT_EQUAL(0, fresh.store.writes);
+  auto seed = camera("Seed");
+  Rig existing(peers(), &seed);
+  TEST_ASSERT_EQUAL((int)PersistStatus::Encoded,
+                    (int)encodeConfig(camera("Saved"), 1, existing.store.slots[0]).status);
+  existing.start();
+  TEST_ASSERT_EQUAL_STRING("Saved", existing.snapshot.settings.cameras[0].name);
+  TEST_ASSERT_EQUAL(0, existing.store.writes);
+  Rig failed(peers(), &seed);
+  failed.store.read_error = true;
+  failed.start();
+  TEST_ASSERT_FALSE(failed.snapshot.effective);
+  TEST_ASSERT_EQUAL(0, failed.snapshot.settings.count);
+  TEST_ASSERT_EQUAL(0, failed.store.writes);
+  seed.cameras[0].name.assign(65, 'x');
+  Rig invalid(peers(), &seed);
+  invalid.start();
+  TEST_ASSERT_FALSE(invalid.snapshot.effective);
+  TEST_ASSERT_EQUAL((int)PersistStatus::Invalid, (int)invalid.snapshot.outcome.status);
 }
 void bounded_copy_ignores_unused_strings_and_rejects_partial_changes() {
   auto c = camera();
@@ -463,6 +491,7 @@ void consumer_generation_limit_cannot_wrap_or_accept_zero_epoch() {
 }
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(commissioned_defaults_only_apply_to_missing_store_without_writes);
   RUN_TEST(insta360_wake_identifiers_survive_fixed_settings_handoff);
   RUN_TEST(peer_mapping_cannot_rebind_to_changed_address_or_be_restored_in_session);
   RUN_TEST(consumer_generation_limit_cannot_wrap_or_accept_zero_epoch);

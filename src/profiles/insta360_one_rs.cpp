@@ -3,7 +3,7 @@
 #include "recording_manager.h"
 namespace ridesync {
 OneRsAdapter::OneRsAdapter(BleHost &h, Clock &c)
-    : host_(h), clock_(c), central_(h, *this, &progress_) {}
+    : host_(h), clock_(c), central_(h, *this, &progress_), forwarding_(central_) {}
 bool OneRsAdapter::reached(uint32_t now, uint32_t deadline) {
   return now - deadline < 0x80000000UL;
 }
@@ -103,6 +103,7 @@ bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op,
       return false;
     const auto q = p.qualification;
     p = Peer{};
+    sequences_[i].reset(false);
     p.qualification = q;
     p.qualified = p.connecting = true;
     p.token = t;
@@ -110,10 +111,12 @@ bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op,
     p.deadline = clock_.now() + kConnectMs;
     return true;
   }
+  if (op == Operation::Start || op == Operation::Stop)
+    forwarding_.service(forwarding_time_, uint8_t(1u << i));
   if (!commandReady(i) || p.token.connection != t.connection ||
       (op != Operation::Start && op != Operation::Stop))
     return false;
-  if (p.sequence == 254) {
+  if (!sequences_[i].peek()) {
     retire(i, OneRsFault::SequenceExhausted);
     return false;
   }
@@ -130,13 +133,13 @@ bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op,
       config,
       op == Operation::Start ? insta360::Be80RecordingCommand::StartVideo
                              : insta360::Be80RecordingCommand::Stop,
-      p.sequence + 1);
+      sequences_[i].peek());
   p.token = t;
   if (!packet.size || !central_.write(i, 0, packet.bytes.data(), packet.size, clock_.now())) {
     retire(i, OneRsFault::Transport);
     return false;
   }
-  ++p.sequence; // Copied admission consumes it even if later ATT/SDK is ambiguous.
+  sequences_[i].take(); // Copied admission consumes it even if later ATT/SDK is ambiguous.
   p.pending = true;
   p.deadline = clock_.now() + kCommandMs;
   return true;
@@ -161,6 +164,7 @@ void OneRsAdapter::close(size_t i, Token t) {
     retire(i, OneRsFault::Cancelled);
 }
 void OneRsAdapter::stop() {
+  forwarding_.cancel();
   enabled_ = false;
   for (uint8_t i = 0; i < kBlePeers; ++i)
     if (peers_[i].connecting || peers_[i].ready || peers_[i].pending)
@@ -189,7 +193,11 @@ void OneRsAdapter::result(const BleResult &r) {
   const uint8_t i = r.event.peer;
   if (i >= kBlePeers || r.event.generation != peers_[i].token.connection)
     return;
+  const bool gps_write = forwarding_.status(i).active;
+  forwarding_.result(r);
   auto &p = peers_[i];
+  if (r.kind == BleResultKind::WriteComplete && gps_write)
+    return;
   if (r.kind == BleResultKind::Retired || r.kind == BleResultKind::LinkClosed) {
     retire(i, OneRsFault::Transport);
     return;
@@ -241,7 +249,7 @@ void OneRsAdapter::drain() {
       manager_->event(done);
   }
 }
-void OneRsAdapter::service() {
+void OneRsAdapter::service(bool advance_manager) {
   if (servicing_ || !manager_)
     return;
   servicing_ = true;
@@ -251,9 +259,9 @@ void OneRsAdapter::service() {
         reached(clock_.now(), peers_[i].deadline))
       retire(i, OneRsFault::Timeout);
   drain();
-  if (group_)
+  if (advance_manager && group_)
     group_->tick();
-  else
+  else if (advance_manager)
     manager_->tick();
   servicing_ = false;
 }

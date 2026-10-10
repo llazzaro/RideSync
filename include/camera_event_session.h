@@ -7,9 +7,10 @@ namespace ridesync {
 // domain used by the adapter and manager. service() runs in their owner context.
 class CameraEventSession {
 public:
-  CameraEventSession(Clock &raw, StorageSink &sink, Hero12Adapter &adapter, CameraManager &manager,
-                     RecordingManager &group, uint64_t session_id, const char *firmware,
-                     const char *provenance, const MotionAdmissionConfig &motion = {},
+  CameraEventSession(Clock &raw, StorageSink &sink, CameraRuntimePort &adapter,
+                     CameraManager &manager, RecordingManager &group, uint64_t session_id,
+                     const char *firmware, const char *provenance,
+                     const MotionAdmissionConfig &motion = {},
                      StaticMotionReferenceSource *source = nullptr);
   ~CameraEventSession();
   CameraEventSession(const CameraEventSession &) = delete;
@@ -17,7 +18,7 @@ public:
   bool configurePeer(size_t peer, uint32_t opaque_id, CameraModel model);
   bool activate();
   bool activateLocal();
-  bool binds(const Hero12Adapter &adapter, const CameraManager &manager,
+  bool binds(const CameraRuntimePort &adapter, const CameraManager &manager,
              const RecordingManager &group) const;
   bool active() const { return active_; }
   void service(CameraServiceAction *action = nullptr);
@@ -31,7 +32,7 @@ public:
   SessionClock &clock() { return clock_; }
 
 private:
-  Hero12Adapter &adapter_;
+  CameraRuntimePort &adapter_;
   CameraManager &manager_;
   RecordingManager &group_;
   SessionClock clock_;

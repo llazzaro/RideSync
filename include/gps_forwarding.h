@@ -15,13 +15,22 @@ namespace ridesync {
 class Be80CommandSequence {
 public:
   uint8_t take() {
+    if (!next_)
+      return 0;
     const uint8_t value = next_;
-    next_ = next_ == 254 ? 1 : uint8_t(next_ + 1);
+    next_ = next_ == 254 ? (wrap_ ? 1 : 0) : uint8_t(next_ + 1);
     return value;
+  }
+
+  uint8_t peek() const { return next_; }
+  void reset(bool wrap = true) {
+    next_ = 1;
+    wrap_ = wrap;
   }
 
 private:
   uint8_t next_ = 1;
+  bool wrap_ = true;
 };
 struct GpsForwardingConfig {
   bool enabled = false, source_qualified = false;

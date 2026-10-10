@@ -40,7 +40,7 @@ private:
 class ArduinoGnssPower : public GnssPowerControl {
 public:
   explicit ArduinoGnssPower(const QualifiedModemPins &pins) : pins_(pins) {}
-  bool begin() {
+  bool begin(bool keep_supply_enabled = false) {
     if (!pins_.pins_qualified || !pins_.documentary_profile_opt_in || pins_.supply < 0 ||
         pins_.supply > 33 || pins_.key < 0 || pins_.key > 33 || pins_.key == pins_.supply ||
         pins_.key == pins_.tx || pins_.key == pins_.rx || pins_.supply == pins_.tx ||
@@ -48,7 +48,10 @@ public:
       return false;
     digitalWrite(pins_.key, !pins_.key_active_high);
     pinMode(pins_.key, OUTPUT);
-    digitalWrite(pins_.supply, !pins_.supply_active_high);
+    // Shared modem/SD rails must stay asserted throughout a logging session.
+    // Explicit retained-supply mode never introduces an inactive pulse.
+    digitalWrite(pins_.supply,
+                 keep_supply_enabled ? pins_.supply_active_high : !pins_.supply_active_high);
     pinMode(pins_.supply, OUTPUT);
     enabled_ = true;
     return true;

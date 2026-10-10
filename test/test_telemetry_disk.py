@@ -114,12 +114,12 @@ class TelemetryDiskTest(unittest.TestCase):
         (path / 'fixture.cpp').write_text(SOURCE)
         subprocess.run(['c++', '-std=c++11', '-pthread', '-I'+str(ROOT/'include'),
                         str(path/'fixture.cpp'), str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
-                        str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'),
+                        str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'), str(ROOT/'src/dynamic_motion_estimator.cpp'),
                         '-o',str(path/'fixture')],check=True)
         (path / 'timestamps.cpp').write_text(TIMESTAMP_SOURCE)
         subprocess.run(['c++', '-std=c++11', '-pthread', '-I'+str(ROOT/'include'),
                         str(path/'timestamps.cpp'), str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
-                        str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'),
+                        str(ROOT/'src/session_clock.cpp'), str(ROOT/'src/telemetry_admission.cpp'), str(ROOT/'src/dynamic_motion_estimator.cpp'),
                         '-o',str(path/'timestamps')],check=True)
         cls.timestamps = subprocess.check_output([str(path/'timestamps')],text=True)
         cls.gps_timestamps = subprocess.check_output([str(path/'timestamps'),'gps'],text=True)

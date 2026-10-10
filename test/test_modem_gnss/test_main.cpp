@@ -435,6 +435,69 @@ struct CancelPower : GnssPowerControl {
     value ? ++asserted : ++released;
   }
 };
+void pre_key_is_finite_and_cancel_never_replays_or_releases_twice() {
+  for (unsigned stop : {50u, 150u, 250u}) {
+    RawClock raw;
+    SessionClock clock(raw, 1, 1000);
+    Uart uart;
+    ModemGnss modem(uart, enabled());
+    CancelPower power;
+    auto timing = qualifiedTiming();
+    timing.pre_key_ms = 100;
+    timing.key_active_ms = 100;
+    timing.settle_ms = 3000;
+    GpsManager gps(clock, modem, &power, timing);
+    gps.tick();
+    TEST_ASSERT_EQUAL((int)PowerStage::PreKey, (int)gps.powerStage());
+    TEST_ASSERT_FALSE(power.active);
+    TEST_ASSERT_EQUAL(0, power.asserted);
+    TEST_ASSERT_EQUAL(1, gps.completed());
+    raw.raw = 50;
+    gps.tick();
+    TEST_ASSERT_EQUAL(2, gps.completed());
+    if (stop >= 150) {
+      raw.raw = 100;
+      gps.tick();
+    }
+    if (stop >= 250) {
+      raw.raw = 200;
+      gps.tick();
+    }
+    raw.raw = stop;
+    gps.cancel();
+    const auto released = power.released;
+    gps.cancel();
+    raw.raw = 5000;
+    gps.tick();
+    TEST_ASSERT_EQUAL(released, power.released);
+    TEST_ASSERT_FALSE(power.active);
+    TEST_ASSERT_TRUE(uart.tx.empty());
+    TEST_ASSERT_FALSE(gps.restartAfterVerifiedBarrier());
+  }
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart uart;
+  ModemGnss modem(uart, enabled());
+  CancelPower power;
+  auto timing = qualifiedTiming();
+  timing.pre_key_ms = 100;
+  timing.key_active_ms = 100;
+  timing.settle_ms = 3000;
+  GpsManager gps(clock, modem, &power, timing);
+  gps.tick();
+  raw.raw = 100;
+  gps.tick();
+  TEST_ASSERT_TRUE(power.active);
+  raw.raw = 200;
+  gps.tick();
+  TEST_ASSERT_FALSE(power.active);
+  raw.raw = 3199;
+  gps.tick();
+  TEST_ASSERT_TRUE(uart.tx.empty());
+  raw.raw = 3200;
+  gps.tick();
+  TEST_ASSERT_EQUAL_STRING("AT\r", uart.tx.c_str());
+}
 static void cancelledPower(unsigned preparation) {
   RawClock raw;
   SessionClock clock(raw, 1, 1000);
@@ -510,6 +573,7 @@ void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(pre_key_is_finite_and_cancel_never_replays_or_releases_twice);
   RUN_TEST(cancelled_before_start_never_asserts_power_or_starts_uart);
   RUN_TEST(cancelled_active_key_releases_once_and_refuses_restart);
   RUN_TEST(cancelled_settling_never_starts_uart_or_repeats_release);

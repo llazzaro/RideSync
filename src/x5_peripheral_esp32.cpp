@@ -273,6 +273,12 @@ int Esp32X5Peripheral::gap(ble_gap_event *event, void *arg) {
       p.emit(X5InputKind::Fault, rc ? rc : BLE_HS_EDISABLED);
       break;
     }
+    if (!Esp32BleHost::instance().peripheralConnected(&p, p.token_.connection)) {
+      p.policy_.seal();
+      p.stop_pending_ = true;
+      p.emit(X5InputKind::Fault, BLE_HS_EDISABLED);
+      break;
+    }
     p.emit(X5InputKind::Connected);
     break;
   }

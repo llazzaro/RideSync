@@ -20,8 +20,9 @@ public:
 struct QualifiedPowerTiming {
   bool qualified = false;
   uint32_t key_active_ms = 0, settle_ms = 0;
+  uint32_t pre_key_ms = 0;
 };
-enum class PowerStage { Disabled, KeyActive, Settling, Complete, InvalidClock, Cancelled };
+enum class PowerStage { Disabled, KeyActive, Settling, Complete, InvalidClock, Cancelled, PreKey };
 class GpsManager {
 public:
   GpsManager(SessionClock &clock, ModemGnss &modem, GnssPowerControl *power = nullptr,

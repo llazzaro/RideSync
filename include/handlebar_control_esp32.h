@@ -2,6 +2,7 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include "handlebar_control.h"
 #include "local_telemetry_esp32.h"
+#include "profiles/mixed_camera_esp32.h"
 namespace ridesync {
 struct QualifiedHandlebar {
   bool opt_in = false, acknowledge_qualification = false;
@@ -21,7 +22,8 @@ struct HandlebarGpioStatus {
 // configuration refuses IO/admission. Supervised startup supplies qualified activation.
 class Esp32HandlebarControl {
 public:
-  Esp32HandlebarControl(Esp32LocalTelemetry &, const QualifiedHandlebar &);
+  Esp32HandlebarControl(Esp32LocalTelemetry &, const QualifiedHandlebar &,
+                        MixedCameraRuntime *cameras = nullptr);
   ~Esp32HandlebarControl();
   bool begin();
   void service();
@@ -37,6 +39,7 @@ private:
   Esp32LedGpio gpio_;
   GpioLedSink sink_;
   HandlebarControl control_;
+  RecordingManager &group_;
   bool attempted_ = false, input_ready_ = false, attached_ = false;
 };
 } // namespace ridesync

@@ -84,7 +84,8 @@ namespace {
 bool allowedOutput(int pin) {
   return pin == 18 || pin == 19 || pin == 21 || pin == 22 || pin == 23 || pin == 32;
 }
-bool validWiring(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
+} // namespace
+bool validateLedWiring(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
   if (!w.board_qualified || !w.reservations_complete || !ack ||
       (w.mode != LedMode::Mono && w.mode != LedMode::Rgb))
     return false;
@@ -109,14 +110,13 @@ bool validWiring(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
       return false;
   return true;
 }
-} // namespace
 LedBackendState GpioLedSink::begin(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
   if (begun_)
     return state_;
   begun_ = true;
   if (w.mode == LedMode::Disabled)
     return state_;
-  if (!validWiring(w, ack, button)) {
+  if (!validateLedWiring(w, ack, button)) {
     state_ = LedBackendState::Refused;
     return state_;
   }

@@ -73,6 +73,12 @@ private:
   CameraInbox *camera_;
   const MotionAdmissionConfig motion_options_;
   MotionEstimator estimator_;
+  DynamicMotionEstimator dynamic_;
+  uint64_t dynamic_time_us_ = 0;
+  uint32_t dynamic_dropped_seen_ = 0;
+  bool dynamic_discontinuity_ = false;
+  DynamicMotionEstimate updateDynamic(const ImuEvidence &, const MotionEstimate &,
+                                      uint32_t &declaration, bool fresh);
   StaticMotionReferenceSource *source_;
   MotionAdmission motion_state_ = MotionAdmission::Disabled;
   MotionCurrentSnapshot current_;

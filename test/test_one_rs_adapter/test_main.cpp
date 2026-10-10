@@ -512,10 +512,70 @@ void reserved_mtu_and_launch_never_submit_or_replay_cancelled_intent() {
     TEST_ASSERT_EQUAL_UINT8(1, r.host.commands.back().bytes[10]);
   }
 }
+void composed_gps_shares_sequence_and_control_seals_partial_stream() {
+  Rig r;
+  CameraConfig camera = *r.manager.configuredCamera(0);
+  camera.gps_telemetry = true;
+  GpsForwardingConfig q;
+  q.enabled = q.source_qualified = true;
+  q.encoder.profile = insta360::GpsWireProfile::GarminBe80VideoV1;
+  q.encoder.max_age_ms = 1000;
+  TEST_ASSERT_TRUE(r.adapter.configureGps(0, camera, q));
+  r.connect();
+  RecordTimestamp time;
+  time.session_id = 1;
+  time.monotonic_ms = 0;
+  time.monotonic_quality = MonotonicQuality::Valid;
+  ModemSnapshot snap;
+  snap.session_id = 1;
+  snap.fix.valid = true;
+  snap.validity = FixValidity::Valid;
+  snap.age_available = true;
+  snap.age_ms = 0;
+  snap.fix.latitude_degrees = 1;
+  snap.fix.longitude_degrees = -2;
+  snap.fix.utc_date.available = snap.fix.utc_time.available = true;
+  snap.fix.utc_date.value.year = 2000;
+  snap.fix.utc_date.value.month = snap.fix.utc_date.value.day = 1;
+  snap.fix.speed_metres_per_second.available = snap.fix.course_degrees.available =
+      snap.fix.altitude_msl_metres.available = true;
+  snap.fix.speed_metres_per_second.value = 3;
+  snap.fix.course_degrees.value = 90;
+  snap.fix.altitude_msl_metres.value = 4;
+  r.adapter.forwardingTime(time);
+  r.adapter.forwarding().offer(time, snap);
+  r.adapter.serviceGps(0);
+  TEST_ASSERT_EQUAL_UINT(20, r.host.commands.back().size);
+  TEST_ASSERT_EQUAL_UINT8(1, r.host.commands.back().bytes[10]);
+  // Complete each admitted fragment, then allow the next finite chunk.
+  for (unsigned i = 0; i < 4; ++i) {
+    r.pump();
+    r.adapter.serviceGps(0);
+  }
+  TEST_ASSERT_EQUAL_UINT(1, r.adapter.forwarding().status(0).att_completed_packets);
+  r.manager.request(0, Operation::Start);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT8(2, r.host.commands.back().bytes[10]);
+  TEST_ASSERT_EQUAL(RecordingState::Unknown, r.manager.state(0)->observed);
+  time.monotonic_ms = 1000;
+  r.clock.value = 1000;
+  r.adapter.forwardingTime(time);
+  r.adapter.forwarding().offer(time, snap);
+  r.adapter.serviceGps(0);
+  TEST_ASSERT_TRUE(r.adapter.forwarding().status(0).active);
+  const auto before = r.sent(5);
+  r.manager.request(0, Operation::Stop);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(before, r.sent(5));
+  TEST_ASSERT_FALSE(r.adapter.commandReady(0));
+  TEST_ASSERT_FALSE(r.adapter.forwarding().status(0).linked);
+  TEST_ASSERT_EQUAL(RecordingState::Unknown, r.manager.state(0)->observed);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(composed_gps_shares_sequence_and_control_seals_partial_stream);
   RUN_TEST(reserved_mtu_and_launch_never_submit_or_replay_cancelled_intent);
   RUN_TEST(qualification_each_guard_and_pending_cleanup_are_enforced);
   RUN_TEST(overflow_att_error_and_old_generation_never_observe_or_replay);

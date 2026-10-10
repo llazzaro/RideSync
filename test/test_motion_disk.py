@@ -18,7 +18,7 @@ SOURCE = r'''
 using namespace ridesync;
 static_assert(Storage::kCapacity==8 && Storage::kMaxRowBytes==3072 && Storage::kChunkBytes==256,
               "storage resource contract changed");
-static_assert(sizeof(MotionEvidence)<=160 && sizeof(TelemetryRecord)<=704,
+static_assert(sizeof(MotionEvidence)<=248 && sizeof(TelemetryRecord)<=792,
               "paired payload bound changed");
 struct C : Clock { uint32_t now() const override { return 0; } };
 struct S : StorageSink {
@@ -90,7 +90,7 @@ class MotionDiskTest(unittest.TestCase):
         p = Path(cls.directory.name)
         (p/'fixture.cpp').write_text(SOURCE)
         subprocess.run(['c++','-std=c++11','-I'+str(ROOT/'include'),'-I'+str(ROOT),str(p/'fixture.cpp'),
-                        str(ROOT/'src/telemetry_admission.cpp'),str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),str(ROOT/'src/session_clock.cpp'),'-o',str(p/'fixture')],check=True)
+                        str(ROOT/'src/telemetry_admission.cpp'), str(ROOT/'src/dynamic_motion_estimator.cpp'),str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),str(ROOT/'src/session_clock.cpp'),'-o',str(p/'fixture')],check=True)
         cls.data = subprocess.check_output([str(p/'fixture')],text=True)
         cls.extreme = subprocess.check_output([str(p/'fixture'),'extreme'],text=True)
 

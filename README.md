@@ -11,6 +11,13 @@ telemetry forwarding depend on each model's verified capabilities.
 ## Current status
 
 **Software modules are implemented; hardware qualification is incomplete.**
+The [composed bench image](docs/bench_test_version.md) now brings configured X5,
+ONE RS, GO 3S and HERO12 adapters into one group/control/logging owner. It starts
+the declared GNSS/SD route and optional button/LED/IMU from private commissioning,
+with explicit serial commands for testing before motorcycle installation.
+Use `bench_application` for this workflow; the single-X5 serial image remains a
+smaller diagnostic milestone. Closed component tickets do not mean every camera
+capability or motion accuracy goal is supported.
 Native tests cover camera/group state machines, button and LED behavior, session
 time, A7670E GNSS parsing/transport, bounded GPS/raw-IMU storage, configuration
 persistence, health supervision, the shared BLE central, the HERO12 adapter and
@@ -29,10 +36,11 @@ firmware/API and required store evidence are qualified. The handlebar and local
 telemetry workflows are composed and tested synthetically; physical bench
 validation remains open. Qualified static force/rate and externally referenced
 roll/pitch now have [runtime logging](docs/motion_logging.md#implemented-static-motion-logging-v4).
-An [experimental dynamic replay](docs/dynamic_motion_estimator.md) now computes
-bounded gyro attitude and gravity-free body acceleration for later reference
-tests; its numeric outputs remain Unreliable and are not logged as MotionV4
-dynamic results.
+The [experimental dynamic estimator](docs/dynamic_motion_estimator.md) computes
+bounded gyro attitude and gravity-free body acceleration in both offline replay
+and opt-in live MotionV5 diagnostics. Its numeric outputs remain Unreliable,
+require external stationary initialization and declared timing, and expire after
+the bounded horizon. MotionV4 trusted dynamic results remain invalid.
 Dynamic linear acceleration/lean and Insta360 GPS forwarding still need
 their required protocol or reference evidence. X5 recording and opt-in wake/recovery
 software are implemented; composed hardware qualification remains pending.

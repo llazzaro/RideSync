@@ -1,13 +1,15 @@
 #include "camera_event_session.h"
 namespace ridesync {
-CameraEventSession::CameraEventSession(Clock &raw, StorageSink &sink, Hero12Adapter &adapter,
+CameraEventSession::CameraEventSession(Clock &raw, StorageSink &sink, CameraRuntimePort &adapter,
                                        CameraManager &manager, RecordingManager &group, uint64_t id,
                                        const char *firmware, const char *provenance,
                                        const MotionAdmissionConfig &motion,
                                        StaticMotionReferenceSource *source)
     : adapter_(adapter), manager_(manager), group_(group), clock_(raw, id, 1000),
       storage_(sink, {id, firmware, provenance, 2, 4,
-                      motion.requested ? StorageFormat::MotionV4 : StorageFormat::CameraV3}),
+                      motion.dynamic.enabled ? StorageFormat::MotionV5
+                      : motion.requested     ? StorageFormat::MotionV4
+                                             : StorageFormat::CameraV3}),
       admission_(clock_, storage_, imu_, &camera_, motion, source),
       logger_(camera_, raw, id, group) {}
 CameraEventSession::~CameraEventSession() {
@@ -39,7 +41,7 @@ bool CameraEventSession::activate() {
   route_owned_ = true;
   return true;
 }
-bool CameraEventSession::binds(const Hero12Adapter &adapter, const CameraManager &manager,
+bool CameraEventSession::binds(const CameraRuntimePort &adapter, const CameraManager &manager,
                                const RecordingManager &group) const {
   return &adapter_ == &adapter && &manager_ == &manager && &group_ == &group;
 }

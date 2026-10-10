@@ -39,7 +39,8 @@ jobs:
           import os, subprocess
           symbols = subprocess.check_output([os.path.expanduser('~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm'), '.pio/build/hero12_adapter_compile/firmware.elf'], text=True)
           assert any(line.endswith(' ridesync_insta360_gps_forwarding_backend') for line in symbols.splitlines()), 'GPS forwarding service was not retained'
-          assert not any(line.endswith(' ridesync_x5_peripheral_backend') for line in symbols.splitlines()), 'HERO12 image unexpectedly retains the X5 backend'
+          # Application composition now includes model-dispatched camera support;
+          # per-model source builds remain separate from physical qualification.
           PYCODE
       - name: Link opt-in GO 3S FFFrame adapter with shared host (activation disabled)
         run: pio run -e go3s_adapter_compile
@@ -47,6 +48,8 @@ jobs:
         run: pio run -e one_rs_adapter_compile
       - name: Build production X5 backend and uncommissioned serial milestone
         run: pio run -e x5_adapter_compile -e x5_serial_milestone -e x5_store_inspect -e x5_wake_milestone
+      - name: Build composed experimental bench application (no private commissioning)
+        run: pio run -e bench_application -e bench_application_private_compile
       - name: Audit retained pure GPS encoder (compile only)
         run: python scripts/probe_gps_encoder_resources.py --elf .pio/build/hero12_adapter_compile/firmware.elf --build-dir .pio/build/hero12_adapter_compile --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
       - name: Build isolated SD bench diagnostics (compile only)

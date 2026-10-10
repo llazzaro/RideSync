@@ -5,16 +5,19 @@ namespace ridesync {
 namespace {
 MotionAdmissionConfig motionOptions(const LocalTelemetryConfig &c) {
   MotionAdmissionConfig m;
-  m.requested = c.motion_enabled;
+  m.requested = c.motion_enabled || c.dynamic_motion.enabled;
   m.imu_qualified = c.imu_enabled && c.imu_qualified;
   m.estimator = c.motion_config;
+  m.dynamic = c.dynamic_motion;
+  m.dynamic_cadence_us = c.dynamic_cadence_us;
+  m.dynamic_reference = c.dynamic_reference;
   m.snapshot_max_age_ms = c.motion_snapshot_max_age_ms;
   m.route = MotionInputRoute::Inbox;
   return m;
 }
 } // namespace
 LocalTelemetryRuntime::Active::Active(Clock &raw, StorageSink &sink, ModemUart &uart,
-                                      Hero12Adapter &adapter, CameraManager &manager,
+                                      CameraRuntimePort &adapter, CameraManager &manager,
                                       RecordingManager &group, uint64_t id,
                                       const LocalTelemetryConfig &config, GnssPowerControl *power,
                                       StaticMotionReferenceSource *source)
@@ -24,7 +27,7 @@ LocalTelemetryRuntime::Active::Active(Clock &raw, StorageSink &sink, ModemUart &
       gps(session.clock(), modem, power, config.power_timing, config.gps_forwarding_consumer) {}
 LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
                                              TelemetryStorageWorker &sd, TelemetryImuWorker &imu,
-                                             Hero12Adapter &adapter, CameraManager &manager,
+                                             CameraRuntimePort &adapter, CameraManager &manager,
                                              RecordingManager &group,
                                              const LocalTelemetryConfig &config,
                                              GnssPowerControl *power,
@@ -33,10 +36,8 @@ LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
       group_(group), config_(config), power_(power), source_(source) {
   const auto m = motionOptions(config);
   if (m.requested)
-    status_.motion_admission = m.imu_qualified && MotionEstimator::configValid(m.estimator) &&
-                                       m.snapshot_max_age_ms && m.snapshot_max_age_ms <= 60000
-                                   ? MotionAdmission::Enabled
-                                   : MotionAdmission::Refused;
+    status_.motion_admission =
+        motionAdmissionQualified(m) ? MotionAdmission::Enabled : MotionAdmission::Refused;
   current_safe_mode_ = config.safe_mode;
   status_.safe_mode = config.safe_mode;
 }
@@ -63,7 +64,8 @@ bool LocalTelemetryRuntime::start() {
       config_.gps_record_ms >= 0x80000000UL || !config_.power_timing.qualified ||
       (power_ &&
        (!config_.power_timing.key_active_ms || !config_.power_timing.settle_ms ||
-        config_.power_timing.key_active_ms > 60000 || config_.power_timing.settle_ms > 60000))) {
+        config_.power_timing.key_active_ms > 60000 || config_.power_timing.settle_ms > 60000 ||
+        config_.power_timing.pre_key_ms > 60000))) {
     status_.phase = TelemetryPhase::Refused;
     if (status_.motion_admission == MotionAdmission::Enabled)
       status_.motion_admission = MotionAdmission::Refused;
@@ -323,7 +325,7 @@ LocalTelemetryStatus LocalTelemetryRuntime::status() const {
 CameraEventSession *LocalTelemetryRuntime::session() {
   return active_ ? &active_->session : nullptr;
 }
-bool LocalTelemetryRuntime::binds(const Hero12Adapter &a, const CameraManager &m,
+bool LocalTelemetryRuntime::binds(const CameraRuntimePort &a, const CameraManager &m,
                                   const RecordingManager &g) const {
   return &a == &adapter_ && &m == &manager_ && &g == &group_;
 }

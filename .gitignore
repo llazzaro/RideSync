@@ -10,3 +10,4 @@ config.local.json
 compile_commands.json
 
 include/x5_commissioning.local.h
+include/bench_commissioning.local.h

@@ -125,8 +125,13 @@ void ConfigBootstrap::start(bool safe_mode, bool nvs_allowed) {
   snapshot_.epoch = epoch_;
   snapshot_.generation = 1;
   snapshot_.load = snapshot_.outcome = persistence_.load(ram_);
-  snapshot_.effective =
-      effectiveLoad(snapshot_.load.status) && copySettings(ram_, snapshot_.settings);
+  if (snapshot_.load.status == PersistStatus::Defaults && defaults_supplied_) {
+    if (!defaults_valid_ || !expandSettings(defaults_, ram_))
+      snapshot_.outcome = PersistStatus::Invalid;
+  }
+  snapshot_.effective = effectiveLoad(snapshot_.load.status) &&
+                        snapshot_.outcome.status != PersistStatus::Invalid &&
+                        copySettings(ram_, snapshot_.settings);
   if (effectiveLoad(snapshot_.load.status) && !snapshot_.effective)
     snapshot_.outcome = PersistStatus::Invalid;
   snapshot_.completed = true;

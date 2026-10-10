@@ -45,7 +45,7 @@ struct DynamicMotionEstimate {
   bool numeric_available = false, angles_available = false, dynamic_lean_valid = false,
        dynamic_acceleration_valid = false;
 };
-// Offline experimental arithmetic only: body-to-local quaternion with relative
+// Experimental arithmetic core: body-to-local quaternion with relative
 // yaw gauge zero at external stationary initialization. No measured error budget,
 // moving correction, GNSS aiding, or dynamic validity. Owner supplies body units,
 // calibrated measurements and timing provenance; snapshots have no wall-clock TTL.

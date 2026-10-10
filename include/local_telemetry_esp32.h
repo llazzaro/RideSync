@@ -3,6 +3,7 @@
 #include "bmi270_imu.h"
 #include "local_telemetry_runtime.h"
 #include "modem_arduino.h"
+#include "profiles/mixed_camera_esp32.h"
 #include "storage_sd.h"
 namespace ridesync {
 struct QualifiedLocalTelemetry {
@@ -14,6 +15,9 @@ struct QualifiedLocalTelemetry {
   // Caller asserts qualified startup/receive barrier is already complete.
   // No PWRKEY/supply operations are performed by this composition.
   bool modem_already_powered = false;
+  // Alternative finite key/settle startup on the existing GPS owner. Supply
+  // remains asserted; caller supplies real routing, polarity and timing.
+  bool modem_power_sequence = false;
 };
 // Default inactive, callable by the supervised commissioning composition. Caller owns UART,
 // initialized dedicated SPI/I2C and qualified camera singleton; all outlive canRelease. Construct
@@ -23,7 +27,8 @@ struct QualifiedLocalTelemetry {
 class Esp32LocalTelemetry {
 public:
   Esp32LocalTelemetry(HardwareSerial &, SPIClass &, TwoWire &, const QualifiedLocalTelemetry &,
-                      StaticMotionReferenceSource *source = nullptr);
+                      StaticMotionReferenceSource *source = nullptr,
+                      MixedCameraRuntime *cameras = nullptr);
   ~Esp32LocalTelemetry();
   Esp32LocalTelemetry(const Esp32LocalTelemetry &) = delete;
   Esp32LocalTelemetry &operator=(const Esp32LocalTelemetry &) = delete;
@@ -76,8 +81,10 @@ private:
     bool attempted_ = false, started_ = false;
   } imu_;
   ArduinoModemUart uart_;
+  ArduinoGnssPower power_;
   const QualifiedLocalTelemetry qualification_;
   LocalTelemetryRuntime runtime_;
+  MixedCameraRuntime *cameras_ = nullptr;
   bool attempted_ = false, route_bound_ = false;
 };
 } // namespace ridesync

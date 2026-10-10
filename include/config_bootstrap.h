@@ -105,8 +105,10 @@ enum class SaveOutcome { None, Accepted, Stale, Busy, Invalid, Refused, Durable,
 class ConfigBootstrap {
 public:
   ConfigBootstrap(ConfigPersistence &p, SettingsPublication &s, SettingsRequests &r, uint32_t epoch,
-                  const CameraPeers &peers = {})
-      : persistence_(p), publication_(s), requests_(r), epoch_(epoch), peers_(peers) {}
+                  const CameraPeers &peers = {}, const SourceConfig *defaults = nullptr)
+      : persistence_(p), publication_(s), requests_(r), epoch_(epoch), peers_(peers),
+        defaults_supplied_(defaults != nullptr),
+        defaults_valid_(!defaults || copySettings(*defaults, defaults_)) {}
   ConfigBootstrap(const ConfigBootstrap &) = delete;
   ConfigBootstrap &operator=(const ConfigBootstrap &) = delete;
   void start(bool safe_mode, bool nvs_allowed);
@@ -124,6 +126,10 @@ private:
   SettingsRequests &requests_;
   const uint32_t epoch_;
   const CameraPeers peers_;
+  // Private commissioning defaults are copied before workers. Missing-store RAM
+  // defaults only: never repair errors or replace any persisted settings.
+  Settings defaults_;
+  bool defaults_supplied_ = false, defaults_valid_ = true;
   SourceConfig ram_, pending_;
   SettingsSnapshot snapshot_;
   SettingsSave request_;

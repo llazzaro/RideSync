@@ -36,18 +36,29 @@ void GpsManager::tick() {
   }
   if (!started_) {
     if (!timing_.qualified || modem_.snapshot(now).state == ModemState::Disabled ||
-        (power_ && (timing_.key_active_ms == 0 || timing_.settle_ms == 0 ||
-                    timing_.key_active_ms > 60000 || timing_.settle_ms > 60000)))
+        (power_ &&
+         (timing_.key_active_ms == 0 || timing_.settle_ms == 0 || timing_.key_active_ms > 60000 ||
+          timing_.settle_ms > 60000 || timing_.pre_key_ms > 60000)))
       return;
     started_ = true;
     session_ = now.session_id;
     start_ms_ = now.monotonic_ms;
     if (power_) {
       power_->enableSupply();
-      power_->key(true);
-      stage_ = PowerStage::KeyActive;
+      if (timing_.pre_key_ms) {
+        power_->key(false);
+        stage_ = PowerStage::PreKey;
+      } else {
+        power_->key(true);
+        stage_ = PowerStage::KeyActive;
+      }
     } else
       stage_ = PowerStage::Complete;
+  }
+  if (stage_ == PowerStage::PreKey && now.monotonic_ms - start_ms_ >= timing_.pre_key_ms) {
+    power_->key(true);
+    stage_ = PowerStage::KeyActive;
+    start_ms_ = now.monotonic_ms;
   }
   if (stage_ == PowerStage::KeyActive && now.monotonic_ms - start_ms_ >= timing_.key_active_ms) {
     power_->key(false);
@@ -60,9 +71,11 @@ void GpsManager::tick() {
     modem_.tick(now);
     if (consumer_)
       consumer_->offer(now, modem_.snapshot(now));
-    if (completed_ != UINT32_MAX)
-      ++completed_;
   }
+  // A returned finite power-stage service is genuine owner progress too. No
+  // UART readiness or physical startup success is inferred from this generation.
+  if (completed_ != UINT32_MAX)
+    ++completed_;
 }
 bool GpsManager::restartAfterVerifiedBarrier() {
   if (stage_ == PowerStage::Cancelled)
@@ -70,8 +83,9 @@ bool GpsManager::restartAfterVerifiedBarrier() {
   const auto now = clock_.snapshot();
   if (!timing_.qualified || now.monotonic_quality != MonotonicQuality::Valid ||
       now.session_id == 0 ||
-      (power_ && (timing_.key_active_ms == 0 || timing_.settle_ms == 0 ||
-                  timing_.key_active_ms > 60000 || timing_.settle_ms > 60000)))
+      (power_ &&
+       (timing_.key_active_ms == 0 || timing_.settle_ms == 0 || timing_.key_active_ms > 60000 ||
+        timing_.settle_ms > 60000 || timing_.pre_key_ms > 60000)))
     return false;
   // Never send an AT command while our previously asserted PWRKEY is active.
   // Even a rejected restart leaves that interrupted power pulse fail-closed.

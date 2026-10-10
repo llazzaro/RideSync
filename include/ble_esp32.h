@@ -20,6 +20,10 @@ public:
   bool configurePeripheral(void *owner, int (*register_services)(void *));
   bool reservePeripheral(void *owner, uint32_t generation);
   bool releasePeripheral(void *owner, uint32_t generation);
+  bool peripheralConnected(void *owner, uint32_t generation);
+  bool peripheralGapReserved() const {
+    return peripheral_gap_reserved_.load(std::memory_order_acquire);
+  }
   bool peripheralReserved() const { return peripheral_reserved_.load(std::memory_order_acquire); }
   // Copy only the EXACT proof admitted at startup; no NVS reads on this owner.
   bool admittedProof(BleStoreProof &) const;
@@ -79,7 +83,7 @@ private:
   void *peripheral_owner_ = nullptr;
   int (*peripheral_registration_)(void *) = nullptr;
   uint32_t peripheral_generation_ = 0;
-  std::atomic<bool> peripheral_reserved_{false};
+  std::atomic<bool> peripheral_reserved_{false}, peripheral_gap_reserved_{false};
   std::atomic<bool> wake_reserved_{false}, wake_sealed_{false}, wake_quarantined_{false};
   std::atomic_flag wake_lock_ = ATOMIC_FLAG_INIT;
   WakeRadioPolicy wake_policy_;

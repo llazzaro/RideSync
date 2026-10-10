@@ -55,6 +55,6 @@ int main() {
             (path/'admission.cpp').write_text(source)
             (path/'main.cpp').write_text(main)
             subprocess.run(['c++','-std=c++11','-pthread','-I'+str(ROOT/'include'),str(path/'main.cpp'),
-                            str(path/'admission.cpp'),str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'),
+                            str(path/'admission.cpp'),str(ROOT/'src/storage.cpp'), str(ROOT/'src/motion_estimator.cpp'), str(ROOT/'src/dynamic_motion_estimator.cpp'),
                             str(ROOT/'src/session_clock.cpp'),'-o',str(path/'race')],check=True)
             subprocess.run([str(path/'race')],check=True,timeout=10)

@@ -60,6 +60,8 @@ struct LedWiring {
       {LedPolarity::Unspecified, LedPolarity::Unspecified, LedPolarity::Unspecified}};
   uint64_t reserved_pins = 0; // ALL active board/button/SD/IMU/bus reservations.
 };
+bool validateLedWiring(const LedWiring &, bool acknowledge_qualification,
+                       const ButtonGpioConfig &button = {});
 class LedGpioPort {
 public:
   virtual ~LedGpioPort() = default;

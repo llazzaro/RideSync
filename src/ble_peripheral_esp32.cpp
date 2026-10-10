@@ -36,11 +36,15 @@ bool Esp32BleHost::reservePeripheral(void *owner, uint32_t generation) {
       !nvsBootStatus().persistenceAllowed())
     return false;
   for (const auto &slot : slots_)
-    if (slot.context)
-      return false; // This milestone owns one camera; no mixed-role capacity claim.
+    if (slot.context &&
+        (slot.context->phase == BlePhase::Scan ||
+         (slot.context->phase == BlePhase::Connect &&
+          slot.context->connection.load(std::memory_order_acquire) == kBleNoHandle)))
+      return false; // Serialize GAP setup; established central links retain their contexts.
   if (ble_gap_disc_active() || ble_gap_conn_active() || ble_gap_adv_active())
     return false;
   peripheral_generation_ = generation;
+  peripheral_gap_reserved_.store(true, std::memory_order_release);
   peripheral_reserved_.store(true, std::memory_order_release);
   return true;
 }
@@ -49,7 +53,17 @@ bool Esp32BleHost::releasePeripheral(void *owner, uint32_t generation) {
   if (!gate.held() || owner != peripheral_owner_ || generation != peripheral_generation_ ||
       !peripheralReserved())
     return false;
+  peripheral_gap_reserved_.store(false, std::memory_order_release);
   peripheral_reserved_.store(false, std::memory_order_release);
+  return true;
+}
+// Called only from the owner's accepted identity-qualified CONNECT callback.
+// It releases GAP setup exclusion, retaining the peripheral ownership and final
+// callback/barrier lease. No other owner can reset/wake/reuse that lease.
+bool Esp32BleHost::peripheralConnected(void *owner, uint32_t generation) {
+  if (owner != peripheral_owner_ || generation != peripheral_generation_ || !peripheralReserved())
+    return false;
+  peripheral_gap_reserved_.store(false, std::memory_order_release);
   return true;
 }
 } // namespace ridesync

@@ -31,11 +31,5 @@ struct MotionEstimate {
   bool dynamic_lean_valid = false, dynamic_acceleration_valid = false;
 };
 enum class MotionAdmission : uint8_t { Disabled = 0, Refused = 1, Enabled = 2, Revoked = 3 };
-struct MotionEvidence {
-  MotionAdmission state = MotionAdmission::Disabled;
-  MotionEstimatorConfig config;
-  uint32_t snapshot_max_age_ms = 0;
-  StaticMotionReference reference;
-  MotionEstimate estimate;
-};
+
 } // namespace ridesync

@@ -4,6 +4,7 @@
 #include "ble_pairing_reset.h"
 #include "handlebar_control_esp32.h"
 #include "profiles/gopro_hero12_esp32.h"
+#include "profiles/mixed_camera_esp32.h"
 namespace ridesync {
 enum class ApplicationResetPhase {
   Idle,
@@ -32,6 +33,10 @@ public:
                              const QualifiedLocalTelemetry &, const QualifiedHandlebar & = {},
                              const std::array<Hero12Qualification, kMaxCameras> & = {},
                              StaticMotionReferenceSource *source = nullptr);
+  SupervisedEsp32Application(HardwareSerial &, SPIClass &, TwoWire &,
+                             const QualifiedLocalTelemetry &, const QualifiedHandlebar &,
+                             const MixedCameraQualifications &,
+                             StaticMotionReferenceSource *source = nullptr);
   CameraPeers peers() const override { return qualification_.runtime.peers; }
   ~SupervisedEsp32Application(); // caller must first observe canRelease()
   std::array<WorkerPolicy, 4> prepare(const SettingsSnapshot &, bool, bool,
@@ -56,7 +61,8 @@ private:
   TwoWire &wire_;
   QualifiedLocalTelemetry qualification_;
   QualifiedHandlebar handlebar_;
-  const std::array<Hero12Qualification, kMaxCameras> cameras_;
+  const MixedCameraQualifications cameras_;
+  MixedCameraRuntime cameras_runtime_;
   HealthSupervisor *supervisor_ = nullptr;
   std::array<WorkerPolicy, 4> policy_{};
   StartupState configuration_ = StartupState::WaitingConfig;
