@@ -8,7 +8,7 @@ public:
   virtual void disconnect() = 0;
   virtual void status() = 0;
 };
-enum class X5SerialCommand { None, Connect, Rec, Stop, Query, Status, Disconnect, Invalid };
+enum class X5SerialCommand { None, Connect, Rec, Stop, Query, Status, Disconnect, Wake, Invalid };
 // One complete line, no delayed command queue. Busy input is discarded through LF.
 class X5SerialControl {
 public:

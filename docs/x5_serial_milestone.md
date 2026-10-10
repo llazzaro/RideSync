@@ -2,7 +2,7 @@
 
 The production CE80 peripheral backend, captured-display adapter and one-attempt
 camera manager are composed in `x5_serial_milestone`. This is an Experimental
-single-X5 route for the captured firmware/settings profile. Other models, wake,
+single-X5 route for the captured firmware/settings profile. Other models,
 GPS forwarding, mixed roles and local telemetry are separate issue scope.
 The default image does not activate this route. Compilation and synthetic tests
 do not qualify an installed camera; the final observed check belongs to #46.
@@ -123,3 +123,74 @@ observation and its software criteria pass.
 A lost receive generation stays unqualified until disconnect and a fresh CONNECT.
 At final SDK admission, any newer CE81 receipt or expired approving observation
 revokes the queued toggle; no automatic replacement toggle is sent.
+
+## Optional bounded wake/recovery (#9)
+
+`x5_wake_milestone` composes the source-qualified M5 wake advertisement with the
+same production CE80 adapter. It remains uncommissioned unless the private
+provider also implements:
+
+```cpp
+bool ridesyncPrivateX5WakeConfig(ridesync::WakePeerConfig &config,
+                               ridesync::WakePolicy &policy);
+```
+
+Supply the separately evidenced six-byte wake identifier, `enabled=true`,
+`source_qualified=true`, and `profile=insta360::WakeProfile::M5WakeV1`.
+The identifier is not the BLE address. The default policy allows one three-second
+advertisement within a fifteen-second total wake/recovery deadline. Keep actual
+identifiers and store proofs private. Other camera profiles remain disabled.
+Missing/invalid wake qualification refuses WAKE while preserving independently
+qualified CONNECT/REC/STOP. The ordinary `x5_serial_milestone` refuses WAKE.
+
+Boot is idle. An explicit `WAKE` initializes the already configured shared host
+on a separate 4096-byte boot-lifetime startup worker, with a startup deadline
+bounded by the first advertising slice. SDK initialization cannot block serial
+service. Startup failure is sticky for that boot; the worker never retains or
+sends a packet. A late return after cancellation cannot advertise by itself.
+Once ready, the existing raw wake worker acquires one advertising lease. Its
+actual callback/worker release must finish before the CE80 recovery Connect.
+
+WAKE is refused while a control link, camera operation or cleanup lease exists;
+it cannot disrupt an active recording connection. Recovery requires the verified
+identity, CE82 subscription and fresh typed Video observation on the new link.
+Subscription or an accepted SDK operation alone cannot make recovery Ready.
+Unknown/photo/stale traffic waits only until the original total deadline. A
+failed/canceled recovery retires intent and waits for the real peripheral cleanup
+barrier; late display events cannot make it successful. There is no retry.
+
+Use `WAKE`, wait for `X5_WAKE phase=4 error=0 released=1` and a fresh X5 Video
+status, then separately request `REC`. Wake never issues a shutter command.
+`STOP` uses the existing adapter; `DISCONNECT` cancels wake/recovery and disconnects
+without an implicit STOP. CONNECT/QUERY/REC/STOP received during wake or cleanup
+return Busy and are discarded. STATUS is read-only. `X5_WAKE command_error`
+reports the last serial dispatch result; phase/error/released describe wake.
+The Ready phase records completed recovery, while its observed state follows
+current adapter evidence and can return Unknown after staleness/disconnection.
+
+The reusable `X5WakeRecovery` implements the existing WakeRecovery contract for
+peer zero of this single-X5 runtime. Other peer indices return Unsupported.
+It neither ticks a group coordinator nor issues Start. For a group owner, use
+`WakeManager(radio, &recovery)`, attach its `WakePreparation` to the existing
+`RecordingManager`, and call `runtime.adapter().attachRecording(group)` before
+control service. Attachment requires that group's exact CameraManager, rejects
+replacement/active-operation attachment, and routes real adapter observations,
+completion and failure through the group authority. The group outlives service;
+once attached, all control requests come through it. Serialize
+`group.beginServicePass()`, `runtime.service()`, `preparation.service()` and
+`group.tick()` in that order. The native composition test verifies wake → connect
+→ fresh Video → one Start → observed Recording through these real components,
+then explicit STOP and another REC without a second advertisement or connection.
+The recovery provider supplies a read-only current observation only while the
+real adapter has fresh Video command admission and no pending recovery lease;
+WakeManager reuses that qualified live link. Unknown/stale/busy links cannot take
+this shortcut. This does not relax an explicit serial WAKE live-link refusal.
+Existing finite group tests cover missing-peer progress; new-model/mixed
+composition still depends on their own adapters and #22 qualification.
+
+Software tests/builds establish composition, not physical wake or startup stack
+adequacy. Support remains Experimental. The final declared power-state
+wake → reconnect → fresh observation → explicit REC/STOP and playable-clip check
+is collected once in [#46](https://github.com/llazzaro/RideSync/issues/46), reusing
+the isolated wake and unchanged three-cycle evidence. Startup/worker stack and
+radio latency observations belong to the existing integrated acceptance session.

@@ -40,6 +40,7 @@ class RecordingManager {
 public:
   RecordingManager(CameraManager &cameras, Clock &clock, RecordingCallback callback = nullptr,
                    void *context = nullptr);
+  bool uses(const CameraManager &manager) const { return &cameras_ == &manager; }
   GroupError request(RecordingState intent);
   bool attachPreparation(RecordingPreparation &p);
   void detachPreparation(RecordingPreparation &p);

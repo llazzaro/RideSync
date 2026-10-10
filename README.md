@@ -29,8 +29,10 @@ firmware/API and required store evidence are qualified. The handlebar and local
 telemetry workflows are composed and tested synthetically; physical bench
 validation remains open. Qualified static force/rate and externally referenced
 roll/pitch now have [runtime logging](docs/motion_logging.md#implemented-static-motion-logging-v4).
-Dynamic linear acceleration/lean and Insta360 control/wake/GPS forwarding still need
-their required protocol or reference evidence. Opt-in HERO12 recovery now has a
+Dynamic linear acceleration/lean and Insta360 GPS forwarding still need
+their required protocol or reference evidence. X5 recording and opt-in wake/recovery
+software are implemented; composed hardware qualification remains pending.
+Opt-in HERO12 recovery now has a
 bounded discovery/connect/query/conditional-REC software path, with physical
 sleep/wake behavior still untested. The retained camera/group logging route now
 records admitted requests, validated wire ACKs and accepted state observations
@@ -46,8 +48,9 @@ and [one owner-confirmed wake](docs/hardware-results/2026-10-09-x5-wake.md#owner
 After installing a camera card, the owner reported firmware **1.11.10** and
 confirmed a playable clip after manual stop. A later probe session completed
 [three camera-observed remote Start/Stop cycles and reconnect](docs/hardware-results/2026-10-09-x5-pairing.md#three-remote-recording-cycles--owner-confirmed).
-The production X5 adapter and authoritative recording-state decoder remain
-unimplemented. Remaining camera checks are consolidated in
+The production X5 adapter and evidenced typed recording-state decoder are
+implemented; their final composed camera check remains pending. Remaining camera
+checks are consolidated in
 [#46](https://github.com/llazzaro/RideSync/issues/46). See
 [bring-up results](docs/hardware-results/2026-10-07-bringup.md).
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
@@ -62,8 +65,11 @@ passing synthetic tests does not promote a camera to Confirmed.
 | GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
 
 Observed probe results do not establish production support or firmware-qualified
-compatibility. X5 recording/state decoding, the three-cycle smoke test and
-production wake/reconnect scheduling remain open in #19, #3 and #9.
+compatibility. X5 recording/state decoding and the composed opt-in wake/reconnect
+path are implemented. The three-cycle smoke evidence is reused; the declared
+power-state and final composed camera observations remain pending in #46.
+Support remains Experimental
+([serial wake contract](docs/x5_serial_milestone.md#optional-bounded-wakerecovery-9)).
 
 GoPro HERO12 Black is the first implemented GoPro profile. Its opt-in adapter
 uses [Open GoPro](https://gopro.github.io/OpenGoPro/) for initial pairing/control,

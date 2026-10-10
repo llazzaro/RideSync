@@ -48,6 +48,9 @@ struct WakeRecoveryResult {
 class WakeRecovery {
 public:
   virtual ~WakeRecovery() = default;
+  // Read-only current control admission. Unknown unless a fresh independently
+  // qualified link can already accept recording commands; no I/O or ownership.
+  virtual RecordingState currentObserved(uint8_t) const { return RecordingState::Unknown; }
   virtual CameraError begin(const WakeOperation &, uint32_t deadline) = 0;
   virtual WakeRecoveryResult poll(const WakeOperation &, uint32_t now) = 0;
   virtual void cancel(const WakeOperation &) = 0;

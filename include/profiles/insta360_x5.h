@@ -1,11 +1,15 @@
 #pragma once
 #include "x5_peripheral.h"
 namespace ridesync {
+class RecordingManager;
 class X5Adapter final : public CameraTransport {
 public:
   X5Adapter(X5PeripheralPort &port, Clock &clock) : port_(port), clock_(clock) {}
   bool configure(const X5Qualification &);
   bool attach(CameraManager &);
+  // Optional serialized group owner of this same manager. It outlives service;
+  // once attached, control requests must come through the group coordinator.
+  bool attachRecording(RecordingManager &);
   bool begin(size_t, const CameraConfig &, Operation, Token) override;
   void cancel(size_t, Token) override;
   void close(size_t, Token) override;
@@ -16,6 +20,9 @@ public:
   bool connected() const { return connected_; }
   bool subscribed() const { return subscribed_; }
   bool active() const { return active_; }
+  bool connectionReleased() const {
+    return !token_.connection || port_.released(token_.connection);
+  }
   bool observationAge(uint32_t &age) const {
     if (!connected_ || !subscribed_ || !has_observation_ || !fresh())
       return false;
@@ -29,6 +36,7 @@ private:
   X5PeripheralPort &port_;
   Clock &clock_;
   CameraManager *manager_ = nullptr;
+  RecordingManager *recording_owner_ = nullptr;
   X5Qualification qualification_;
   X5Failure failure_ = X5Failure::Disabled;
   Token token_;
@@ -43,6 +51,7 @@ private:
   X5Input input_;
   void invalidate(bool mode = true, bool publish = true);
   void publishObservation();
+  void publish(const Event &);
   void fail(X5Failure);
   void complete();
   void input(const X5Input &);
