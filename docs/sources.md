@@ -25,6 +25,24 @@ No official code or images are copied.
 | [Insta360 GO 3S Connection FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/connection) | Accessed 2026-10-07 | Official vendor support page; content reference only | Connection indicator, wait/reset guidance and Action Pod wake behavior |
 | [Insta360 GO 3S Firmware FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/firmware) | Accessed 2026-10-07 | Official vendor support page; content reference only | Firmware update method; firmware versions remain unobserved |
 
+## GO 3S recording-profile source reconciliation (#21)
+
+Inspected October 10, 2026. These are Official product-behavior references,
+not local observations or a wire protocol. Pages are linked; no vendor code,
+images or manual text is copied. No firmware-specific support is inferred.
+
+| Source | Documentary fact | Limit |
+|---|---|---|
+| [GPS Action Remote compatibility](https://store.insta360.com/gb/product/gps-action-remote) | GO 3S is listed as compatible | No GO 3S firmware baseline, GATT or command/state bytes |
+| [GO Series remote pairing target](https://onlinemanual.insta360.com/go3s/en-us/troubleshooting/connect/wake-camera) | Accessory remotes pair directly with the camera; Pod power is separate | Generic accessory guidance does not qualify every named remote/model combination or RideSync wake |
+| [GO Series Action Pod connection](https://onlinemanual.insta360.com/go3s/en-us/operating_tutorials/connect/actionpod) | GO 3/GO 3S pairing uses powered devices, docking and live view; incompatible firmware needs an update | The documented camera/Pod link does not publish third-party services |
+
+The [GO 3S decision record](go3s_profile.md) applies these facts to the existing
+#46 capture row. GPS Action Remote, GPS Preview Remote and its built-in-mic
+variant are distinct accessories; names in generic troubleshooting prose do
+not establish interchangeable compatibility. No purchase or remote capture is
+required by this documentation change.
+
 The ESP32 example informs CE80 role/command research. The M5Stick fork and its
 original project are multicamera/wake comparison points; their reported device
 support does not prove RideSync support. insta360ctl compares remote emulation

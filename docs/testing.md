@@ -78,50 +78,51 @@ No ONE RS hardware observation or unsupported finding is currently recorded.
 
 ## GO 3S and Action Pod evidence protocol
 
-Status: **not run; target/firmware capture pending**. Run this before adapter work
-on each tested camera/Pod firmware pair. Record date, operator, camera model,
-camera firmware, Pod firmware, app version, BLE controller/sniffer model and
-software version, camera/Pod power state, activation/pairing history and
-relevant settings. Keep exact identifiers only in a private raw capture; public
-notes use stable labels such as `camera-A` and `pod-A`.
+Status: **not run; #21 is blocked on an actual third-party route and state
+capture**. The [profile decision](go3s_profile.md) identifies the camera as the
+documented accessory target. This procedure refines the existing GO 3S row in
+[#46](https://github.com/llazzaro/RideSync/issues/46); #22 retains physical
+compatibility ownership. It replaces the earlier blanket app/Pod/remote capture
+matrix rather than adding a campaign.
 
-1. Start from the official connection prerequisites: camera and Pod powered on,
-   first-use sticker removed, clean/aligned contacts, and successful live view
-   on the Pod. If firmware incompatibility is shown, follow vendor update steps
-   and record both resulting firmware versions. Allow the documented 10–15 s
-   connection window. Do not factory-reset between repetitions unless reset is
-   the variable under test.
-2. Collect a passive BLE scan and over-air capture during: power-up, insertion
-   into Pod, removal, camera-only button recording start and stop, Pod-button
-   start and stop, app-triggered start and stop (if available), mode change,
-   disconnect/reconnect, and a second full repetition. Mark each physical action
-   with a timestamped annotation; record screen/indicator state and verify each
-   result in saved media. Include idle controls as negative controls.
-3. Separately attempt service/characteristic discovery with a BLE central only
-   when it does not displace or alter the normal camera–Pod connection. Record
-   advertisements, address type, services/characteristics/properties, security
-   prompts, pairing/bonding outcome, notification subscriptions, MTU and
-   discovery errors. If discovery requires disconnecting the Pod, label those
-   runs as an altered condition. Do not infer GATT from a passive capture alone;
-   encrypted traffic without keys is inconclusive.
-4. Repeat each transition at least three times from known stopped and known
-   recording states, then repeat after power-cycle and reconnect. Keep camera
-   and Pod firmware constant within a repetition set. Compare packet direction,
-   timing, payload and response/state to the annotations. Label results
-   `Observed` only when locally captured; retain `Official` and `Community`
-   reports as separate evidence classes and label explanations `Hypothesis`.
-5. State the exact tested conditions and whether the controller can address the
-   camera, the Pod, or neither. Only claim explicit start/stop when opposite
-   state transitions are independently repeatable. If the same frame toggles,
-   require reliable observed state and never replay after ambiguous timeout.
-   Otherwise leave command/state unknown.
+1. Declare GO 3S camera, Action Pod and app firmware/version separately, camera
+   mode/settings, camera/Pod power and docking state, pairing history, capture
+   equipment/software and exact probe revision. Preserve existing flash, bonds
+   and footage. Public labels are `camera-A`, `pod-A` and `controller-A`; keep
+   identities/keys and complete raw captures private. Missing hardware or capture
+   equipment makes the row Blocked. No official remote purchase is assumed.
+2. Establish normal camera/Pod live view using powered devices and docking, with
+   the first-use sticker removed and contacts aligned. Record any firmware
+   incompatibility or UI refusal; do not automatically update, reset or unbind.
+   On the Pod UI, inspect and record the fitted firmware's Bluetooth Remote
+   search entry. Its existence/name is an observation, not an assumed handshake.
+3. Within one declared 120-second receive-only attempt, record the actual camera
+   connection direction, peer association, services/properties, MTU, subscription
+   and security requirements. The existing CE80 peripheral probe may be a
+   **Hypothesis** candidate if that UI is available: private `H`, then `A`, and
+   `X`/deadline to finish, with no `S` or wake. A central GATT scan alone cannot
+   rule out a camera-central/remote-peripheral route. Do not switch to BE80 or
+   disconnect the Pod automatically after failure; record the result first.
+4. If the route connects, capture stopped Video, one camera/Pod-button Start,
+   running recording, Stop and one mode change with display timestamps, idle
+   controls and a playable new clip. Record complete frame boundaries,
+   direction/generation/sequence and drop/truncation counts; encrypted or
+   incomplete data cannot become state fixtures. Docking disables the camera
+   buttons, so record which button actually supplied each action. If an already
+   available compatible official remote supplies evidence, record its exact
+   model/firmware separately; accessory traffic does not qualify ESP32 access.
+5. Publish only reviewed anonymized facts and licensed independent fixtures.
+   Identify the actual control peer, operation semantics and fresh mode/state
+   fields, or retain Unknown and name the missing evidence. Timer-like traffic,
+   silence, SDK success and later saved footage alone do not establish a
+   command/state decoder. Once #21 implements the evidenced route, execute the
+   existing three independently requested video REC/STOP cycles and one
+   reconnect in #46, reusing matching evidence. No automatic toggle replay.
 
-The current blocker is specific: we lack a recorded GO 3S/Action Pod
-firmware/version baseline, repeated annotated recording transitions, BLE
-advertisement/GATT/security evidence, and correlated command/response/state
-captures. Therefore target ownership and start/stop/state feasibility remain
-unresolved. A missing capture is not a negative compatibility result. Do not
-start #21 from assumptions; resume this protocol when hardware is available.
+No GO 3S capture was run during the documentary reconciliation. Remote vendor
+compatibility resolves a candidate target, not production support. Record an
+unusable attempt as unresolved under its exact conditions; it is not proof of
+model incompatibility. Wake, GPS and mixed groups remain outside #21.
 
 ## Planned GoPro and mixed-camera validation
 

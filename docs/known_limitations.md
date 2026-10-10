@@ -35,11 +35,11 @@
   X5 adapter remains unimplemented, incoming state packets remain unclassified,
   and the isolated wake result is not production orchestration. Remaining camera
   checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
-  GO 3S/Action Pod link ownership, third-party pairing,
-  services, recording commands and authoritative state are unresolved. Official
-  materials document Pod Bluetooth remote control without a third-party GATT
-  protocol; absent captures are not an incompatibility finding. See the
-  [GO 3S evidence report](insta360_protocol.md#go-3s-and-action-pod-feasibility-6).
+  Official GO 3S accessory documentation identifies the camera as the remote
+  pairing target and lists GPS Action Remote compatibility. RideSync's actual
+  third-party BLE route, services, security, recording commands and authoritative
+  state remain unresolved; missing captures do not prove incompatibility. See
+  the [GO 3S profile decision](go3s_profile.md). Support remains Not tested.
 - A7670E GNSS parsing/acquisition, session clocks, isolated microSD logging,
   durable session allocation and independent local telemetry composition have
   implemented software contracts. Real modem AT behavior/fix, commissioned
