@@ -1,9 +1,14 @@
 # GO 3S evidence fixtures
 
-Status: **no fixture captures are available**. This directory intentionally
-contains no synthetic BLE packet, fabricated device identity, or unverified
-command example. The issue #6 investigation is unresolved because target
-hardware and local captures were unavailable.
+Status: **no local fixture captures are available**. GO 3S source-derived
+request expectations and synthetic response fixtures now live in
+`test/test_go3s_codec/test_main.cpp` and `test/test_go3s_adapter/test_main.cpp`.
+They are independently authored from the pinned Community sources in the
+[profile contract](../../../docs/go3s_profile.md), not captured camera bytes.
+The literal Start/Stop/sync vectors include independently calculated
+CRC16/MODBUS; synthetic ACKs do not qualify observed recording state. The fake
+host operates the real codec/adapter/central/manager; no identity or status
+fixture is presented as a fitted device observation.
 
 When evidence is collected, add only the minimum reproducible public material:
 annotated capture (prefer a documented text export when sufficient), capture
@@ -22,7 +27,12 @@ Clearly distinguish `Official`, `Community`, `Observed`, and `Hypothesis`
 claims. A public fixture must include its origin and license/provenance; official
 manual text is linked, not copied. Do not include packet material from an
 unlicensed community source. See [source inventory](../../../docs/sources.md)
-and the [bounded capture procedure](../../../docs/testing.md#go-3s-and-action-pod-evidence-protocol).
+and the [finite hardware verification procedure](../../../docs/testing.md#go-3s-source-backed-profile-verification-21).
 
-Until an actual capture passes that procedure, there are no start, stop, toggle,
-mode or state fixtures to test against.
+Source-backed Start/Stop/normal-video/auth command tests do not require local
+hardware captures. Actual GO 3S recording-state fields remain unqualified; no
+state/timer heuristic is enabled. Synthetic test authorization labels are not
+credentials. No source-derived packet example or upstream implementation is
+copied from the unlicensed insta360ctl repository. The new codec/adapter are
+independently authored, and the root MIT/Apache references are linked as
+provenance rather than treated as relicensing inherited code.
