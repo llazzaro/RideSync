@@ -319,8 +319,9 @@ provider is still absent.
 
 ## Model differences and evidence labels
 
-X5, GO 3S and ONE RS require independent profiles. GO 3S remote-service and wake
-compatibility are unresolved; absence of evidence does not mean unsupported.
+X5, GO 3S and ONE RS require independent profiles. The source-backed GO 3S
+BE80 command profile is implemented; physical remote-service compatibility and
+wake remain unqualified. Absence of evidence does not mean unsupported.
 Use: Official (vendor documentation of product behavior), Community (reported
 externally), Hypothesis (proposed), Observed (captured locally), and Confirmed
 by testing (repeatable result with model/firmware recorded). This document
@@ -332,8 +333,10 @@ subscription and owner-confirmed connection. The separate one-shot trial records
 one shutter submission with SDK status 0 and an unresolved camera recording result.
 The later card-ready and three-cycle trials record owner-reported X5 firmware
 1.11.10 and confirmed camera-observed shutter control through the isolated
-probe. This does not qualify the unimplemented production adapter or state
-decoder. GO 3S target/protocol remain unresolved.
+probe. The production X5 adapter and typed state decoder are now implemented,
+but the final composed hardware check remains pending in #46. The GO 3S
+[BE80 profile](go3s_profile.md) implements source-backed commands while keeping
+observed recording Unknown; physical target/security qualification remains pending.
 
 ## Implementation prerequisites from pinned sources
 
@@ -462,7 +465,7 @@ command correlation or delivery. #3 must attach actual generation/time and
 mode-safe command admission. Silence, disconnect and runtime/count displays
 never become Stop. No adapter or camera capability is enabled by this change.
 BE80 receive semantics remain opaque; no guessed ACK or capture-status fields
-are adopted. The [owned display fixtures](../test/fixtures/insta360/README.md#ce80-display-fixtures-october-10-2026)
+are adopted. The [owned display fixtures](../test/fixtures/insta360/README.md#ce80-display-fixtures--october-10-2026)
 and [published-capture comparison](#published-ce80-capture-compared-with-retained-x5-data-19)
 provide the independent evidence for the known supported fields.
 
