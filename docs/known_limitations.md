@@ -31,10 +31,11 @@
   injection into GoPro is not assumed.
 - Insta360 X5/ONE RS protocols and wake remain gated by model-specific captures
   and qualification. The isolated X5 probe completed three camera-observed remote
-  Start/Stop cycles and reconnect on owner-reported firmware 1.11.10. The real
-  X5 adapter remains unimplemented, incoming state packets remain unclassified,
-  and the isolated wake result is not production orchestration. Remaining camera
-  checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
+  Start/Stop cycles and reconnect on owner-reported firmware 1.11.10. The production
+  X5 adapter, typed captured-display decoder and bounded wake/recovery composition
+  are implemented and Experimental. Their final composed hardware checks remain
+  pending; the isolated wake result does not qualify production orchestration.
+  Remaining camera checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
   Official GO 3S accessory documentation identifies the camera as the remote
   pairing target and lists GPS Action Remote compatibility. The experimental
   [GO 3S BE80 FFFrame adapter](go3s_profile.md) implements source-backed sync,

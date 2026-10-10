@@ -59,8 +59,8 @@ passing synthetic tests does not promote a camera to Confirmed.
 | Feature | X5 | GO 3S | ONE RS | HERO12 Black |
 |---|---|---|---|---|
 | BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested |
-| Start recording | Observed once (isolated probe, 1.11.10) | Not tested | Not tested | Not tested |
-| Stop recording | Not tested | Not tested | Not tested | Not tested |
+| Start recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested |
+| Stop recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested |
 | Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested |
 | GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
 
@@ -91,8 +91,9 @@ is not assumed; local microSD ride logging remains independent. See [GoPro plan]
 
 The [pure GPS encoder](docs/gps_protocol.md#implemented-pure-encoder-29) has a
 source-backed experimental 71-byte binary path with independent byte/error tests.
-It does not transmit or enable GPS on any camera; profile forwarding and actual
-stored metadata qualification remain open in #14/#22.
+The encoder itself does not transmit or enable GPS on any camera. The optional
+forwarding component completed #14 software scope; actual stored metadata
+qualification remains open in #46/#22.
 
 These statuses refer to RideSync, not claims made by upstream projects.
 See [protocol research](docs/insta360_protocol.md) and

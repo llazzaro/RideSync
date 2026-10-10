@@ -11,6 +11,11 @@ The detailed protocols below describe evidence to collect in those owning
 tickets, not repeated blockers on every software component. Reuse existing
 results for unchanged configurations and rerun affected failures after fixes.
 
+Prepare #31's existing integrated session with the
+[finite acceptance worksheet](release_bench_checklist.md), which records exact
+configuration, predeclared budgets, readiness and observed results. The worksheet
+is unexecuted; it adds no campaign or hardware pass.
+
 At the owner’s October 9 request, [#46](https://github.com/llazzaro/RideSync/issues/46)
 consolidates all remaining camera-dependent checks into one execution checklist,
 including the annotated receive evidence needed by #19. The original tickets
