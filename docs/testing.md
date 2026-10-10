@@ -723,8 +723,10 @@ latency or physical initialization observations. The 4096-byte SDK worker and
 measurements remain unperformed. One fresh review found three Important defects (queued display admission, idle
 loss replay and duplicate-result masking); all three were fixed with focused
 regressions. No Critical or Minor findings were confirmed or deferred. Source
-CI and the declared final composed-path camera check remain required for #3
-closure.
+[CI passed](https://github.com/llazzaro/RideSync/actions/runs/38044779040). #3 is
+closed for its completed software and existing three-cycle/reconnect smoke
+evidence. The final composed-path camera check and private commissioning remain
+pending in #46; support stays Experimental. No composed hardware pass is claimed.
 
 The first source CI attempt exposed an unintended static retention regression:
 a global X5 serial parser rooted its virtual port methods and the X5 backend in
