@@ -833,3 +833,21 @@ DISCONNECT retires wake, and missing qualification does not enable radio.
 The composed build links both shared-host concrete workers and is included in
 CI. This is synthetic/compile evidence; no camera, startup-stack high-water or
 latency result is claimed. The physical composed-path check is in #46.
+
+### Experimental dynamic replay for #13 — October 10
+
+The [dynamic estimator guide](dynamic_motion_estimator.md) defines the default-off
+fixed-size core, normalized CSV runner, MotionV4 nominal-cadence converter and the
+existing #31/#46 physical reference follow-up. The analytic roll fixture in
+`tools/motion_replay/fixtures/analytic_roll.csv` is independently specified as
+90 degrees over one second plus 2 m/s² body-X translation. The runner invokes the
+same C++ core tested natively, rather than a separate Python filter.
+
+Focused checks cover signed/noncommuting rotations, nonzero stationary anchors,
+translation/turn ambiguity, uncorrected bias drift and vibration, singularity,
+timestamp precision, horizon/gaps/reset/identity/nonce refusal, malformed CSV,
+exclusive output creation and recorded-data conversion. No calibrated motion
+capture, qualified acquisition-time sequence, achieved lean/acceleration error,
+GNSS aiding or ride result is claimed. Every available dynamic result remains
+Unreliable; existing MotionV4 dynamic validity stays false. The core is compiled
+by the pinned ESP32 build, but has no firmware activation or new telemetry schema.

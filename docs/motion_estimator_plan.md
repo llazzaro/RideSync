@@ -4,7 +4,10 @@ Inspected 2026-10-09. This records the design decision; no physical reference
 campaign has run. The later [static core](motion_estimator.md) implements only
 the qualified static subset, with host tests and opt-in
 [runtime/MotionV4 logging](motion_logging.md#implemented-static-motion-logging-v4).
-Dynamic estimation remains incomplete. BMI270 activation, exact mount and electrical setup remain
+The separate [bounded dynamic replay experiment](dynamic_motion_estimator.md)
+implements gyro propagation/body gravity subtraction with Unreliable numeric
+outputs; general validated dynamic estimation remains incomplete. BMI270
+activation, exact mount and electrical setup remain
 unqualified ([raw IMU path](raw_imu.md)).
 
 ## Decision and #13 scope
@@ -35,15 +38,17 @@ body heading or frame roll, and the model fails during turn entry/exit,
 braking, camber, sideslip or body motion. The current receipt-time, nominal 1 Hz
 and no-uncertainty path cannot support that proxy as motorcycle lean.
 
-**Explicit #13 resolution:** a future implementation can cover specific force,
-angular rate, externally qualified static gravity roll/pitch, and bounded gyro
-propagation with validity flags. General dynamic lean/pitch and earth-frame
+**Explicit #13 resolution:** the static implementation covers specific force,
+angular rate and externally qualified static gravity roll/pitch. The separate
+dynamic replay now covers bounded gyro propagation and body gravity subtraction
+with Unreliable quality. General validated dynamic lean/pitch and earth-frame
 dynamic acceleration remain unmet: specific force alone does not remove
 gravity, and current GNSS cannot reliably provide the missing correction.
 Keep those outputs invalid/Experimental when unobservable. #13 must remain open
 (or receive an owner-approved scope change) until the original dynamic goals
 are adequately aided and validated or explicitly removed. Static/raw outputs do
-not complete those goals.
+not complete those goals; the bounded replay provides experimental computation
+to evaluate without claiming their completion.
 
 ## Estimator contract
 
@@ -168,9 +173,12 @@ concrete basis to investigate cadence reconstruction with verified unchanged
 settings and complete frame accounting; it does not by itself align the FIFO
 read trailer to the last acquisition or establish host/GNSS synchronization.
 
-An opt-in host replay comparison of Fusion, VQF and independent analytic
-rotation/translation fixtures is a proposed first evaluation step, not an
-implemented subsystem or additional campaign. Include sustained turns, bias,
+The [implemented bounded replay experiment](dynamic_motion_estimator.md) uses
+independently authored quaternion gyro propagation and body gravity subtraction,
+not a new upstream dependency. It keeps numeric availability separate from
+trusted dynamic validity. A comparison against Fusion/VQF remains a proposal;
+independent analytic rotation/translation fixtures verify the implemented math,
+not physical accuracy. This adds no hardware campaign. Include sustained turns, bias,
 vibration, gaps and recovery, and keep modelled timing explicit. Physical
 reference collection stays in the existing #31 plan. Low-rate GNSS can inform a
 future constrained observer, but the current receipt-time/no-uncertainty route

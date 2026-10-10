@@ -6,7 +6,7 @@ import subprocess
 
 root = Path(__file__).resolve().parents[1]
 sources = sorted(
-    path for directory in ("src", "include", "test", "tools/bench")
+    path for directory in ("src", "include", "test", "tools/bench", "tools/motion_replay")
     for path in (root / directory).rglob("*")
     if path.suffix in {".cpp", ".h", ".hpp"} and ".pio" not in path.parts
 )

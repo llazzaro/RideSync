@@ -56,6 +56,10 @@
   opt-in transport contracts. Physical sensor/electrical qualification,
   calibration and dynamic lean/reference validation remain open. GPS alone does
   not measure lean; no validated inclination estimator is claimed.
+  The [dynamic replay prototype](dynamic_motion_estimator.md) computes short
+  externally initialized gyro/gravity-subtraction windows, but has no moving
+  correction, GNSS aiding or measured timing/error budget. Numeric availability
+  remains Unreliable; firmware MotionV4 dynamic validity remains false.
 - Button/LED GPIO adapters require explicit qualified wiring and default off.
   Software watchdog/recovery and actual main supervision/admission contracts exist;
   physical watchdog/stack/heap measurements, installation/enclosure (#30), and the complete
