@@ -406,6 +406,13 @@ BleHostState Esp32BleHost::start(bool enabled, bool qualified) {
     fail(BleFault::Store, after.error ? after.error : BLE_HS_ESTORE_FAIL);
     return state();
   }
+  if (peripheral_registration_) {
+    const int registered = peripheral_registration_(peripheral_owner_);
+    if (registered) {
+      fail(BleFault::Host, registered);
+      return state();
+    }
+  }
   TaskHandle_t task = nullptr;
   host_started_ = true;
   if (xTaskCreatePinnedToCore(hostTask, "ridesync_nimble", 4096, nullptr, 5, &task, 0) != pdPASS) {
@@ -501,7 +508,7 @@ private:
 BondResetSubmission Esp32BleHost::requestBondReset(const BondIdentity &id, uint32_t operation,
                                                    uint32_t deadline, uint32_t now) {
   RoutingLease admission(routing_lock_);
-  if (!admission.held() || wakeReserved())
+  if (!admission.held() || wakeReserved() || peripheralReserved())
     return BondResetSubmission::Busy;
   if (reset_.phase.load(std::memory_order_acquire) == 1 || reset_.phase.load() == 2)
     return BondResetSubmission::Busy;
@@ -1064,7 +1071,8 @@ uint16_t Esp32BleHost::mtu(uint16_t connection) const {
 int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   CallbackAccess sdk(sdk_calls_);
   if (reset_gate_.load(std::memory_order_acquire) ||
-      (wakeReserved() && (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
+      ((wakeReserved() || peripheralReserved()) &&
+       (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
     if (cmd.phase != BlePhase::Security)
       ctx.terminal.store(true);
     return kBleHostReserved;
@@ -1085,7 +1093,8 @@ int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   // Linearize GAP admission with reserveWake/requestBondReset, not just the
   // preliminary atomic check made before acquiring the routing gate.
   if (reset_gate_.load(std::memory_order_acquire) ||
-      (wakeReserved() && (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
+      ((wakeReserved() || peripheralReserved()) &&
+       (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
     routing_lock_.clear(std::memory_order_release);
     ctx.terminal.store(true);
     return kBleHostReserved;

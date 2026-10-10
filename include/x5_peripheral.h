@@ -48,7 +48,7 @@ struct X5Input {
 struct X5ShutterRequest {
   Token token;
   uint16_t handle = kBleNoHandle;
-  uint32_t deadline_ms = 0, observation_sequence = 0;
+  uint32_t deadline_ms = 0, observation_sequence = 0, observation_ms = 0;
 };
 class X5PeripheralPort {
 public:

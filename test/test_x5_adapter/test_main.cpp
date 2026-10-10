@@ -227,6 +227,21 @@ void observation_during_notify_waits_for_cutoff() {
   h.returned();
   TEST_ASSERT_EQUAL_INT(int(Lifecycle::Ready), int(h.manager.state(0)->lifecycle));
 }
+void idle_input_loss_cannot_replay_queued_observations() {
+  Harness h;
+  h.connected();
+  for (unsigned n = 0; n < 32; ++n)
+    h.frame(kCe80Video);
+  h.port.loss = true;
+  h.service();
+  TEST_ASSERT_EQUAL_INT(int(RecordingState::Unknown), int(h.adapter.observed()));
+  TEST_ASSERT_EQUAL_INT(int(X5Failure::LostInput), int(h.adapter.refusal(Operation::Stop)));
+  TEST_ASSERT_FALSE(h.adapter.ready(Operation::Query));
+  h.frame(kCe80Video);
+  h.service();
+  TEST_ASSERT_FALSE(h.adapter.ready(Operation::Start));
+  TEST_ASSERT_EQUAL_UINT(0, h.port.notifications);
+}
 void input_loss_clears_mode_and_fails_pending_command() {
   Harness h;
   h.connected();
@@ -458,6 +473,7 @@ int main() {
   RUN_TEST(pre_submission_frame_cannot_complete_new_toggle);
   RUN_TEST(observation_during_notify_waits_for_cutoff);
   RUN_TEST(input_loss_clears_mode_and_fails_pending_command);
+  RUN_TEST(idle_input_loss_cannot_replay_queued_observations);
   RUN_TEST(query_is_passive_and_bounded);
   RUN_TEST(query_accepts_photo_observation_without_toggle);
   RUN_TEST(disconnect_and_old_generation_cannot_replay);

@@ -34,6 +34,8 @@ jobs:
         run: pio run -e insta360_wake_compile
       - name: Link opt-in HERO12 adapter with the shared ESP32 host (activation disabled)
         run: pio run -e hero12_adapter_compile
+      - name: Build production X5 backend and uncommissioned serial milestone
+        run: pio run -e x5_adapter_compile -e x5_serial_milestone -e x5_store_inspect
       - name: Audit retained pure GPS encoder (compile only)
         run: python scripts/probe_gps_encoder_resources.py --elf .pio/build/hero12_adapter_compile/firmware.elf --build-dir .pio/build/hero12_adapter_compile --nm "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm" --objdump "$HOME/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-objdump"
       - name: Build isolated SD bench diagnostics (compile only)

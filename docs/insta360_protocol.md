@@ -462,3 +462,14 @@ passed [CI](https://github.com/llazzaro/RideSync/actions/runs/38000783464), full
 checks,21 focused/sanitized tests and a fresh review with no findings. The actual
 decoder replay matched all305 retained private writes. #19 is closed for its
 known-field software scope; #3/#22/#46 remain open for real integration/support.
+
+## Production single-X5 CE80 composition (#3)
+
+The portable observed-state adapter is now connected to the concrete shared-host
+peripheral backend and selectable serial application. See the
+[single-X5 commissioning and command guide](x5_serial_milestone.md) for exact
+services, identity/store admission, finite deadlines, one-shot toggle semantics,
+passive QUERY, Video-epoch limitations and final #46 check. The implementation
+never treats subscription or SDK submission as recording proof. Model support
+stays Experimental until the composed-path observation is recorded; other
+models inherit no X5 qualification.

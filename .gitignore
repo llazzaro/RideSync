@@ -8,3 +8,5 @@ config.local.json
 *.bin
 *.elf
 compile_commands.json
+
+include/x5_commissioning.local.h

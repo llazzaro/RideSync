@@ -1,3 +1,39 @@
+#if defined(RIDESYNC_X5_SERIAL_MILESTONE)
+#include "health_supervisor.h"
+#include "profiles/insta360_x5_esp32.h"
+#include <Arduino.h>
+#include <cstring>
+#include <esp_attr.h>
+#include <esp_system.h>
+namespace {
+RTC_NOINIT_ATTR uint8_t x5_retained_boot[sizeof(ridesync::BootRecord)];
+ridesync::BootRecovery x5_recovery;
+bool x5_safe_mode = true;
+} // namespace
+void setup() {
+  Serial.begin(115200);
+  ridesync::BootRecord retained;
+  std::memcpy(&retained, x5_retained_boot, sizeof retained);
+  const auto reason = esp_reset_reason();
+  const auto reset =
+      reason == ESP_RST_POWERON     ? ridesync::ResetClass::Cold
+      : reason == ESP_RST_BROWNOUT  ? ridesync::ResetClass::Brownout
+      : reason == ESP_RST_SW        ? ridesync::ResetClass::Software
+      : reason == ESP_RST_EXT       ? ridesync::ResetClass::Operator
+      : reason == ESP_RST_DEEPSLEEP ? ridesync::ResetClass::DeepSleep
+      : reason == ESP_RST_PANIC     ? ridesync::ResetClass::Panic
+      : reason == ESP_RST_INT_WDT || reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT
+          ? ridesync::ResetClass::Watchdog
+          : ridesync::ResetClass::Unknown;
+  x5_safe_mode = x5_recovery.begin(retained, reset, millis()).safe_mode;
+  std::memcpy(x5_retained_boot, &x5_recovery.record(), sizeof retained);
+  ridesync::x5MilestoneBegin(x5_safe_mode);
+}
+void loop() {
+  ridesync::x5MilestoneService(!x5_safe_mode);
+  delay(1);
+}
+#else
 #include "application_startup.h"
 #include "health_supervisor.h"
 #include "nvs_boot_guard.h"
@@ -275,3 +311,5 @@ void loop() {
     clear_safe_mode.store(true);
   delay(1);
 }
+
+#endif
