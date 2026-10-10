@@ -2,22 +2,39 @@
   "status": "DESIGN DRAFT: motorcycle fit, retention, sealing and strength unverified",
   "units": "mm",
   "parts": {
-    "bracket_enclosure": {
+    "bracket": {
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -47.0,
+          -10.0,
+          -80.0
+        ],
+        [
+          47.0,
+          40.0,
+          12.0
+        ]
+      ],
+      "volume_mm3": 52886.57189446348
+    },
+    "enclosure": {
       "watertight": true,
       "connected_solids": 1,
       "bounds_mm": [
         [
           -67.0,
-          -59.0,
-          -80.0
+          -60.0,
+          -19.0
         ],
         [
           67.0,
-          40.0,
+          -10.0,
           15.0
         ]
       ],
-      "volume_mm3": 109390.7749446113
+      "volume_mm3": 57633.825886050494
     },
     "lid": {
       "watertight": true,
@@ -25,16 +42,16 @@
       "bounds_mm": [
         [
           -67.0,
-          -59.0,
+          -60.0,
           13.0
         ],
         [
           67.0,
-          -9.0,
+          -10.0,
           18.0
         ]
       ],
-      "volume_mm3": 20945.52981914205
+      "volume_mm3": 20945.529818153358
     },
     "board_envelope_reference": {
       "watertight": true,
@@ -42,12 +59,12 @@
       "bounds_mm": [
         [
           -55.5,
-          -51.0,
+          -52.0,
           -13.0
         ],
         [
           55.5,
-          -17.0,
+          -18.0,
           6.0
         ]
       ],
@@ -70,5 +87,10 @@
       ],
       "volume_mm3": 9709.67357687544
     }
+  },
+  "clearances": {
+    "separate_parts_do_not_overlap": true,
+    "board_envelope_clear": true,
+    "two_M3_mount_bolts_and_nuts_clear": true
   }
 }

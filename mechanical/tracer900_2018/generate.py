@@ -1,4 +1,4 @@
-"""Generate a provisional integrated Tracer bracket/enclosure in millimetres.
+"""Generate separate provisional Tracer bracket, enclosure and lid in millimetres.
 
 Requires the adjacent requirements-cad.txt. Motorcycle interface parameters
 are placeholders: mesh validity does not establish fit or structural strength.
@@ -64,7 +64,8 @@ def build():
 
     length, depth, height, wall = (P[k] for k in
                                   ("case_length", "case_depth", "case_height", "wall"))
-    cy, bottom = -9-depth/2, -19
+    # Butt joint: case front y=-10 meets bracket rear y=-10 without overlap.
+    cy, bottom = -10-depth/2, -19
     top = bottom+height
     shell = rounded_box(length, depth, height, (0, cy, bottom+height/2))
     shell -= rounded_box(length-2*wall, depth-2*wall, height+4,
@@ -74,12 +75,21 @@ def build():
         for y in (cy-depth/2+6, cy+depth/2-6):
             bosses.append((x, y))
             shell += cylinder(8, height-3, (x, y, bottom+3+(height-3)/2))
-    main = bracket+shell
+    mount_axes = [(x, -10, 6) for x in
+                  (-P["enclosure_mount_pitch"]/2, P["enclosure_mount_pitch"]/2)]
+    pad = P["enclosure_mount_pad_depth"]
+    for x, y, z in mount_axes:
+        # Extra front bearing pads keep nominal 30 mm bolts clear of the board.
+        bracket += cylinder(10, pad, (x, 10+pad/2, z), "y")
+        bracket -= cylinder(P["enclosure_mount_hole_diameter"], 24+pad,
+                            (x, pad/2, z), "y")
+        shell -= cylinder(P["enclosure_mount_hole_diameter"], wall+4,
+                          (x, y-wall/2, z), "y")
     # Pilot cable openings: gland/grommet selection and sealing are unresolved.
     for x in (-43, 43):
-        main -= cylinder(P["cable_hole_diameter"], 12, (x, cy-depth/2, -6), "y")
+        shell -= cylinder(P["cable_hole_diameter"], 12, (x, cy-depth/2, -6), "y")
     for x, y in bosses:
-        main -= cylinder(2.7, 15, (x, y, top-5))
+        shell -= cylinder(2.7, 15, (x, y, top-5))
 
     lid = rounded_box(length, depth, P["lid_thickness"],
                       (0, cy, top+P["lid_thickness"]/2))
@@ -98,20 +108,36 @@ def build():
     ball = ball.translate((0, 0, 22+P["ball_diameter_reference"]/2))
     ball += cylinder(12, 12, (0, 0, 18))
     # Independent geometric clearance check for the selected board envelope.
-    assert (board ^ main).volume() < 1e-6, "Board envelope intersects solid"
+    assert (board ^ bracket).volume() < 1e-6, "Board envelope intersects bracket"
+    assert (board ^ shell).volume() < 1e-6, "Board envelope intersects enclosure"
     assert (board ^ lid).volume() < 1e-6, "Board envelope intersects lid"
-    assert (main ^ lid).volume() < 1e-6, "Lid interferes with body"
-    return {"bracket_enclosure": main, "lid": lid,
+    assert (shell ^ bracket).volume() < 1e-6, "Bracket interferes with enclosure"
+    assert (shell ^ lid).volume() < 1e-6, "Lid interferes with enclosure"
+    assert (bracket ^ lid).volume() < 1e-6, "Lid interferes with bracket"
+    # Model real bolt-length corridors and nut envelopes to verify this joint,
+    # rather than only checking that two holes share nominal coordinates.
+    for x, y, z in mount_axes:
+        corridor = cylinder(3, 30, (x, 10+pad-15, z), "y")
+        nut_envelope = cylinder(6.4, 2.4, (x, -10-wall-1.2, z), "y")
+        for name, part in (("bracket", bracket), ("enclosure", shell),
+                           ("board envelope", board), ("lid", lid)):
+            assert (corridor ^ part).volume() < 1e-6, f"Mount screw hits {name}"
+            assert (nut_envelope ^ part).volume() < 1e-6, f"Mount nut hits {name}"
+    return {"bracket": bracket, "enclosure": shell, "lid": lid,
             "board_envelope_reference": board, "ball_hardware_reference": ball}
 
 
 def export(parts):
     scene = trimesh.Scene()
-    colors = {"bracket_enclosure": [50, 61, 77, 255], "lid": [82, 105, 133, 220],
+    colors = {"bracket": [50, 61, 77, 255], "enclosure": [102, 126, 159, 255],
+              "lid": [82, 105, 133, 220],
               "board_envelope_reference": [45, 190, 145, 100],
               "ball_hardware_reference": [210, 155, 58, 255]}
     report = {"status": "DESIGN DRAFT: motorcycle fit, retention, sealing and strength unverified",
-              "units": "mm", "parts": {}}
+              "units": "mm", "parts": {},
+              "clearances": {"separate_parts_do_not_overlap": True,
+                             "board_envelope_clear": True,
+                             "two_M3_mount_bolts_and_nuts_clear": True}}
     for name, solid in parts.items():
         obj = mesh(solid)
         assert obj.is_watertight and obj.is_winding_consistent and obj.volume > 0, name
@@ -129,6 +155,11 @@ def export(parts):
         obj.visual.vertex_colors = colors[name]
         scene.add_geometry(obj, geom_name=name, node_name=name)
     scene.export(OUT / "assembly_DRAFT.glb")
+    import zipfile
+    with zipfile.ZipFile(OUT / "printable_parts_DRAFT.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in ("bracket", "enclosure", "lid"):
+            archive.write(OUT / f"{name}_DRAFT.stl", f"{name}_DRAFT.stl")
+        archive.write(ROOT / "README.md", "README.md")
     (OUT / "verification.json").write_text(json.dumps(report, indent=2)+"\n")
     return report
 
@@ -140,28 +171,30 @@ def preview(parts):
     from matplotlib.colors import to_rgba
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     fig = plt.figure(figsize=(13, 7), facecolor="#f4f5f7")
-    colors = {"bracket_enclosure": "#536278", "lid": "#8aa2be",
+    colors = {"bracket": "#536278", "enclosure": "#8aa2be", "lid": "#a9bed6",
               "board_envelope_reference": "#29b88a", "ball_hardware_reference": "#d3a14d"}
     for index, elevation, azimuth, label in [(1, 22, 65, "Front / side"),
-                                             (2, 65, -65, "Rear: enclosure open")]:
+                                             (2, 35, -65, "Exploded: three printable parts")]:
         ax = fig.add_subplot(1, 2, index, projection="3d", facecolor="#f4f5f7")
         triangles, facecolors = [], []
         for name, solid in parts.items():
-            if index == 2 and name == "lid":
-                continue
-            if index == 1 and name == "board_envelope_reference":
+            if name == "board_envelope_reference":
                 continue
             obj = mesh(solid)
+            if index == 2 and name in ("enclosure", "lid"):
+                obj.apply_translation((0, -35, 0))
+                if name == "lid":
+                    obj.apply_translation((0, 0, 28))
             triangles.extend(obj.triangles)
             facecolors.extend([to_rgba(colors[name])]*len(obj.faces))
         # Sort all assembly triangles together to preserve inter-part occlusion.
         ax.add_collection3d(Poly3DCollection(triangles, facecolors=facecolors, shade=True))
-        ax.set_xlim(-80, 80); ax.set_ylim(-70, 60); ax.set_zlim(-85, 60)
-        ax.set_box_aspect((160, 130, 145)); ax.view_init(elev=elevation, azim=azimuth)
+        ax.set_xlim(-80, 80); ax.set_ylim(-105, 60); ax.set_zlim(-85, 70)
+        ax.set_box_aspect((160, 165, 155)); ax.view_init(elev=elevation, azim=azimuth)
         ax.set_xlabel("Width (mm)"); ax.set_ylabel("Depth (mm)"); ax.set_zlabel("Height (mm)")
         ax.set_title(label)
     fig.suptitle("RideSync + printable GPS bracket | Yamaha Tracer 900 (2018)", fontsize=16)
-    fig.text(.5, .025, "DRAFT — 94 mm bracket width; bike interface inferred from photos. Green: board envelope. Gold: ball hardware reference.",
+    fig.text(.5, .025, "DRAFT — bracket, enclosure and lid print separately. Motorcycle fit unverified. Gold: ball hardware reference.",
              ha="center", fontsize=10)
     fig.savefig(OUT / "assembly_DRAFT.png", dpi=160)
     plt.close(fig)

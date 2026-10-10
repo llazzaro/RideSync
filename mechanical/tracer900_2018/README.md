@@ -1,11 +1,12 @@
-# Tracer 900 (2018): integrated GPS bracket and RideSync enclosure
+# Tracer 900 (2018): separate GPS bracket, RideSync enclosure and lid
 
 **Design draft, not a qualified motorcycle mounting part.** The bracket itself
 is included in the geometry; no purchased GPS bracket is needed for this design
-concept. The main STL combines two swept mounting legs, a 94 mm crosspiece and
-an electronics enclosure. The removable lid is a second STL. The navigation
-ball is a hardware reference in the preview/GLB, not a printed ball supplied by
-the main STL. Its bolt opening is provisional.
+concept. There are three printable STLs: the bracket (two swept legs and a
+94 mm crosspiece), the electronics enclosure, and its removable lid. The
+enclosure bolts to the bracket through two matching M3 clearance holes on a
+56 mm pitch. The navigation ball is a hardware reference in the preview/GLB,
+not a printed part. Its bolt opening is provisional.
 
 ## Dimensions and evidence
 
@@ -34,17 +35,40 @@ All parameters and STL coordinates use millimetres. GLB coordinates use metres.
 Create a separate Python environment and install `requirements-cad.txt`, then
 run `python generate.py`. Edit `parameters.json` to regenerate the geometry.
 
-- `output/bracket_enclosure_DRAFT.stl`: integrated bracket/body.
+- `output/bracket_DRAFT.stl`: standalone bracket with crosspiece and both legs.
+- `output/enclosure_DRAFT.stl`: standalone electronics enclosure.
 - `output/lid_DRAFT.stl`: removable lid; four provisional M3 clearance holes.
+- `output/printable_parts_DRAFT.zip`: the three STLs and these instructions.
 - `output/assembly_DRAFT.glb`: colored assembly with board/ball references.
-- `output/assembly_DRAFT.png`: two-view preview.
+- `output/assembly_DRAFT.png`: assembled and exploded previews.
 - `output/verification.json`: mesh and clearance checks.
 
 Exports check manifold status, watertightness, winding, positive volume, one
-connected solid per part, and absence of board-envelope/body/lid intersections.
+connected solid per part, absence of board-envelope/part intersections and
+absence of overlap between the three printable parts. The bracket/enclosure
+joint's bolt corridors and nut envelopes are checked against all three parts
+and the board envelope.
 STLs are translated to z=0 without choosing a production print orientation.
 These checks establish digital geometry only. The board reference is a bounding
 box, not a component-level model; cable plugs and external antennas are omitted.
+
+## Assemble the separate prints
+
+1. Print one bracket, one enclosure and one lid. The bracket's two legs remain
+   part of a single print to avoid introducing joints into the motorcycle mount.
+2. Mate the enclosure's front face to the rear face of the bracket crosspiece.
+   Their two holes align at x=±28 mm, z=6 mm in assembly coordinates. Insert
+   two M3 bolts from the front of the crosspiece and secure with washers and
+   nuts inside the enclosure. The crosspiece has 3 mm front bearing pads to
+   keep bolt ends clear of the board. The nominal plastic stack is 26 mm; M3 × 30 mm
+   is a starting candidate, subject to the actual washers, nuts and print fit.
+3. Close the lid using its four clearance holes and the enclosure's 2.7 mm
+   pilot holes. These are provisional M3 screw pilots, not modeled threads or
+   heat-set-insert sockets. Select/verify suitable fasteners on a printed coupon.
+
+The enclosure joint and hardware selection are unqualified design choices.
+Fastener locking, load testing and sealing around these penetrations still
+need validation. The previous fused bracket/enclosure STL has been replaced.
 
 ## Required to turn this draft into a fitted part
 
