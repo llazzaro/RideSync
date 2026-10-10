@@ -83,12 +83,21 @@ enumerated private port; run the inspector before creating the provider:
 
 ```sh
 .venv/bin/pio run -e x5_store_inspect -t upload --upload-port <private-port>
-# Capture/review the store; create the qualified ignored provider.
+.venv/bin/pio device monitor --port <private-port> --baud 115200
+# Capture/review X5_STORE, then exit the monitor before another upload.
+# Create the qualified ignored provider only after reviewing the receipt.
 .venv/bin/pio run -e x5_serial_milestone
 shasum -a 256 .pio/build/x5_serial_milestone/firmware.bin
 .venv/bin/pio run -e x5_serial_milestone -t upload --upload-port <private-port>
 .venv/bin/pio device monitor --port <private-port> --baud 115200
 ```
+
+The inspector emits `X5_STORE` only once per boot. If the upload completed before
+the monitor opened and the line was missed, keep that monitor open and press the
+board's EN/reset button once to capture a fresh boot. Record the reset and require
+the complete successful receipt before proceeding; `STATUS` does not repeat it.
+Exit the inspector monitor with Ctrl-C before rebuilding/uploading the milestone
+so only one process owns the port.
 
 Use one continuous serial owner and record any reset when opening it. The
 [tested macOS connection procedure](device_connection.md#avoid-restarting-the-modem-when-opening-serial)
