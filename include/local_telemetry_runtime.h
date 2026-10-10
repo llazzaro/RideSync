@@ -55,6 +55,9 @@ struct LocalTelemetryConfig {
   uint32_t gps_record_ms = 1000;
   bool motion_enabled = false;
   MotionEstimatorConfig motion_config;
+  DynamicMotionConfig dynamic_motion;
+  uint32_t dynamic_cadence_us = 0;
+  DynamicMotionReferenceSource *dynamic_reference = nullptr;
   uint32_t motion_snapshot_max_age_ms = 0;
   ModemConfig modem;
   // Qualified already-powered modem is supported without any GPIO operations.
@@ -97,7 +100,7 @@ struct LocalTelemetryStatus {
 class LocalTelemetryRuntime {
 public:
   LocalTelemetryRuntime(Clock &, ModemUart &, TelemetryStorageWorker &, TelemetryImuWorker &,
-                        Hero12Adapter &, CameraManager &, RecordingManager &,
+                        CameraRuntimePort &, CameraManager &, RecordingManager &,
                         const LocalTelemetryConfig &, GnssPowerControl *power = nullptr,
                         StaticMotionReferenceSource *source = nullptr);
   ~LocalTelemetryRuntime();
@@ -111,7 +114,7 @@ public:
   void withdrawMotionReference();
   LocalTelemetryStatus status() const;
   bool canRelease() const { return status_.releasable; }
-  bool binds(const Hero12Adapter &, const CameraManager &, const RecordingManager &) const;
+  bool binds(const CameraRuntimePort &, const CameraManager &, const RecordingManager &) const;
   // Control-owner access for #41. Never tick managers/admission again after
   // service(). Null before allocation; resources are retained through Finished.
   CameraEventSession *session();
@@ -127,7 +130,7 @@ private:
     CameraEventSession session;
     ModemGnss modem;
     GpsManager gps;
-    Active(Clock &, StorageSink &, ModemUart &, Hero12Adapter &, CameraManager &,
+    Active(Clock &, StorageSink &, ModemUart &, CameraRuntimePort &, CameraManager &,
            RecordingManager &, uint64_t, const LocalTelemetryConfig &, GnssPowerControl *,
            StaticMotionReferenceSource *);
   };
@@ -135,7 +138,7 @@ private:
   ModemUart &uart_;
   TelemetryStorageWorker &sd_;
   TelemetryImuWorker &imu_;
-  Hero12Adapter &adapter_;
+  CameraRuntimePort &adapter_;
   CameraManager &manager_;
   RecordingManager &group_;
   const LocalTelemetryConfig config_;

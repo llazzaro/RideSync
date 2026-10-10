@@ -3,9 +3,75 @@
 This opt-in software experiment computes attitude and body-frame gravity-free
 acceleration after an independently declared stationary initialization. Numeric
 output has **Unreliable** quality: it is not validated general motorcycle lean,
-a measured accuracy result or a live default firmware feature. Trusted dynamic
+a measured accuracy result or a default firmware feature. Trusted dynamic
 lean/acceleration validity stays false. #13 retains its original dynamic goals;
 physical reference acceptance stays in #31 and is collected through #46.
+
+## Live opt-in diagnostic logging
+
+`TelemetryAdmission` now consumes the same acquired IMU evidence used by local
+logging and converts qualified raw counts with the existing mount/residual
+calibration contract. Set `MotionAdmissionConfig.dynamic.enabled=true`, declare
+`dynamic_cadence_us` (positive and no larger than `dynamic.max_step_us`), and retain
+a `DynamicMotionReferenceSource` in `dynamic_reference`. This source supplies a
+fresh strictly increasing declaration and independently attests stationarity for
+that exact sample. Startup, quiet acceleration, a button press alone and a
+previous declaration do not automatically provide a stationary reference.
+
+For the composed local runtime, set `LocalTelemetryConfig.dynamic_motion`,
+`dynamic_cadence_us` and `dynamic_reference`, with the same qualified
+`motion_config` and `motion_snapshot_max_age_ms`. Enabling dynamic diagnostics
+requests the calibration/conversion path even when static `motion_enabled` is
+false. The runtime selects MotionV5 automatically. Missing reference source,
+invalid estimator bounds or missing/out-of-range cadence explicitly report
+`motion_admission=Refused`; they do not silently enable an uninitialized filter.
+Local raw logging continues. A retained reference source is required at startup,
+and its independently stationary declaration is still required for numeric output.
+
+Select `StorageFormat::MotionV5` when constructing admission/storage directly. Earlier formats reject enabled dynamic evidence
+rather than silently discard it. MotionV4 and earlier bytes remain unchanged.
+The live input time advances by the declared nominal cadence per acquired sample:
+its source is **ModelledCadence**, never a claimed acquisition timestamp. Sample
+frame sequence, sensor epoch, session, mount, calibration and configuration are
+retained. Missing/stale receipts, sequence gaps, changed identity, fault/reset/config transport
+events, inbox loss, rejected storage admission and route
+revocation invalidate propagation. Benign FIFO-end and read-boundary sensor-time
+metadata preserve the segment and do not advance its modelled sample clock. A new external stationary declaration is
+required after invalidation. A stalled source publishes no new diagnostic rows;
+retained CSV values are historical observations, not a live freshness claim.
+
+The existing maximum horizon is still two seconds after each external stationary
+initialization. Horizon expiry produces an Invalid/Horizon row with blank numeric
+fields; this is a finite bench diagnostic window, not continuous ride attitude.
+There is no moving correction or fabricated repeated initialization. Numeric
+rows remain Unreliable and both trusted dynamic validity flags remain zero.
+
+MotionV5 IMU/config/health/control rows retain the 124 MotionV4 columns and append
+these 23 ordered fields (GPS and camera row layouts remain unchanged):
+
+```text
+dynamic_requested,dynamic_cadence_us,dynamic_declaration,dynamic_quality,
+dynamic_fault,dynamic_timing_source,dynamic_elapsed_us,dynamic_numeric_available,
+dynamic_angles_available,dynamic_lean_valid,dynamic_acceleration_valid,
+dynamic_qw,dynamic_qx,dynamic_qy,dynamic_qz,dynamic_gravity_x_mps2,
+dynamic_gravity_y_mps2,dynamic_gravity_z_mps2,dynamic_accel_x_mps2,
+dynamic_accel_y_mps2,dynamic_accel_z_mps2,dynamic_roll_rad,dynamic_pitch_rad
+```
+
+Quality is 0 Invalid / 1 Unreliable. Fault follows `DynamicMotionFault` declaration
+order: 0 None, 1 Disabled, 2 Configuration, 3 Reference, 4 Measurement, 5 Identity,
+6 Timing, 7 Sequence, 8 Discontinuity, 9 Horizon, 10 Uninitialized. Timing is
+0 Unknown / 1 ModelledCadence / 2 QualifiedAcquisition; this live route emits only
+Unknown or ModelledCadence. Invalid numeric fields are blank. The copied envelope
+bound is 792 bytes and the eight-record queue remains bounded; the row buffer
+remains 3072 bytes. `test/telemetry_parser.py` validates the new layout marker,
+flags, enums, finite numbers and absent invalid values.
+
+Independent live host tests publish literal calibrated counts through the real
+inbox/admission/storage route, checking a 90-degree roll with 2 m/s² body-X
+translation, plus horizon expiry, sequence gaps, stationary declaration reuse,
+transport discontinuity, epoch changes and unknown cadence. These are synthetic
+software tests, not hardware accuracy evidence.
 
 ## What is calculated
 

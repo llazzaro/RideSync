@@ -26,6 +26,8 @@ CAMERA = ('peer_slot peer_id model group_generation intent_id connection_generat
 
 MOTION = 'motion_state motion_algorithm motion_snapshot_max_age_ms motion_convention motion_mount_qualified motion_residual_calibration_qualified motion_mount_id motion_calibration_id motion_accel_compensation motion_gyro_compensation motion_r_bs_00 motion_r_bs_01 motion_r_bs_02 motion_r_bs_10 motion_r_bs_11 motion_r_bs_12 motion_r_bs_20 motion_r_bs_21 motion_r_bs_22 motion_reference_stationary motion_reference_session_id motion_reference_generation motion_reference_batch motion_reference_declaration motion_measurements_valid motion_static_tilt_valid motion_dynamic_lean_valid motion_dynamic_acceleration_valid motion_force_x_mps2 motion_force_y_mps2 motion_force_z_mps2 motion_rate_x_rad_s motion_rate_y_rad_s motion_rate_z_rad_s motion_roll_rad motion_pitch_rad'.split()
 
+DYNAMIC = 'dynamic_requested dynamic_cadence_us dynamic_declaration dynamic_quality dynamic_fault dynamic_timing_source dynamic_elapsed_us dynamic_numeric_available dynamic_angles_available dynamic_lean_valid dynamic_acceleration_valid dynamic_qw dynamic_qx dynamic_qy dynamic_qz dynamic_gravity_x_mps2 dynamic_gravity_y_mps2 dynamic_gravity_z_mps2 dynamic_accel_x_mps2 dynamic_accel_y_mps2 dynamic_accel_z_mps2 dynamic_roll_rad dynamic_pitch_rad'.split()
+
 def _motion_number(row, field):
     value = row[field]
     if not re.fullmatch(r'-?(?:[0-9]+(?:\.[0-9]+)?)(?:[eE][+-]?[0-9]+)?', value):
@@ -253,7 +255,8 @@ def _validate_imu_payload(row):
 
 
 def _parse_imu_row(values, version):
-    extra = MOTION if version == '#ridesync_telemetry,4' else []
+    extra = MOTION if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') else []
+    if version == '#ridesync_telemetry,5': extra = extra + DYNAMIC
     if len(values) != 1 + len(COMMON) + len(IMU) + len(extra):
         raise ValueError(f'IMU column count {len(values)}')
     row = dict(zip(['kind'] + COMMON + IMU + extra, values))
@@ -355,16 +358,41 @@ def _parse_record(values, version):
         return dict(zip(['kind'] + COMMON, values))
     if values[0] in ('imu', 'config', 'health', 'control'):
         return _parse_imu_row(values, version)
-    if values[0] == 'camera' and version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4'):
+    if values[0] == 'camera' and version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
         return _parse_camera_row(values)
     raise ValueError('unsupported record kind')
 
 
+def _dynamic(row):
+    for field in DYNAMIC[:11]:
+        _motion_integer(row, field)
+    for field in ('dynamic_requested', 'dynamic_numeric_available', 'dynamic_angles_available'):
+        if row[field] not in ('0', '1'): raise ValueError('dynamic flags')
+    if row['dynamic_lean_valid'] != '0' or row['dynamic_acceleration_valid'] != '0':
+        raise ValueError('unqualified trusted dynamic output')
+    if int(row['dynamic_fault']) > 10 or int(row['dynamic_quality']) > 1 or int(row['dynamic_timing_source']) > 2:
+        raise ValueError('dynamic enum')
+    numeric = row['dynamic_numeric_available'] == '1'
+    angles = row['dynamic_angles_available'] == '1'
+    if numeric:
+        if row['dynamic_requested'] != '1' or row['motion_measurements_valid'] != '1' or row['kind'] != 'imu' or not int(row['sensor_epoch']) or not int(row['dynamic_cadence_us']) or row['dynamic_quality'] != '1' or row['dynamic_fault'] != '0' or row['dynamic_timing_source'] != '1' or int(row['dynamic_elapsed_us']) > 2000000:
+            raise ValueError('dynamic evidence')
+    elif angles or row['dynamic_quality'] != '0':
+        raise ValueError('invalid dynamic presence')
+    for field in DYNAMIC[11:21]:
+        if numeric: _motion_number(row, field)
+        elif row[field]: raise ValueError('unavailable dynamic number')
+    for field in DYNAMIC[21:]:
+        if numeric and angles: _motion_number(row, field)
+        elif row[field]: raise ValueError('unavailable dynamic angle')
+
+
 def _validate_record(row, version):
-    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4'):
+    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
         _v3_timestamp(row)
-    if version == '#ridesync_telemetry,4' and row['kind'] in ('imu', 'config', 'health', 'control'):
+    if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') and row['kind'] in ('imu', 'config', 'health', 'control'):
         _motion(row)
+        if version == "#ridesync_telemetry,5": _dynamic(row)
     if row['monotonic_quality'] != '0' or int(row['session_id']) <= 0:
         raise ValueError('invalid timestamp')
     if row['anchor_quality'] != '0' and \
@@ -377,14 +405,16 @@ def _validate_record(row, version):
 
 def parse(data):
     version = data.split('\n', 1)[0]
-    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3', '#ridesync_telemetry,4'):
+    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
         raise ValueError('unsupported version')
     if not data.endswith('\n'):
         raise ValueError('partial trailing row')
-    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4') and '#camera_layout,3,see_docs/log_format.md\n' not in data:
+    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5') and '#camera_layout,3,see_docs/log_format.md\n' not in data:
         raise ValueError('missing camera layout')
-    if version == '#ridesync_telemetry,4' and '#imu_layout,4,see_docs/motion_logging.md\n' not in data:
+    if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') and '#imu_layout,4,see_docs/motion_logging.md\n' not in data:
         raise ValueError('missing motion layout')
+    if version == "#ridesync_telemetry,5" and "#dynamic_layout,1,see_docs/dynamic_motion_estimator.md\n" not in data:
+        raise ValueError("missing dynamic layout")
     rows = []
     for line in data.splitlines()[1:]:
         if line.startswith('#') or line.startswith('session_id,'):

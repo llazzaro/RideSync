@@ -39,6 +39,10 @@ void loop() {
 #include "nvs_boot_guard.h"
 #include "pairing_proof_esp32.h"
 #include "status_led.h"
+#if defined(RIDESYNC_BENCH_APPLICATION)
+#include "bench_application.h"
+#include "bench_console.h"
+#endif
 #include <Arduino.h>
 #include <cstring>
 #include <esp_attr.h>
@@ -196,9 +200,13 @@ void setup() {
   if (!config_ble_admission)
     Serial.println("RideSync: config/BLE blocked; diagnostic/RAM mode; no save/format/retry.");
   workers = commissionedApplication();
+  const SourceConfig *startup_defaults = nullptr;
+#if defined(RIDESYNC_BENCH_APPLICATION)
+  startup_defaults = benchApplicationDefaults();
+#endif
   config_bootstrap = new (&config_memory)
       ConfigBootstrap(config_persistence, settings_publication, settings_requests, kSettingsEpoch,
-                      workers ? workers->peers() : CameraPeers{});
+                      workers ? workers->peers() : CameraPeers{}, startup_defaults);
   config_started = millis();
   if (!config_ble_admission) {
     // No worker exists: setup is the sole owner on this terminal startup path.
@@ -208,7 +216,12 @@ void setup() {
     config_bootstrap->unavailable({PersistStatus::ReadError, -1});
     Serial.println("RideSync: config task creation failed; settings unavailable.");
   }
+#if defined(RIDESYNC_BENCH_APPLICATION)
+  Serial.println("Bench commands: STATUS CONNECT REC STOP QUERY WAKE SHUTDOWN CLEAR STATIONARY. "
+                 "Boot is idle.");
+#else
   Serial.println("Optional workers require explicit commissioning. Serial C clears safe mode.");
+#endif
 }
 
 void loop() {
@@ -307,8 +320,14 @@ void loop() {
     reported_led_error = led_error;
   }
   // Only the supervisor owns recovery metadata. One-character bounded mailbox.
+#if defined(RIDESYNC_BENCH_APPLICATION)
+  benchConsoleService();
+  if (benchConsoleTakeClear())
+    clear_safe_mode.store(true);
+#else
   if (Serial.available() && Serial.read() == 'C')
     clear_safe_mode.store(true);
+#endif
   delay(1);
 }
 

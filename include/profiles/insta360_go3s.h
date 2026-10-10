@@ -34,10 +34,14 @@ public:
   void attachGroup(RecordingManager &group) { group_ = &group; }
   bool configurePeer(uint8_t, const Go3sQualification &);
   bool start(bool enabled, bool source_qualified);
-  void service();
+  void service(bool advance = true);
   void stop();
   bool canDestroy() const { return central_.canDestroy(); }
   bool commandReady(uint8_t) const;
+  bool linkRetiring(uint8_t i) const { return central_.phase(i) == BlePhase::Retiring; }
+  bool linkReleased(uint8_t i) const {
+    return central_.phase(i) == BlePhase::Empty || central_.phase(i) == BlePhase::Closed;
+  }
   Go3sFault fault(uint8_t) const;
   const HealthProgress &progress() const { return progress_; }
   static BleProfileSpec profileSpec();

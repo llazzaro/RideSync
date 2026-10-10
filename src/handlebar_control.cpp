@@ -1,6 +1,6 @@
 #include "handlebar_control.h"
 namespace ridesync {
-HandlebarControl::HandlebarControl(Clock &c, Hero12Adapter &a, CameraManager &m,
+HandlebarControl::HandlebarControl(Clock &c, CameraRuntimePort &a, CameraManager &m,
                                    RecordingManager &g, ButtonInput &i, LedSink &s)
     : clock_(c), adapter_(a), manager_(m), group_(g), input_(i), led_(s) {}
 HandlebarControl::~HandlebarControl() { group_.detachPreparation(*this); }
@@ -49,9 +49,11 @@ void HandlebarControl::beforeAdvance() {
   // retires earlier preparation before any recovery can dispatch REC.
   for (size_t i = 0; i < count_; ++i) {
     if (actions_[i] == ButtonAction::RecordingIntent) {
-      const auto target = recording_ ? RecordingState::Stopped : RecordingState::Recording;
+      const auto target = group_.status().intent == RecordingState::Recording
+                              ? RecordingState::Stopped
+                              : RecordingState::Recording;
       if (group_.request(target) == GroupError::None)
-        recording_ = !recording_;
+        recording_ = target == RecordingState::Recording;
     } else {
       group_.resync();
     }
@@ -61,7 +63,7 @@ void HandlebarControl::beforeAdvance() {
 CameraError HandlebarControl::prepare(size_t i) {
   // No physical wake primitive is source-qualified for this route. BLE recovery
   // remains eligible independently; never label a reconnect as power-on proof.
-  status_.wake[i] = CameraError::Unsupported;
+  status_.wake[i] = adapter_.wakeSupported(i) ? CameraError::None : CameraError::Unsupported;
   return adapter_.requestRecovery(i, false);
 }
 RecordingPreparationResult HandlebarControl::prepared(size_t i) {
@@ -84,7 +86,7 @@ void HandlebarControl::retire(size_t i) { adapter_.cancelRecovery(i); }
 bool HandlebarControl::commandReady(size_t i) const { return adapter_.commandReady(i); }
 bool HandlebarControl::retiring(size_t i) const { return adapter_.linkRetiring(i); }
 bool HandlebarControl::released(size_t i) const { return adapter_.linkReleased(i); }
-bool HandlebarControl::binds(const Hero12Adapter &a, const CameraManager &m,
+bool HandlebarControl::binds(const CameraRuntimePort &a, const CameraManager &m,
                              const RecordingManager &g) const {
   return &a == &adapter_ && &m == &manager_ && &g == &group_;
 }

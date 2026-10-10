@@ -21,7 +21,7 @@ struct ControlStatus {
 // storage or additional manager ticks. Input/sink references outlive this owner.
 class HandlebarControl : public CameraServiceAction, public RecordingPreparation {
 public:
-  HandlebarControl(Clock &, Hero12Adapter &, CameraManager &, RecordingManager &, ButtonInput &,
+  HandlebarControl(Clock &, CameraRuntimePort &, CameraManager &, RecordingManager &, ButtonInput &,
                    LedSink &);
   ~HandlebarControl();
   bool begin(const ButtonConfig &);
@@ -34,7 +34,7 @@ public:
   ControlAdmission submit(ButtonAction);
   void beforeAdvance() override;
   void admission(const LocalTelemetryStatus &);
-  bool binds(const Hero12Adapter &, const CameraManager &, const RecordingManager &) const;
+  bool binds(const CameraRuntimePort &, const CameraManager &, const RecordingManager &) const;
   void observe(const LocalTelemetryStatus &);
   void revoke();
   void reset();
@@ -42,7 +42,7 @@ public:
 
 private:
   Clock &clock_;
-  Hero12Adapter &adapter_;
+  CameraRuntimePort &adapter_;
   CameraManager &manager_;
   RecordingManager &group_;
   ButtonInput &input_;

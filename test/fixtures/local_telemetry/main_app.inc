@@ -48,7 +48,8 @@ int mainApplication(const std::string &mode) {
   source.cameras[0].name = "hero";
   source.cameras[0].model = CameraModel::HERO12_BLACK;
   source.cameras[0].family = CameraFamily::GoPro;
-  source.cameras[0].identifier = "01:02:03:04:05:06";
+  // Text reverses NimBLE least-significant-octet-first identity bytes.
+  source.cameras[0].identifier = "06:05:04:03:02:01";
   source.cameras[0].address_type = AddressType::Public;
   source.button_gpio.enabled = source.button_gpio.board_qualified = true;
   source.button_gpio.pin = 32;
@@ -59,7 +60,7 @@ int mainApplication(const std::string &mode) {
     source.count = 2;
     source.cameras[1] = source.cameras[0];
     source.cameras[1].name = "other";
-    source.cameras[1].identifier = "02:02:03:04:05:06";
+    source.cameras[1].identifier = "06:05:04:03:02:02";
     q.runtime.peers.count = 2;
     q.runtime.peers.entries[1].id = 302;
     q.runtime.peers.entries[1].slot = 1;
@@ -232,7 +233,13 @@ int mainApplication(const std::string &mode) {
     assert(s.phase == TelemetryPhase::Running && s.at_completed > 0 && s.sd_completed > 0);
     if (mode == "main-config-timeout" || mode == "main-late-config" || config_refused)
       assert(s.camera != CameraAdmission::Admitted && !application.control());
-    else if (mode == "main-ble-refusal") {
+    else if (mode == "main-reset-ambiguous") {
+      // The mixed owner's strict commissioning check now refuses mismatched
+      // identities during prepare, before control or host startup. Retain the
+      // original reset refusal/no mutation assertions on that earlier barrier.
+      assert(s.camera == CameraAdmission::Refused && !application.control());
+      resetCases(application, mode);
+    } else if (mode == "main-ble-refusal") {
       assert(application.control() && s.camera == CameraAdmission::Refused);
       assert(supervisor.progress(Worker::Ble).isRefused());
       assert(supervisor.progress(Worker::Ble).generation() == 0);
@@ -242,19 +249,19 @@ int mainApplication(const std::string &mode) {
       assert(s.camera == CameraAdmission::Admitted && application.control());
       const auto copied = application.control()->status().control;
       assert(copied.local.at_completed == s.at_completed);
-      const auto ticks = hero12Runtime().manager.ticks(),
-                 advances = hero12Runtime().group.advancements();
+      const auto ticks = mixedCameraRuntime().manager.ticks(),
+                 advances = mixedCameraRuntime().group.advancements();
       loop();
-      assert(hero12Runtime().manager.ticks() == ticks + 1 &&
-             hero12Runtime().group.advancements() == advances + 1);
+      assert(mixedCameraRuntime().manager.ticks() == ticks + 1 &&
+             mixedCameraRuntime().group.advancements() == advances + 1);
       if (reset_case)
         resetCases(application, mode);
       if (mode == "main-reset-seal") {
         const auto snapshot = application_settings.snapshot();
         assert(application.requestPairingReset(0, 301, snapshot.epoch, snapshot.generation, 1,
                                                1000) == BondResetSubmission::Queued);
-        assert(hero12Runtime().manager.sealed(0));
-        assert(hero12Runtime().manager.request(0, Operation::Query) == CameraError::Cancelled);
+        assert(mixedCameraRuntime().manager.sealed(0));
+        assert(mixedCameraRuntime().manager.request(0, Operation::Query) == CameraError::Cancelled);
         assert(application.cancelPairingReset(1));
         loop();
         loop();

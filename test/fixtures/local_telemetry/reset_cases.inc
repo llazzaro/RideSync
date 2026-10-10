@@ -2,7 +2,7 @@
 // Actual main/application/adapter/central/config-owner; host SDK event scheduler
 // is synthetic here. Exact pinned SDK semantics remain the independent 103 cases.
 static void resetCases(SupervisedEsp32Application &app, const std::string &mode) {
-  auto runtime = hero12Runtime();
+  auto runtime = mixedCameraRuntime();
   auto &host = Esp32BleHost::instance();
   const auto settings = application_settings.snapshot();
   auto request = [&](uint32_t operation = 1, uint32_t timeout = 1000) {

@@ -154,7 +154,12 @@ void Be80GpsForwarder::service(const RecordTimestamp &t, uint8_t controls) {
     if (!p.status.active) {
       if (!central_.reserveWrites(i, this))
         continue;
-      const auto packet = encode(p, t, p.snapshot, p.sequence->take());
+      const auto sequence = p.sequence->take();
+      if (!sequence) {
+        discard(i, true);
+        continue;
+      }
+      const auto packet = encode(p, t, p.snapshot, sequence);
       p.packet = packet.bytes;
       p.active_snapshot = p.snapshot;
       p.active_session = t.session_id;

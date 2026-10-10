@@ -4,13 +4,30 @@
 #include "nvs_boot_guard.h"
 #include "pairing_proof_esp32.h"
 #include <new>
+#if defined(RIDESYNC_MIXED_COMPOSITION)
+#include <cstdlib>
+#include <esp_heap_caps.h>
+#endif
 namespace ridesync {
 SupervisedEsp32Application::SupervisedEsp32Application(
     HardwareSerial &u, SPIClass &s, TwoWire &w, const QualifiedLocalTelemetry &q,
     const QualifiedHandlebar &h, const std::array<Hero12Qualification, kMaxCameras> &c,
     StaticMotionReferenceSource *source)
+    : SupervisedEsp32Application(
+          u, s, w, q, h,
+          [&c] {
+            MixedCameraQualifications m;
+            m.hero12 = c;
+            return m;
+          }(),
+          source) {}
+SupervisedEsp32Application::SupervisedEsp32Application(HardwareSerial &u, SPIClass &s, TwoWire &w,
+                                                       const QualifiedLocalTelemetry &q,
+                                                       const QualifiedHandlebar &h,
+                                                       const MixedCameraQualifications &c,
+                                                       StaticMotionReferenceSource *source)
     : uart_(u), spi_(s), wire_(w), qualification_(q), handlebar_(h), cameras_(c),
-      motion_source_(source) {}
+      cameras_runtime_(mixedCameraRuntime()), motion_source_(source) {}
 SupervisedEsp32Application::~SupervisedEsp32Application() {
   // No waits or filesystem access. Boot-lifetime caller retains this object and
   // all its resources until the actual worker barriers permit destruction.
@@ -51,22 +68,18 @@ std::array<WorkerPolicy, 4> SupervisedEsp32Application::prepare(const SettingsSn
                     saved_button.active_low == qualified_button.active_low;
   if (camera_allowed_) {
     SourceConfig source;
-    camera_allowed_ =
-        expandSettings(settings.settings, source) && hero12Runtime().manager.configure(source).ok();
-    for (size_t i = 0; camera_allowed_ && i < settings.peers.count; ++i) {
-      const auto slot = settings.peers.entries[i].slot;
-      camera_allowed_ = slot < kMaxCameras &&
-                        settings.peers.entries[i].model == CameraModel::HERO12_BLACK &&
-                        hero12Runtime().adapter.configurePeer(slot, cameras_[slot]);
-    }
+    camera_allowed_ = expandSettings(settings.settings, source) &&
+                      cameras_runtime_.manager.configure(source).ok();
+    camera_allowed_ = camera_allowed_ && cameras_runtime_.adapter.configure(source, cameras_);
     q.runtime.peers = settings.peers;
+    q.runtime.gps_forwarding_consumer = &cameras_runtime_.adapter;
   }
   button_allowed_ = button_allowed_ && camera_allowed_;
   handlebar_.actions = settings.settings.button;
   // Saved GPIO cannot replace independently qualified physical routing.
   const bool local =
       admission.local_telemetry && q.runtime.gps_qualified && q.modem.pins_qualified &&
-      q.modem.documentary_profile_opt_in && q.modem_already_powered &&
+      q.modem.documentary_profile_opt_in && (q.modem_already_powered || q.modem_power_sequence) &&
       q.runtime.power_timing.qualified && q.sd.opt_in && q.sd.wiring_card_qualified &&
       q.sd.exclusive_volume && q.sd.namespace_commissioned && q.sd.commissioned_namespace &&
       (!q.runtime.imu_enabled || (q.runtime.imu_qualified && q.imu.enabled && q.imu.dedicated_bus &&
@@ -86,11 +99,12 @@ void SupervisedEsp32Application::launch() {
     return;
   launched_ = true;
   telemetry_ = new (&telemetry_memory_)
-      Esp32LocalTelemetry(uart_, spi_, wire_, qualification_, motion_source_);
+      Esp32LocalTelemetry(uart_, spi_, wire_, qualification_, motion_source_, &cameras_runtime_);
   telemetry_->owner().configurationStartup(configuration_);
   telemetry_->owner().currentAdmission(camera_allowed_, qualification_.runtime.safe_mode);
   if (button_allowed_) {
-    control_ = new (&control_memory_) Esp32HandlebarControl(*telemetry_, handlebar_);
+    control_ =
+        new (&control_memory_) Esp32HandlebarControl(*telemetry_, handlebar_, &cameras_runtime_);
     if (!control_->begin()) {
       camera_allowed_ = false;
       telemetry_->owner().currentAdmission(false, qualification_.runtime.safe_mode);
@@ -98,7 +112,7 @@ void SupervisedEsp32Application::launch() {
   }
   const bool local = telemetry_->start();
   if (local && camera_allowed_)
-    ble_started_ = hero12Runtime().adapter.start(true, true);
+    ble_started_ = cameras_runtime_.adapter.start(true, true);
   if (!ble_started_ && policy_[static_cast<unsigned>(Worker::Ble)].enabled) {
     supervisor_->progress(Worker::Ble).refused();
     camera_allowed_ = false;
@@ -146,9 +160,9 @@ BondResetSubmission SupervisedEsp32Application::requestPairingReset(uint8_t slot
   uint32_t now = 0;
   if (!resetAdmitted() || epoch != epoch_ || generation != generation_ || !peer_id ||
       slot >= kMaxCameras || !timeout_ms || timeout_ms > 5000 || !resetNow(now) ||
-      host_operation_ == UINT32_MAX || hero12Runtime().manager.sealed(slot))
+      host_operation_ == UINT32_MAX || cameras_runtime_.manager.sealed(slot))
     return BondResetSubmission::Refused;
-  const auto &q = cameras_[slot];
+  const auto &q = cameras_.hero12[slot];
   if (!q.source_qualified || !q.classic_profile_confirmed || !q.firmware_size ||
       !q.identity.verified ||
       (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic))
@@ -158,9 +172,9 @@ BondResetSubmission SupervisedEsp32Application::requestPairingReset(uint8_t slot
     const auto &p = qualification_.runtime.peers.entries[i];
     if (p.slot == slot && p.id == peer_id && p.model == CameraModel::HERO12_BLACK)
       ++matched;
-    if (p.slot != slot && p.slot < kMaxCameras && cameras_[p.slot].identity.verified &&
-        cameras_[p.slot].identity.type == q.identity.type &&
-        cameras_[p.slot].identity.address == q.identity.address)
+    if (p.slot != slot && p.slot < kMaxCameras && cameras_.hero12[p.slot].identity.verified &&
+        cameras_.hero12[p.slot].identity.type == q.identity.type &&
+        cameras_.hero12[p.slot].identity.address == q.identity.address)
       return BondResetSubmission::Refused;
   }
   BleStoreProof proof;
@@ -181,8 +195,8 @@ BondResetSubmission SupervisedEsp32Application::requestPairingReset(uint8_t slot
   reset_proof_ = proof;
   reset_deadline_ = now + timeout_ms;
   proof_pending_ = host_pending_ = retried_ = retry_wait_ = host_cancelled_ = false;
-  hero12Runtime().group.seal(slot);
-  hero12Runtime().adapter.sealForMaintenance(slot);
+  cameras_runtime_.group.seal(slot);
+  cameras_runtime_.adapter.hero12().sealForMaintenance(slot);
   return BondResetSubmission::Queued;
 }
 void SupervisedEsp32Application::revokeReset(bool timeout) {
@@ -206,11 +220,12 @@ bool SupervisedEsp32Application::cancelPairingReset(uint32_t operation) {
   return true;
 }
 void SupervisedEsp32Application::finishReset() {
-  if (proof_pending_ || host_pending_ || !hero12Runtime().adapter.maintenanceReleased(reset_.slot))
+  if (proof_pending_ || host_pending_ ||
+      !cameras_runtime_.adapter.hero12().maintenanceReleased(reset_.slot))
     return;
   reset_.finished = reset_.releasable = true;
   reset_.phase = ApplicationResetPhase::Finished;
-  hero12Runtime().adapter.finishMaintenanceDrain();
+  cameras_runtime_.adapter.hero12().finishMaintenanceDrain();
 }
 bool SupervisedEsp32Application::serviceResetProof() {
   if (!proof_pending_)
@@ -280,7 +295,7 @@ void SupervisedEsp32Application::serviceResetPhase(uint32_t now) {
     retry_wait_ = false;
   }
   if (reset_.phase == ApplicationResetPhase::Retiring) {
-    if (!hero12Runtime().adapter.maintenanceReleased(reset_.slot))
+    if (!cameras_runtime_.adapter.hero12().maintenanceReleased(reset_.slot))
       return;
     const auto result =
         pairingProofMaintenance().request(reset_.operation, reset_proof_, reset_deadline_, now);
@@ -381,7 +396,7 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
           s.imu == SensorAdmission::TaskRefused || s.imu == SensorAdmission::SafeModeRefused ||
               (no_session && s.imu == SensorAdmission::Pending));
   if (ble_started_) {
-    const auto &p = hero12Runtime().adapter.progress();
+    const auto &p = cameras_runtime_.adapter.progress();
     publish(Worker::Ble, p.generation(), p.outcome(), p.isFinished());
   }
 }
@@ -391,8 +406,22 @@ extern "C" ridesync::SupervisedEsp32Application &ridesync_supervised_application
     const ridesync::QualifiedHandlebar &h,
     const std::array<ridesync::Hero12Qualification, ridesync::kMaxCameras> &c,
     ridesync::StaticMotionReferenceSource *source) {
+#if defined(RIDESYNC_MIXED_COMPOSITION)
+  // Retained compatibility/link-audit factory. Allocate this fixed owner once in
+  // internal RAM only when invoked, rather than duplicating unused diagnostic
+  // owner storage in BSS. Its borrowed resources still outlive the entire boot.
+  static auto *application = [&]() {
+    void *memory = heap_caps_malloc(sizeof(ridesync::SupervisedEsp32Application),
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!memory)
+      std::abort(); // Reference ABI cannot return allocation failure.
+    return new (memory) ridesync::SupervisedEsp32Application(uart, spi, wire, q, h, c, source);
+  }();
+  return *application;
+#else
   static ridesync::SupervisedEsp32Application application(uart, spi, wire, q, h, c, source);
   return application;
+#endif
 }
 #endif
 #if defined(ARDUINO_ARCH_ESP32)

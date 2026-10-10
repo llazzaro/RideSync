@@ -1,16 +1,12 @@
 #pragma once
 #include "ble_remote.h"
 #include "camera_manager.h"
+#include "camera_runtime_port.h"
 #include "protocol/gopro_setup_codec.h"
 #include <array>
 
 namespace ridesync {
 class RecordingManager;
-class CameraServiceAction {
-public:
-  virtual ~CameraServiceAction() = default;
-  virtual void beforeAdvance() = 0;
-};
 // Commissioning supplies independent evidence. A configured BLE address and the
 // published minimum firmware are not observations of this camera.
 struct Hero12Qualification {
@@ -20,74 +16,37 @@ struct Hero12Qualification {
   uint64_t api_major = 0, api_minor = 0;
   bool source_qualified = false, classic_profile_confirmed = false;
 };
-enum class Hero12Fault : uint8_t {
-  None,
-  Disabled,
-  Qualification,
-  Capacity,
-  Transport,
-  SetupRejected,
-  IdentityMismatch,
-  CameraRejected,
-  Protocol,
-  Timeout,
-  DeliveryUncertain,
-  Store,
-  MissingService,
-  MissingProperty,
-  MissingCccd,
-  Att
-};
-// These are caller-supplied conditions, not classifications inferred from a scan.
-enum class Hero12PowerCondition : uint8_t { Unknown, BleConnectable, PowerRemoved };
-enum class Hero12RecoveryPhase : uint8_t {
-  Idle,
-  Pending,
-  Scanning,
-  Connecting,
-  Observing,
-  Starting,
-  Ready,
-  Recording,
-  Unavailable,
-  Timeout,
-  Cancelled,
-  Unsupported,
-  Failed
-};
-struct Hero12RecoveryState {
-  Hero12RecoveryPhase phase = Hero12RecoveryPhase::Idle;
-  uint8_t scans = 0;
-};
 // One serialized owner calls start, service, manager request/event/tick and
 // configurePeer. Host callbacks enter only BleCentral's fixed copied queue.
-class Hero12Adapter final : public CameraTransport, public BleResultSink {
+class Hero12Adapter final : public CameraTransport, public BleResultSink, public CameraRuntimePort {
 public:
   Hero12Adapter(BleHost &, Clock &);
   ~Hero12Adapter() = default;
   Hero12Adapter(const Hero12Adapter &) = delete;
   Hero12Adapter &operator=(const Hero12Adapter &) = delete;
   void attach(CameraManager &);
-  void attachGroup(RecordingManager &group) { group_ = &group; }
-  void detachGroup(const RecordingManager *expected) {
+  void attachGroup(RecordingManager &group) override { group_ = &group; }
+  void detachGroup(const RecordingManager *expected) override {
     if (group_ == expected)
       group_ = nullptr;
   }
   bool start(bool enabled, bool source_qualified);
   bool configurePeer(uint8_t peer, const Hero12Qualification &);
-  void service(CameraServiceAction *action = nullptr);
-  void stop();
-  bool canDestroy() const;
-  Hero12Fault fault(uint8_t peer) const;
-  CameraError requestRecovery(uint8_t peer, bool ensure_recording,
-                              Hero12PowerCondition condition = Hero12PowerCondition::Unknown);
-  CameraError cancelRecovery(uint8_t peer);
-  Hero12RecoveryState recoveryState(uint8_t peer) const;
-  bool recoveryReady(uint8_t peer) const;
-  bool commandReady(uint8_t peer) const;
+  void service(CameraServiceAction *action = nullptr) override { service(action, true); }
+  void service(CameraServiceAction *, bool advance);
+  void stop() override;
+  bool canDestroy() const override;
+  Hero12Fault fault(uint8_t peer) const override;
+  CameraError
+  requestRecovery(uint8_t peer, bool ensure_recording,
+                  Hero12PowerCondition condition = Hero12PowerCondition::Unknown) override;
+  CameraError cancelRecovery(uint8_t peer) override;
+  Hero12RecoveryState recoveryState(uint8_t peer) const override;
+  bool recoveryReady(uint8_t peer) const override;
+  bool commandReady(uint8_t peer) const override;
   // Sealed links require replacement; Closed proves final per-peer host release.
-  bool linkRetiring(uint8_t peer) const;
-  bool linkReleased(uint8_t peer) const;
+  bool linkRetiring(uint8_t peer) const override;
+  bool linkReleased(uint8_t peer) const override;
   // Permanent target seal, plus temporary shared-discovery drain. Existing
   // unrelated links continue; an interrupted shared scan has explicit Cancelled outcome.
   bool sealForMaintenance(uint8_t peer);

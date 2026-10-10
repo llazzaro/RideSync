@@ -173,12 +173,12 @@ int test_close(int);
             portable = [p for p in (ROOT / 'src').rglob('*.cpp')
                         if p.name not in ('main.cpp', 'storage_sd.cpp', 'bmi270_imu.cpp', 'ble_esp32.cpp',
                                           'ble_wake_esp32.cpp', 'ble_peripheral_esp32.cpp', 'x5_peripheral_esp32.cpp',
-                                          'insta360_x5_esp32.cpp', 'x5_wake_esp32.cpp', 'insta360_wake_esp32.cpp', 'nvs_boot_guard.cpp', 'config_storage_nvs.cpp')]
+                                          'insta360_x5_esp32.cpp', 'mixed_camera_esp32.cpp', 'x5_wake_esp32.cpp', 'insta360_wake_esp32.cpp', 'nvs_boot_guard.cpp', 'config_storage_nvs.cpp')]
             exe = folder / 'runtime'
             cmd = ['c++', '-std=c++11', '-DARDUINO', '-DARDUINO_ARCH_ESP32',
                    '-Wall', '-Wextra', '-Werror', '-Wno-return-type-c-linkage', '-pthread', '-I', str(folder),
                    '-I', str(FIXTURE), '-I', str(ROOT), '-I', str(ROOT / 'include'), '-I', str(vendor),
-                   str(FIXTURE / 'runtime.cpp'), str(FIXTURE / 'bosch.cpp'),
+                   str(FIXTURE / 'runtime.cpp'), str(FIXTURE / 'bosch.cpp'), str(FIXTURE / 'mixed_runtime.cpp'),
                    str(folder / 'storage_sd.cpp'), str(folder / 'bmi270_imu.cpp'), *map(str, portable), '-o', str(exe)]
             build = subprocess.run(cmd, capture_output=True)
             self.assertEqual(0, build.returncode, build.stderr.decode())

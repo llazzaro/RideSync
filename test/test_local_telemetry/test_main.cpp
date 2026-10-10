@@ -310,6 +310,23 @@ void utc_anchor_uses_source_receipt_not_later_owner_time() {
   TEST_ASSERT_FALSE(clock.anchorAtReceipt(date, 31));
   TEST_ASSERT_EQUAL_UINT32(1, clock.snapshot().anchor.sequence);
 }
+void prekey_bound_refuses_before_storage_or_power_io() {
+  struct CountingPower : GnssPowerControl {
+    unsigned calls = 0;
+    void enableSupply() override { ++calls; }
+    void key(bool) override { ++calls; }
+  } power;
+  Rig f;
+  auto c = qualified();
+  c.power_timing.key_active_ms = c.power_timing.settle_ms = 10;
+  c.power_timing.pre_key_ms = 60001;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c, &power);
+  TEST_ASSERT_FALSE(r.start());
+  TEST_ASSERT_EQUAL_INT(TelemetryFault::Qualification, r.status().fault);
+  TEST_ASSERT_EQUAL_UINT(0, f.sd.starts);
+  TEST_ASSERT_EQUAL_UINT(0, power.calls);
+  TEST_ASSERT_TRUE(f.uart.tx.empty());
+}
 void qualification_refuses_without_creating_or_polling_workers() {
   for (unsigned missing = 0; missing < 5; ++missing) {
     Rig f;
@@ -714,6 +731,53 @@ void composed_gnss_publishes_without_delaying_local_storage() {
   TEST_ASSERT_EQUAL_UINT(1, consumer.cancellations);
   TEST_ASSERT_NOT_EQUAL(std::string::npos, f.sd.fs.bytes.find("gps,"));
 }
+struct RuntimeDynamicSource : DynamicMotionReferenceSource {
+  unsigned calls = 0;
+  DynamicMotionReference referenceFor(const ImuEvidence &) override {
+    DynamicMotionReference r;
+    if (++calls == 1) {
+      r.externally_stationary = true;
+      r.declaration = 1;
+    }
+    return r;
+  }
+};
+void runtime_dynamic_options_reach_disk_and_missing_reference_is_refused() {
+  for (unsigned mode = 0; mode < 2; ++mode) {
+    Rig f;
+    auto c = qualified();
+    RuntimeDynamicSource source;
+    c.motion_config = motion_fixture::config();
+    c.motion_snapshot_max_age_ms = 100;
+    c.dynamic_motion.enabled = true;
+    c.dynamic_cadence_us = 10000;
+    c.dynamic_reference = mode ? nullptr : &source;
+    LocalTelemetryRuntime runtime(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+    TEST_ASSERT_EQUAL_INT(mode ? MotionAdmission::Refused : MotionAdmission::Enabled,
+                          runtime.status().motion_admission);
+    TEST_ASSERT_TRUE(runtime.start());
+    f.pass(runtime);
+    f.pass(runtime);
+    ImuBatch batch;
+    batch.count = 1;
+    batch.records[0] = motion_fixture::sample(f.imu.id, f.raw.value);
+    batch.records[0].sensor_epoch = 1;
+    TEST_ASSERT_TRUE(f.imu.inbox->publish(batch));
+    runtime.service();
+    if (!mode) {
+      batch.records[0].frame_sequence = 1;
+      batch.records[0].accel[0] = 418;
+      TEST_ASSERT_TRUE(f.imu.inbox->publish(batch));
+      runtime.service();
+    }
+    f.finish(runtime);
+    TEST_ASSERT_NOT_EQUAL(std::string::npos, f.sd.fs.bytes.find("#ridesync_telemetry,5"));
+    TEST_ASSERT_EQUAL_UINT32(mode ? 0 : 2, source.calls);
+    if (!mode)
+      TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                            f.sd.fs.bytes.find(",1,10000,0,1,0,1,10000,1,1,0,0,1,0,0,0,0,0,9.806"));
+  }
+}
 void setUp() {}
 void tearDown() {}
 struct ControlInput : ButtonInput {
@@ -966,6 +1030,8 @@ void pre_allocation_motion_revocation_is_permanent() {
 }
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(prekey_bound_refuses_before_storage_or_power_io);
+  RUN_TEST(runtime_dynamic_options_reach_disk_and_missing_reference_is_refused);
   RUN_TEST(composed_gnss_publishes_without_delaying_local_storage);
   RUN_TEST(pre_allocation_motion_revocation_is_permanent);
   RUN_TEST(runtime_motion_current_expiry_revocation_and_refusal);

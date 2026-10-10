@@ -2,12 +2,29 @@
 #include "motion_estimator.h"
 namespace ridesync {
 enum class MotionInputRoute : uint8_t { Direct, Inbox };
+// Serialized admission owner calls this retained, nonblocking source. Each new
+// declaration must independently attest stationary initialization for this sample.
+class DynamicMotionReferenceSource {
+public:
+  virtual ~DynamicMotionReferenceSource() = default;
+  virtual DynamicMotionReference referenceFor(const ImuEvidence &) = 0;
+};
 struct MotionAdmissionConfig {
   bool requested = false, imu_qualified = false;
   MotionEstimatorConfig estimator;
   uint32_t snapshot_max_age_ms = 0;
   MotionInputRoute route = MotionInputRoute::Direct;
+  DynamicMotionConfig dynamic;
+  uint32_t dynamic_cadence_us = 0;
+  DynamicMotionReferenceSource *dynamic_reference = nullptr;
 };
+inline bool motionAdmissionQualified(const MotionAdmissionConfig &m) {
+  return m.imu_qualified && MotionEstimator::configValid(m.estimator) && m.snapshot_max_age_ms &&
+         m.snapshot_max_age_ms <= 60000 &&
+         (!m.dynamic.enabled ||
+          (DynamicMotionEstimator::configValid(m.dynamic) && m.dynamic_cadence_us &&
+           m.dynamic_cadence_us <= m.dynamic.max_step_us && m.dynamic_reference));
+}
 // Caller-owned external qualification; only the serialized admission owner calls.
 // No IO/allocation/wait/lock/throw/reentry; outlives runtime canRelease().
 class StaticMotionReferenceSource {

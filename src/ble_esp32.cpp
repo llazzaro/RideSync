@@ -1071,7 +1071,7 @@ uint16_t Esp32BleHost::mtu(uint16_t connection) const {
 int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   CallbackAccess sdk(sdk_calls_);
   if (reset_gate_.load(std::memory_order_acquire) ||
-      ((wakeReserved() || peripheralReserved()) &&
+      ((wakeReserved() || peripheralGapReserved()) &&
        (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
     if (cmd.phase != BlePhase::Security)
       ctx.terminal.store(true);
@@ -1093,7 +1093,7 @@ int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   // Linearize GAP admission with reserveWake/requestBondReset, not just the
   // preliminary atomic check made before acquiring the routing gate.
   if (reset_gate_.load(std::memory_order_acquire) ||
-      ((wakeReserved() || peripheralReserved()) &&
+      ((wakeReserved() || peripheralGapReserved()) &&
        (cmd.phase == BlePhase::Scan || cmd.phase == BlePhase::Connect))) {
     routing_lock_.clear(std::memory_order_release);
     ctx.terminal.store(true);

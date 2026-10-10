@@ -1,11 +1,13 @@
 #include "../fixtures/motion/evidence.h"
 #include "telemetry_admission.h"
+#include <cmath>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unity.h>
+#include <vector>
 using namespace ridesync;
 struct Sink : StorageSink {
   std::string bytes;
@@ -503,10 +505,169 @@ void motion_rollover_age_and_configuration_refusal() {
                           refused.motionAdmission());
   }
 }
+struct DynamicReference : DynamicMotionReferenceSource {
+  DynamicMotionReference value;
+  void anchor(uint32_t declaration) {
+    value.externally_stationary = true;
+    value.declaration = declaration;
+  }
+  DynamicMotionReference referenceFor(const ImuEvidence &) override {
+    auto out = value;
+    value = {};
+    return out;
+  }
+};
+std::vector<std::string> lastDynamic(const Sink &sink) {
+  const auto start = sink.bytes.rfind("\nimu,");
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, start);
+  auto row = sink.bytes.substr(start + 1);
+  row.resize(row.find('\n'));
+  std::vector<std::string> fields;
+  size_t begin = 0;
+  for (;;) {
+    const auto end = row.find(',', begin);
+    fields.push_back(row.substr(begin, end - begin));
+    if (end == std::string::npos)
+      break;
+    begin = end + 1;
+  }
+  TEST_ASSERT_EQUAL_UINT32(147, fields.size());
+  return std::vector<std::string>(fields.end() - 23, fields.end());
+}
+void live_dynamic_consumes_counts_and_logs_independent_roll() {
+  Sink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV5});
+  TestClock raw;
+  raw.time = 123;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  auto options = motionOptions(MotionInputRoute::Inbox);
+  options.dynamic.enabled = true;
+  options.dynamic_cadence_us = 10000;
+  DynamicReference reference;
+  options.dynamic_reference = &reference;
+  reference.anchor(1);
+  TelemetryAdmission admission(clock, storage, inbox, nullptr, options);
+  for (unsigned n = 0; n <= 100; ++n) {
+    ImuBatch batch;
+    batch.count = 1;
+    auto &e = batch.records[0];
+    e = motion_fixture::sample(42, raw.time);
+    e.sensor_epoch = 1;
+    e.frame_sequence = n;
+    e.config.gyro_scale_numerator = e.config.gyro_scale_denominator = 1;
+    if (n) {
+      // Independent 90deg/sec roll and 2m/s^2 body-X acceleration. Raw
+      // gravity counts follow analytic sin/cos, not the estimator output.
+      const double angle = n * 3.141592653589793 / 200;
+      e.accel[0] = 418;
+      e.accel[1] = int16_t(std::lround(2048 * std::sin(angle)));
+      e.accel[2] = int16_t(std::lround(2048 * std::cos(angle)));
+      e.gyro[0] = 90;
+    }
+    TEST_ASSERT_TRUE(inbox.publish(batch));
+    TEST_ASSERT_EQUAL_UINT32(1, admission.tick());
+    drain(storage);
+  }
+  const auto d = lastDynamic(sink);
+  TEST_ASSERT_EQUAL_STRING("1", d[3].c_str()); // Unreliable
+  TEST_ASSERT_EQUAL_STRING("0", d[4].c_str());
+  TEST_ASSERT_EQUAL_STRING("1", d[5].c_str()); // ModelledCadence
+  TEST_ASSERT_EQUAL_STRING("1000000", d[6].c_str());
+  TEST_ASSERT_EQUAL_STRING("1", d[7].c_str());
+  TEST_ASSERT_EQUAL_STRING("0", d[9].c_str());
+  TEST_ASSERT_EQUAL_STRING("0", d[10].c_str());
+  TEST_ASSERT_FLOAT_WITHIN(.0001, .70710678, std::stof(d[11]));
+  TEST_ASSERT_FLOAT_WITHIN(.0001, .70710678, std::stof(d[12]));
+  TEST_ASSERT_FLOAT_WITHIN(.003, 2, std::stof(d[18]));
+  TEST_ASSERT_FLOAT_WITHIN(.003, 0, std::stof(d[19]));
+  TEST_ASSERT_FLOAT_WITHIN(.0001, 1.5707963, std::stof(d[21]));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find("#ridesync_telemetry,5"));
+}
+void live_dynamic_refuses_gap_horizon_replay_and_unknown_cadence() {
+  Sink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::MotionV5});
+  TestClock raw;
+  raw.time = 123;
+  SessionClock clock(raw, 42, 1000);
+  ImuInbox inbox;
+  auto options = motionOptions(MotionInputRoute::Direct);
+  options.dynamic.enabled = true;
+  options.dynamic.max_step_us = 10000;
+  options.dynamic.max_horizon_us = 20000;
+  options.dynamic_cadence_us = 10000;
+  DynamicReference reference;
+  options.dynamic_reference = &reference;
+  TelemetryAdmission admission(clock, storage, inbox, nullptr, options);
+  auto e = motion_fixture::sample(42, raw.time);
+  e.sensor_epoch = 1;
+  auto emit = [&]() {
+    TEST_ASSERT_TRUE(admission.event(e));
+    drain(storage);
+    return lastDynamic(sink);
+  };
+  reference.anchor(1);
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  ++e.frame_sequence;
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  ++e.frame_sequence;
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  ++e.frame_sequence;
+  auto d = emit();
+  TEST_ASSERT_EQUAL_STRING("9", d[4].c_str()); // Horizon
+  TEST_ASSERT_EQUAL_STRING("", d[21].c_str());
+  reference.anchor(1); // consumed anchor cannot restart
+  TEST_ASSERT_EQUAL_STRING("3", emit()[4].c_str());
+  reference.anchor(2);
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  e.frame_sequence += 2;
+  TEST_ASSERT_EQUAL_STRING("7", emit()[4].c_str()); // Sequence
+  reference.anchor(3);
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  e.timing_flags = 1;
+  TEST_ASSERT_EQUAL_STRING("8", emit()[4].c_str()); // Discontinuity
+  e.timing_flags = 0;
+  ++e.frame_sequence;
+  TEST_ASSERT_EQUAL_STRING("10", emit()[4].c_str()); // Uninitialized
+  reference.anchor(4);
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  ++e.sensor_epoch;
+  ++e.frame_sequence;
+  TEST_ASSERT_EQUAL_STRING("5", emit()[4].c_str()); // Identity
+  options.dynamic_cadence_us = 0;
+  TelemetryAdmission unknown(clock, storage, inbox, nullptr, options);
+  reference.anchor(5);
+  TEST_ASSERT_TRUE(unknown.event(e));
+  drain(storage);
+  TEST_ASSERT_EQUAL_INT(MotionAdmission::Refused, unknown.motionAdmission());
+  TEST_ASSERT_EQUAL_STRING("2", lastDynamic(sink)[4].c_str()); // Configuration
+  reference.anchor(6);
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  e.kind = RecordKind::ImuControl;
+  e.event_code = 0;
+  e.event_length = 1;
+  e.event_bytes[0] = 0x80; // normal FIFO end does not reset integration
+  TEST_ASSERT_TRUE(admission.event(e));
+  drain(storage);
+  e.kind = RecordKind::ImuSample;
+  e.event_length = 0;
+  ++e.frame_sequence;
+  TEST_ASSERT_EQUAL_STRING("1", emit()[7].c_str());
+  e.kind = RecordKind::ImuControl;
+  e.event_code = 9; // observed transport flush, not an assumed stationary anchor
+  TEST_ASSERT_TRUE(admission.event(e));
+  drain(storage);
+  e.kind = RecordKind::ImuSample;
+  e.event_code = 0;
+  ++e.frame_sequence;
+  TEST_ASSERT_EQUAL_STRING("10", emit()[4].c_str()); // control reset requires new reference
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(live_dynamic_consumes_counts_and_logs_independent_roll);
+  RUN_TEST(live_dynamic_refuses_gap_horizon_replay_and_unknown_cadence);
   RUN_TEST(motion_pose_controls_queue_failure_and_reverse_route);
   RUN_TEST(motion_rollover_age_and_configuration_refusal);
   RUN_TEST(motion_route_current_and_declaration_lifetime);

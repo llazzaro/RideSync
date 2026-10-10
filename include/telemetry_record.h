@@ -1,12 +1,13 @@
 #pragma once
 #include "camera_manager.h"
+#include "dynamic_motion_estimator.h"
 #include "modem_gnss.h"
 #include "motion_types.h"
 #include <cstdint>
 #include <type_traits>
 namespace ridesync {
 enum class RecordKind : uint8_t { Gps, ImuSample, ImuConfig, ImuHealth, ImuControl, Camera, Count };
-enum class StorageFormat : uint8_t { GpsV1, MixedV2, CameraV3, MotionV4 };
+enum class StorageFormat : uint8_t { GpsV1, MixedV2, CameraV3, MotionV4, MotionV5 };
 enum class Qualification : uint8_t { Unknown, Unqualified, Qualified };
 // IDs are caller assigned opaque uint32 values; zero = unknown. This schema
 // does not establish identity uniqueness, a mount transform, or calibration.
@@ -89,6 +90,16 @@ struct CameraEvidence {
   CameraAckAction ack_action = CameraAckAction::None;
   bool delivery_admitted = false;
 };
+struct MotionEvidence {
+  MotionAdmission state = MotionAdmission::Disabled;
+  MotionEstimatorConfig config;
+  uint32_t snapshot_max_age_ms = 0;
+  StaticMotionReference reference;
+  MotionEstimate estimate;
+  bool dynamic_requested = false;
+  uint32_t dynamic_cadence_us = 0, dynamic_declaration = 0;
+  DynamicMotionEstimate dynamic;
+};
 struct TelemetryRecord {
   RecordKind kind = RecordKind::Gps;
   RecordTimestamp timestamp;
@@ -99,8 +110,8 @@ struct TelemetryRecord {
 };
 static_assert(std::is_trivially_copyable<TelemetryRecord>::value,
               "Telemetry records must own copied fixed data");
-static_assert(sizeof(ImuEvidence) <= 240 && sizeof(MotionEvidence) <= 160 &&
-                  sizeof(TelemetryRecord) <= 704,
+static_assert(sizeof(ImuEvidence) <= 240 && sizeof(MotionEvidence) <= 248 &&
+                  sizeof(TelemetryRecord) <= 792,
               "Review telemetry RAM bounds when changing the envelope");
 struct KindHealth {
   uint32_t accepted, dropped, rejected, written, flushed, lost;

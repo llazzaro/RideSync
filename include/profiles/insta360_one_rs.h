@@ -1,6 +1,7 @@
 #pragma once
 #include "ble_remote.h"
 #include "camera_manager.h"
+#include "gps_forwarding.h"
 namespace ridesync {
 class RecordingManager;
 struct OneRsQualification {
@@ -30,10 +31,21 @@ public:
   void attachGroup(RecordingManager &g) { group_ = &g; }
   bool configurePeer(uint8_t, const OneRsQualification &);
   bool start(bool enabled, bool source_qualified);
-  void service();
+  void service(bool advance = true);
   void stop();
+  bool configureGps(uint8_t i, const CameraConfig &c, const GpsForwardingConfig &q) {
+    return forwarding_.configure(i, c, q, sequences_[i]);
+  }
+  Be80GpsForwarder &forwarding() { return forwarding_; }
+  const Be80GpsForwarder &forwarding() const { return forwarding_; }
+  void forwardingTime(const RecordTimestamp &t) { forwarding_time_ = t; }
+  void serviceGps(uint8_t mask) { forwarding_.service(forwarding_time_, mask); }
   bool canDestroy() const { return central_.canDestroy(); }
   bool commandReady(uint8_t) const;
+  bool linkRetiring(uint8_t i) const { return central_.phase(i) == BlePhase::Retiring; }
+  bool linkReleased(uint8_t i) const {
+    return central_.phase(i) == BlePhase::Empty || central_.phase(i) == BlePhase::Closed;
+  }
   OneRsFault fault(uint8_t) const;
   const HealthProgress &progress() const { return progress_; }
   static BleProfileSpec profileSpec();
@@ -64,6 +76,9 @@ private:
   RecordingManager *group_ = nullptr;
   HealthProgress progress_;
   BleCentral central_;
+  Be80GpsForwarder forwarding_;
+  std::array<Be80CommandSequence, kBlePeers> sequences_;
+  RecordTimestamp forwarding_time_;
   std::array<Peer, kBlePeers> peers_{};
   std::array<bool, kBlePeers> disconnected_{};
   std::array<Pending, kBlePeers * 2> events_{};

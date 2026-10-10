@@ -306,7 +306,7 @@ void Go3sAdapter::drain() {
       manager_->event(completed);
   }
 }
-void Go3sAdapter::service() {
+void Go3sAdapter::service(bool advance_manager) {
   if (servicing_ || !manager_)
     return;
   servicing_ = true;
@@ -331,9 +331,9 @@ void Go3sAdapter::service() {
       advance(i);
   }
   drain();
-  if (group_)
+  if (advance_manager && group_)
     group_->tick();
-  else
+  else if (advance_manager)
     manager_->tick();
   servicing_ = false;
 }

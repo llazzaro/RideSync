@@ -37,6 +37,11 @@ int main() {
   power.enableSupply(); power.key(true);
   assert(levels[21] == 1 && levels[22] == 0);
   power.key(false); assert(levels[22] == 1);
+  ArduinoGnssPower retained(pins);
+  assert(retained.begin(true));
+  assert(levels[21] == 1 && levels[22] == 1);
+  retained.key(true); assert(levels[21] == 1 && levels[22] == 0);
+  retained.key(false); assert(levels[21] == 1 && levels[22] == 1);
   pins.key = pins.tx;
   ArduinoGnssPower conflict(pins);
   int before = pin_calls;

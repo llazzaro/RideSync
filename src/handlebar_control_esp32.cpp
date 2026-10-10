@@ -1,12 +1,20 @@
 #include "handlebar_control_esp32.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include "profiles/gopro_hero12_esp32.h"
+#if defined(RIDESYNC_BENCH_APPLICATION) || defined(RIDESYNC_MIXED_COMPOSITION)
+#define hero12Runtime mixedCameraRuntime
+#endif
 namespace ridesync {
 uint32_t Esp32HandlebarControl::RawClock::now() const { return millis(); }
-Esp32HandlebarControl::Esp32HandlebarControl(Esp32LocalTelemetry &t, const QualifiedHandlebar &q)
+Esp32HandlebarControl::Esp32HandlebarControl(Esp32LocalTelemetry &t, const QualifiedHandlebar &q,
+                                             MixedCameraRuntime *cameras)
     : telemetry_(t), qualification_(q), sink_(gpio_),
-      control_(clock_, hero12Runtime().adapter, hero12Runtime().manager, hero12Runtime().group,
-               input_, sink_) {}
+      control_(clock_,
+               cameras ? static_cast<CameraRuntimePort &>(cameras->adapter)
+                       : static_cast<CameraRuntimePort &>(hero12Runtime().adapter),
+               cameras ? cameras->manager : hero12Runtime().manager,
+               cameras ? cameras->group : hero12Runtime().group, input_, sink_),
+      group_(cameras ? cameras->group : hero12Runtime().group) {}
 Esp32HandlebarControl::~Esp32HandlebarControl() {
   if (attached_)
     telemetry_.owner().detachControl(control_);
@@ -31,14 +39,14 @@ bool Esp32HandlebarControl::begin() {
   if (backend != LedBackendState::Ready && backend != LedBackendState::Disabled) {
     telemetry_.owner().detachControl(control_);
     attached_ = false;
-    hero12Runtime().group.detachPreparation(control_);
+    group_.detachPreparation(control_);
     return false;
   }
   input_ready_ = input_.begin(q.button, q.acknowledge_qualification);
   if (!input_ready_) {
     telemetry_.owner().detachControl(control_);
     attached_ = false;
-    hero12Runtime().group.detachPreparation(control_);
+    group_.detachPreparation(control_);
   }
   return input_ready_;
 }

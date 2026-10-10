@@ -977,11 +977,11 @@ void Hero12Adapter::advanceRecovery() {
       break;
     }
 }
-void Hero12Adapter::service(CameraServiceAction *action) {
+void Hero12Adapter::service(CameraServiceAction *action, bool advance_managers) {
   if (servicing_)
     return;
   servicing_ = true;
-  if (group_)
+  if (advance_managers && group_)
     group_->beginServicePass();
   central_.service(clock_.now());
   for (uint8_t n = 0; n < kBlePeers; ++n) {
@@ -1009,9 +1009,9 @@ void Hero12Adapter::service(CameraServiceAction *action) {
   drain(); // Connection-scoped Disconnected precedes every manager tick.
   if (action)
     action->beforeAdvance();
-  if (group_)
+  if (advance_managers && group_)
     group_->tick();
-  else if (manager_)
+  else if (advance_managers && manager_)
     manager_->tick();
   if (manager_ && enabled_)
     advanceRecovery();

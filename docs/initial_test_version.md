@@ -1,5 +1,11 @@
 # Initial test version: one X5 over serial
 
+This is the narrow single-camera diagnostic guide. The
+[composed bench version](bench_test_version.md) now provides the configured
+camera group, optional button/LED and GNSS/SD/IMU workflow before installation.
+Use that version to test the assembled application; keep this guide for X5
+identity/store commissioning and isolated CE80 diagnosis.
+
 The first usable candidate is **`x5_serial_milestone`**, an Experimental production
 CE80 path for one qualified X5. Start here to collect the composed-camera result
 in [#46](https://github.com/llazzaro/RideSync/issues/46). Open compatibility,
@@ -10,7 +16,7 @@ See the [acceptance policy](acceptance_policy.md).
 This candidate accepts explicit CONNECT/REC/STOP/QUERY/STATUS/DISCONNECT commands.
 Board SD, GNSS, IMU, other cameras, GPS forwarding and wake qualification are not
 prerequisites. A writable card in the **camera** is required. This is the first
-serial bench milestone; the full handlebar and ride-logger workflow comes later.
+serial bench milestone; use the composed bench image for handlebar and logger testing.
 
 ## Build and commissioning gate
 
