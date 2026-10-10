@@ -88,6 +88,13 @@ def build():
     # Pilot cable openings: gland/grommet selection and sealing are unresolved.
     for x in (-43, 43):
         shell -= cylinder(P["cable_hole_diameter"], 12, (x, cy-depth/2, -6), "y")
+    # USB-C is on a long PCB edge. Its longitudinal position comes from the
+    # vendor DXF TYPE_C3_0_190 footprint; vertical position/cable size are draft.
+    usb_x, usb_z = P["usb_center_x"], P["usb_center_z"]
+    usb_opening = rounded_box(P["usb_opening_width"], P["usb_opening_height"],
+                              wall+4, (0, 0, 0), radius=2)
+    usb_opening = usb_opening.rotate((90, 0, 0)).translate((usb_x, cy-depth/2+wall/2, usb_z))
+    shell -= usb_opening
     for x, y in bosses:
         shell -= cylinder(2.7, 15, (x, y, top-5))
 
@@ -104,6 +111,15 @@ def build():
     # Translucent, bounding-box references only; neither is a printable part.
     board = box((P["board_length"], P["board_width"], P["board_height"]),
                 (0, cy, bottom+wall+3+P["board_height"]/2))
+    # Straight overmold corridor ending 1 mm outside the board bounding box;
+    # this excludes the connector's mating nose, whose fitted height is unknown.
+    usb_start = cy-depth/2-20
+    usb_end = cy-P["board_width"]/2-1
+    usb_plug = box((P["usb_plug_width"], usb_end-usb_start, P["usb_plug_height"]),
+                   (usb_x, (usb_start+usb_end)/2, usb_z))
+    for name, part in (("bracket", bracket), ("enclosure", shell),
+                       ("board envelope", board), ("lid", lid)):
+        assert (usb_plug ^ part).volume() < 1e-6, f"USB plug corridor hits {name}"
     ball = m.Manifold.sphere(P["ball_diameter_reference"]/2, circular_segments=48)
     ball = ball.translate((0, 0, 22+P["ball_diameter_reference"]/2))
     ball += cylinder(12, 12, (0, 0, 18))
@@ -124,7 +140,8 @@ def build():
             assert (corridor ^ part).volume() < 1e-6, f"Mount screw hits {name}"
             assert (nut_envelope ^ part).volume() < 1e-6, f"Mount nut hits {name}"
     return {"bracket": bracket, "enclosure": shell, "lid": lid,
-            "board_envelope_reference": board, "ball_hardware_reference": ball}
+            "board_envelope_reference": board, "ball_hardware_reference": ball,
+            "usb_plug_envelope_reference": usb_plug}
 
 
 def export(parts):
@@ -132,12 +149,14 @@ def export(parts):
     colors = {"bracket": [50, 61, 77, 255], "enclosure": [102, 126, 159, 255],
               "lid": [82, 105, 133, 220],
               "board_envelope_reference": [45, 190, 145, 100],
-              "ball_hardware_reference": [210, 155, 58, 255]}
+              "ball_hardware_reference": [210, 155, 58, 255],
+              "usb_plug_envelope_reference": [232, 116, 54, 160]}
     report = {"status": "DESIGN DRAFT: motorcycle fit, retention, sealing and strength unverified",
               "units": "mm", "parts": {},
               "clearances": {"separate_parts_do_not_overlap": True,
                              "board_envelope_clear": True,
-                             "two_M3_mount_bolts_and_nuts_clear": True}}
+                             "two_M3_mount_bolts_and_nuts_clear": True,
+                             "provisional_usb_plug_corridor_clear": True}}
     for name, solid in parts.items():
         obj = mesh(solid)
         assert obj.is_watertight and obj.is_winding_consistent and obj.volume > 0, name
@@ -172,7 +191,8 @@ def preview(parts):
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     fig = plt.figure(figsize=(13, 7), facecolor="#f4f5f7")
     colors = {"bracket": "#536278", "enclosure": "#8aa2be", "lid": "#a9bed6",
-              "board_envelope_reference": "#29b88a", "ball_hardware_reference": "#d3a14d"}
+              "board_envelope_reference": "#29b88a", "ball_hardware_reference": "#d3a14d",
+              "usb_plug_envelope_reference": "#e87436"}
     for index, elevation, azimuth, label in [(1, 22, 65, "Front / side"),
                                              (2, 35, -65, "Exploded: three printable parts")]:
         ax = fig.add_subplot(1, 2, index, projection="3d", facecolor="#f4f5f7")
@@ -181,7 +201,7 @@ def preview(parts):
             if name == "board_envelope_reference":
                 continue
             obj = mesh(solid)
-            if index == 2 and name in ("enclosure", "lid"):
+            if index == 2 and name in ("enclosure", "lid", "usb_plug_envelope_reference"):
                 obj.apply_translation((0, -35, 0))
                 if name == "lid":
                     obj.apply_translation((0, 0, 28))
@@ -189,12 +209,12 @@ def preview(parts):
             facecolors.extend([to_rgba(colors[name])]*len(obj.faces))
         # Sort all assembly triangles together to preserve inter-part occlusion.
         ax.add_collection3d(Poly3DCollection(triangles, facecolors=facecolors, shade=True))
-        ax.set_xlim(-80, 80); ax.set_ylim(-105, 60); ax.set_zlim(-85, 70)
-        ax.set_box_aspect((160, 165, 155)); ax.view_init(elev=elevation, azim=azimuth)
+        ax.set_xlim(-80, 80); ax.set_ylim(-120, 60); ax.set_zlim(-85, 70)
+        ax.set_box_aspect((160, 180, 155)); ax.view_init(elev=elevation, azim=azimuth)
         ax.set_xlabel("Width (mm)"); ax.set_ylabel("Depth (mm)"); ax.set_zlabel("Height (mm)")
         ax.set_title(label)
     fig.suptitle("RideSync + printable GPS bracket | Yamaha Tracer 900 (2018)", fontsize=16)
-    fig.text(.5, .025, "DRAFT — bracket, enclosure and lid print separately. Motorcycle fit unverified. Gold: ball hardware reference.",
+    fig.text(.5, .025, "DRAFT — three printable parts. Gold: ball hardware. Orange: provisional USB plug corridor; fitted-board/cable alignment unverified.",
              ha="center", fontsize=10)
     fig.savefig(OUT / "assembly_DRAFT.png", dpi=160)
     plt.close(fig)

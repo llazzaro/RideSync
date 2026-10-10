@@ -47,10 +47,32 @@ Exports check manifold status, watertightness, winding, positive volume, one
 connected solid per part, absence of board-envelope/part intersections and
 absence of overlap between the three printable parts. The bracket/enclosure
 joint's bolt corridors and nut envelopes are checked against all three parts
-and the board envelope.
+and the board envelope. A provisional straight USB plug-overmold corridor is
+checked for interference with all parts and the board envelope.
 STLs are translated to z=0 without choosing a production print orientation.
 These checks establish digital geometry only. The board reference is a bounding
-box, not a component-level model; cable plugs and external antennas are omitted.
+box, not a component-level model. A USB plug corridor is shown as an orange
+reference, not a supplied cable model. External antennas are omitted.
+
+## USB-C cable opening
+
+An 18 × 14 mm rounded opening passes through the rear long wall. Its x center
+is -7.2852 mm. This comes from the `TYPE_C3_0_190` insertion y=161.0868 in the
+official DXF relative to the PCB length midpoint y=168.37196958. The board
+orientation is defined here as DXF y → assembly x and DXF +x → assembly -y,
+placing USB-C toward the rear enclosure wall. Confirm that orientation when
+installing the actual board. The side-wall location comes from the 2D footprint,
+not the previously linked STEP file's unpopulated PCB shape.
+
+The opening z center (3 mm), its dimensions and a 14 × 10 mm plug-overmold
+envelope are provisional design values, **not measurements of the owner's
+USB cable or connector height**. They are adjustable in `parameters.json`.
+The corridor extends from outside the case to 1 mm before the board envelope;
+it demonstrates wall access, not mating engagement with the actual socket.
+The recess lets a plug housing enter the case through the opening. Confirm
+insertion depth, vertical alignment, plug size and cable bend space on a bench.
+The two existing 8 mm round pilot holes remain for accessory cables. There is
+no USB gasket, blanking plug, seal or strain-relief clamp in this draft.
 
 ## Assemble the separate prints
 
@@ -81,7 +103,7 @@ clearance with an unloaded fit coupon before making the full part.
 
 Board retention is unresolved: add appropriate supports after confirming the
 actual PCB underside, battery holder, components and mounting-hole dimensions.
-USB plug access, battery retention, GNSS/LTE antenna placement, any future IMU,
+USB socket/cable alignment, battery retention, GNSS/LTE antenna placement, any future IMU,
 power converter, button/LED cables and sealing hardware need their own measured
 envelopes. The draft cable openings are pilots, not qualified glands. The lid
 has an alignment lip, **no gasket groove**, and no water-resistance rating.

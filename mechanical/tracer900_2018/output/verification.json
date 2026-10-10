@@ -34,7 +34,7 @@
           15.0
         ]
       ],
-      "volume_mm3": 57633.825886050494
+      "volume_mm3": 56888.23433980965
     },
     "lid": {
       "watertight": true,
@@ -86,11 +86,29 @@
         ]
       ],
       "volume_mm3": 9709.67357687544
+    },
+    "usb_plug_envelope_reference": {
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -14.285200119018555,
+          -80.0,
+          -2.0
+        ],
+        [
+          -0.28519999980926514,
+          -53.0,
+          8.0
+        ]
+      ],
+      "volume_mm3": 3780.000032186508
     }
   },
   "clearances": {
     "separate_parts_do_not_overlap": true,
     "board_envelope_clear": true,
-    "two_M3_mount_bolts_and_nuts_clear": true
+    "two_M3_mount_bolts_and_nuts_clear": true,
+    "provisional_usb_plug_corridor_clear": true
   }
 }
