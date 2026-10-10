@@ -92,6 +92,27 @@ external capture was copied. See [the route decision](one_rs_profile.md).
 Official pages are content references only; no vendor code, prose or images
 are vendored. All ONE RS physical findings remain Not tested.
 
+The owner subsequently requested use of the explicit command information for
+an experimental ONE RS candidate rather than waiting for a state capture.
+The selected route reuses `GarminBe80ControlV1` in the existing MPL-2.0 pure
+codec; the adapter and bounded ownership/error policy are independently authored.
+No upstream BLE/controller/recording-state algorithm, external capture or
+unlicensed `insta360ctl` implementation is copied. Existing codec/fixture
+attribution and [file licensing](#pure-be80-recording-request-file-licensing-19)
+remain unchanged.
+
+`BLEBarrel.mc` supplies BE80/BE81/BE82 roles, complete 18-byte StartVideo/Stop
+literals and the 1..254 sequence range. Its seven-byte standby write is explained
+as a queue callback trigger, not a camera handshake, and is omitted. Its
+first-fragment/byte-17 state heuristic and error-to-stopped mapping are not
+adopted. Successful ATT delivery is a transport result; no camera ACK or observed
+recording is asserted. Firmware, actual RS authorization/GATT and stored footage
+remain unqualified. The ordinary-360 ONE RS Core target is an explicit trial
+boundary derived from the ONE R 360-mod report plus proposed RS compatibility,
+not an observed RS/module result. The CE80 RS 1-inch source remains an unselected
+alternative, with no transfer of X5 state fixtures.
+
+
 ## IMU selection references (#27)
 
 Inspected 2026-10-07 for a bounded module/driver comparison. No sensor code was

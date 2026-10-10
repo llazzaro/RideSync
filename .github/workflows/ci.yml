@@ -43,6 +43,8 @@ jobs:
           PYCODE
       - name: Link opt-in GO 3S FFFrame adapter with shared host (activation disabled)
         run: pio run -e go3s_adapter_compile
+      - name: Link experimental ONE RS BE80 command profile (activation disabled)
+        run: pio run -e one_rs_adapter_compile
       - name: Build production X5 backend and uncommissioned serial milestone
         run: pio run -e x5_adapter_compile -e x5_serial_milestone -e x5_store_inspect -e x5_wake_milestone
       - name: Audit retained pure GPS encoder (compile only)

@@ -1,104 +1,154 @@
-# ONE RS recording profile evidence (#5)
+# Experimental ONE RS command profile (#5)
 
-Reviewed October 10, 2026. **Implementation blocked on model-specific state
-evidence; hardware support Not tested.** This is a protocol decision record,
-not an enabled adapter or a negative compatibility finding. #5 remains open.
-The existing ONE RS row in [#46](https://github.com/llazzaro/RideSync/issues/46)
-owns the capture and subsequent smoke check; #22 owns compatibility decisions.
+Reviewed October 10, 2026. The owner requested use of the published GitHub
+command information without waiting for a model-specific recording-state capture.
+The selected candidate is a default-off **BE80 explicit StartVideo/Stop profile**.
+It reports recording **Unknown**. Software verification and ticket acceptance are
+separate from physical compatibility, which remains **Not tested**. The existing
+ONE RS row in [#46](https://github.com/llazzaro/RideSync/issues/46) owns the finite
+commissioning/smoke check; #22 owns compatibility decisions.
 
 ## Target declaration
 
-The first target is one owner-fitted **ONE RS Core plus its explicitly named
-lens/module**, firmware and video settings. That combination has not yet been
-declared in repository evidence. Do not substitute a ONE R Core, treat the
-ordinary 360 Lens as the 1-Inch 360 Lens, or infer an installed lens from an
-edition name. Other combinations stay Not tested; this is not an all-lens
-campaign.
+The candidate targets one **ONE RS Core plus the ordinary 360 Lens**, with
+explicitly declared firmware and normal-video settings. This is a source-backed
+trial boundary, not evidence that this assembly has been fitted or tested. No
+local ONE RS Core/lens/firmware observation is recorded. Other combinations stay
+outside this candidate: a ONE R Core, 4K Boost Lens, 1-Inch Wide Angle Lens and
+1-Inch 360 Lens must not inherit it. Do not infer an installed lens from an
+edition name.
 
 The official [product introduction](https://onlinemanual.insta360.com/oners/en-us/camera/firstuse/introduction)
 distinguishes the modular assemblies. The [module compatibility FAQ](https://onlinemanual.insta360.com/oners/en-us/faq/compatibility/modules)
-also permits some lens/Core combinations across ONE R and ONE RS. Thus lens
-identity alone does not identify the control target. Record Core, lens, battery
-assembly, firmware, mode and selected resolution/frame rate separately.
+also permits some lens/Core combinations across ONE R and ONE RS. Record Core,
+lens, battery assembly, firmware, mode and selected resolution/frame rate
+separately. The reference does not provide a firmware version to use as a
+source-qualified ONE RS baseline; a declaration is not a compatibility result.
 
-## Candidate routes and evidence limits
+## Sources and selected route
 
-| Route | Primary evidence inspected | What it establishes | What is missing for #5 |
-|---|---|---|---|
-| CE80 remote peripheral | [ESP32 README](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/README.md) and [Insta_BLE.ino](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino), MIT | Author reports RS 1-inch control; source offers CE81 Write, CE82 Notify and CE83 Read on an emulated remote and a shutter event | Precise reported module/firmware and our fitted combination; complete camera writes with independent stopped/recording/mode annotations; connection/security premises |
-| BE80 camera peripheral | [Garmin README](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/README.md) and [BLEBarrel.mc](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/BLE%20Barrel/BLEBarrel.mc), MPL-2.0 | Author reports ONE R 360-mod testing and proposes ONE RS compatibility; source supplies distinct StartVideo/Stop requests on BE81 with BE82 receive traffic | Actual ONE RS GATT/security/control access; complete response framing and authoritative state/error semantics |
+| Route | Primary evidence inspected | Source facts and limits |
+|---|---|---|
+| Selected BE80 camera peripheral | [Garmin README](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/README.md) and [BLEBarrel.mc](https://github.com/arsfabula/Insta360-Remote-CIQ/blob/39c51b3aa7c453227831d811355899371bbb8b94/BLE%20Barrel/BLEBarrel.mc), MPL-2.0 | Author reports ONE R 360-mod testing and proposes ONE RS compatibility. Camera hosts BE80; controller writes distinct StartVideo/Stop requests on BE81 and subscribes to BE82. Actual ONE RS GATT/security/control access and authoritative state/error semantics remain unqualified. |
+| Unselected CE80 remote peripheral | [ESP32 README](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/README.md) and [Insta_BLE.ino](https://github.com/pchwalek/insta360_ble_esp32/blob/83d4748b68d6ee5fd4414994a9e26b7d2f21364b/Insta_BLE.ino), MIT | Author reports RS 1-inch control with an ambiguous lens description; source emulates CE80 with CE81 Write, CE82 Notify, CE83 Read and a shutter toggle. It provides no ONE RS state decoder or exact firmware baseline. |
 
-These are pinned community source facts, not local ONE RS observations. The
-CE80 source's abbreviated module description does not establish whether it is
-the 1-Inch Wide Angle or 1-Inch 360 Lens. The BE80 author's ONE R test cannot
-qualify any ONE RS module. Existing pure shutter and BE80 request codecs can be
-reused only for the route independently established on the declared target.
+The Garmin author's ONE R test cannot qualify a ONE RS assembly. RideSync uses
+its existing pure `GarminBe80ControlV1` request codec and independently authored
+bounded adapter/control policy; no upstream BLE/controller/state algorithm is
+copied. The codec's MPL-2.0 notices and pinned license remain intact; see
+[sources](sources.md#one-rs-profile-evidence-audit-5).
 
 The official [ONE RS GPS remote instructions](https://onlinemanual.insta360.com/oners/en-us/camera/connect/gpsremote)
-describe camera-side Bluetooth remote selection and a mode-dependent shutter
-button that starts/stops video. They document vendor accessory behavior, not
-CE80/BE80 UUIDs or third-party state bytes. Their remote-reset/unbind steps are
-not instructions to erase RideSync bonds or reset the camera for this trial.
+document vendor accessory behavior and camera-side remote selection, not BE80
+UUIDs, third-party authorization or recording-state bytes. They do not authorize
+erasing RideSync bonds or resetting the camera for this trial.
 
-## Route decision
+## Delivery and state contract
 
-Investigate **CE80 first**, reusing the existing bounded
-[peripheral capture probe](../tools/bench/x5_peripheral/README.md). This choice
-uses the source's RS report and our existing receive recorder; it does not
-transfer the X5 qualification to ONE RS. The probe remains diagnostic and
-reports Unknown. Do not configure ONE RS as X5 or enable `X5CapturedDisplayV1`
-for it: that decoder is based on X5 writes and a specific settings vocabulary.
+The experimental `OneRsAdapter` uses shared `BleCentral` as the controller.
+Activation requires explicit opt-in, the declared candidate target and a
+commissioned verified identity/bond. Connection admission requires discovery of
+BE80, BE81 Write and BE82 Notify/CCCD, successful subscription, security premises
+and an actual ATT MTU of at least 21 for the complete 18-byte write. Missing
+prerequisites fail within the bounded connection attempt; no guessed SYNC,
+CheckAuth or authorization bytes are added.
 
-No complete ONE RS receive fixture, firmware observation or installed module
-declaration currently exists. The CE80 reference has no camera-write state
-decoder; the BE80 reference's response handling is already unresolved in
-[the control audit](insta360_protocol.md#licensed-be80-control-reference-19-5).
-Therefore neither reference supplies enough evidence for an honest recording
-adapter yet. Pairing, subscription, successful SDK submission, silence and a
-timer-like string alone cannot establish state.
+StartVideo and Stop use the [existing independent request literals](insta360_protocol.md#implemented-pure-be80-recording-requests-19-partial):
 
-## Finite capture within #46
+| Request | Complete bytes; SS is the allocated sequence |
+|---|---|
+| StartVideo | `12 00 00 00 04 00 00 04 00 02 SS 00 00 80 00 00 08 01` |
+| Stop | `12 00 00 00 04 00 00 05 00 02 SS 00 00 80 00 00 10 01` |
 
-Refine the existing ONE RS row rather than add another campaign:
+Each independently requested operation sends at most one complete request.
+Sequence values 1..254 are not reused within a link; exhaustion requires a new
+connection. Explicit request bytes do not establish camera-level idempotence.
+Timeout, cancellation, transport error and disconnect retire the operation and
+prevent replay after reconnect. The camera manager uses one attempt.
 
-1. Declare the target above and ESP32/probe revision. Preserve installed flash,
-   NVS and camera/card data using the existing bench procedure. Mark the row
-   Blocked until the camera/module is available and the preparation is complete.
-2. Use the isolated CE80 probe's default capture-only mode, `H` for private
-   complete write capture, then `A` for one bounded attempt. On the camera,
-   enter its Bluetooth remote search UI. Record camera-side pairing outcome,
-   role, address type, MTU, subscriptions and any security refusal. An absent
-   connection is unresolved; do not guess handshake bytes or erase bonds.
-3. Timestamp stopped video, one camera-button Start, running video, camera-button
-   Stop, and one mode change against the camera display. Confirm a playable new
-   clip. Retain complete CE81 writes, event/connection sequence and drop/truncation
-   counters privately; incomplete capture data is not a golden fixture. Use `X`
-   or the existing 120-second deadline to end the attempt. Do not send `S`, wake
-   or automatic commands during this receive-evidence pass.
-4. Review/anonymize only the required display/state facts. Compare the full
-   frames to the annotations and X5 layout without assuming they match. Identify
-   any fresh authoritative state and its mode/error limits; otherwise retain
-   Unknown and state the missing semantics. A mode change must not be mistaken
-   for a recording transition. Publish independent fixtures only after review.
-5. Implement/test the evidenced profile in #5, then run its existing three
-   independently requested REC/STOP cycles and one reconnect in #46. Reuse
-   qualifying observations from this same declared combination; rerun only
-   affected checks. No new mixed-group, wake or GPS checks belong to #5.
+**Completed means successful ATT write delivery, not a camera ACK or a recording
+observation.** A successful connection/subscription or SDK submission alone does
+not complete a command write. No `wireAck` or recording observation is synthesized
+from an ATT completion, notification, timer string, silence or the desired state.
+Start/Stop are experimental command capabilities; observed recording remains
+Unknown after delivery, malformed/opaque notifications, reset and reconnect.
+Query and Wake are Unsupported. Group camera-observed confirmation remains
+incomplete while this profile cannot provide recording state.
 
-If CE80 cannot provide a usable route, record the exact outcome before choosing
-BE80. BE80 is conditional, not a mandatory second campaign: establish actual
-GATT/security/subscription prerequisites and complete annotated exchanges
-before enabling that route. Never send CE82 shutter bytes on BE81.
+The group status field `acknowledged` reflects generic manager operation
+completion, which for this adapter is ATT delivery. It is not a protocol ACK;
+CameraV3 `WireAck` and recording-observation rows remain absent.
 
-## Implementation acceptance after evidence
+The Garmin source's seven-byte standby prewrite starts its callback-driven
+queue. It is omitted: the source does not establish it as a required camera
+handshake. Its first-fragment/byte-17 state heuristic and error-to-stopped policy
+are not adopted. The existing pure BE80 envelope decoder validates only an
+envelope shape; it cannot supply an ACK or state schema.
 
-Model-specific capability selection must use only the qualified route/settings.
-Test independent expected frames, malformed/ambiguous state, missing services
-or subscription, freshness, deadlines and disconnect without recording replay.
-Reset/lost receive evidence returns Unknown. A disabled model entry or an empty
-adapter does not satisfy #5. Source-backed request bytes do not themselves
-provide observed state or physical compatibility.
+## Opt-in ESP32 ownership
 
-This audit changes documentation only; existing encoder, transport and X5
-software evidence is reused under [the acceptance policy](acceptance_policy.md).
-No camera operation, firmware upload or hardware qualification was performed.
+`oneRsRuntime()` / `ridesync_one_rs_runtime()` retain a boot-lifetime adapter,
+camera manager and group coordinator on `Esp32BleHost::instance()`. Construction
+does no radio/store I/O. A serialized owner configures the manager with its ONE RS
+`CameraConfig`, supplies matching `OneRsQualification` records, and explicitly
+starts the adapter. It services `ridesync_one_rs_service()` and issues separate
+manager Connect/Start/Stop requests; the default application never calls these
+entry points or enables the radio route. Keep the owner and contexts alive
+through terminal callbacks and the host quiescence barrier during stop.
+
+Use direct explicit manager operations for the finite manual trial. The group
+policy requires fresh observed state and cannot confirm or automatically choose
+a recording action from this profile's Unknown state. GPS forwarding is a
+separate component; this adapter advertises no GPS capability or shared
+forwarding integration.
+
+## Finite commissioning and smoke check within #46
+
+This replaces the earlier CE80-first capture prerequisite in the existing ONE RS
+row. No duplicate campaign or all-lens matrix is required.
+
+1. Declare the target above and ESP32 firmware revision. Preserve installed flash,
+   NVS, bonds and camera/card data using the existing bench procedure. Keep the
+   row Blocked until the ordinary-360 ONE RS assembly and safe preparation are
+   available. Commission its private identity/bond explicitly; a source report
+   or camera name is not proof of identity or authorization.
+2. Record actual camera-hosted BE80, BE81 Write, BE82 Notify/CCCD, address type,
+   negotiated MTU, security outcome and subscription. A refusal/missing service
+   is an unresolved trial result, not proof that every ONE RS is unsupported.
+   Stop at the bounded deadline; do not guess a handshake or erase bonds.
+3. Select stopped normal video on the camera. Request StartVideo once and verify
+   running recording on its display; request explicit Stop once and verify it
+   stopped. Repeat for three independently requested cycles. Record each ATT
+   outcome separately from the actual camera outcome and confirm playable saved
+   footage. Serial/group observed recording must remain Unknown even when the
+   owner observes successful recording on the camera.
+4. Reconnect once and verify the connection alone sends no prior Start/Stop.
+   Confirm no replay after a lost/cancelled/expired request. Reuse observations
+   for this exact target/firmware/settings; rerun only affected checks. Mixed
+   groups, wake and GPS remain their existing owners' scope.
+5. If complete BE82 traffic can be retained during the same session, annotate it
+   against stopped/running/mode/error observations and keep raw identifiers and
+   captures private. This is optional evidence for a later state decoder, not a
+   prerequisite to implementing or trying the explicit command path. Review and
+   anonymize independent fixtures before publishing; partial data and timer
+   heuristics cannot establish state.
+
+The existing bounded [CE80 capture probe](../tools/bench/x5_peripheral/README.md)
+remains an alternative investigation if the selected BE80 route fails and the
+outcome warrants another route decision. It is not a mandatory second test.
+Never send CE82 shutter bytes on BE81, configure ONE RS as X5 or enable
+`X5CapturedDisplayV1`: X5 observations do not qualify ONE RS.
+
+## Software acceptance
+
+Focused checks must cover independent full request bytes, target/disabled
+selection, missing GATT/security/subscription, MTU bounds, transport failures,
+malformed/ambiguous notifications, deadlines, late callbacks, cancellation,
+sequence exhaustion and disconnect/reconnect without replay. Every case retains
+Unknown recording. Use the pinned ESP32 compile, formatting and CI required by
+the [acceptance policy](acceptance_policy.md); record final results in the
+[testing guide](testing.md#one-rs-source-backed-profile-verification-5).
+
+This record does not itself close #5 or claim a hardware pass. No camera command,
+firmware upload or ONE RS hardware qualification was performed during this
+software work.
