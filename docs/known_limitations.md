@@ -36,6 +36,11 @@
   are implemented and Experimental. Their final composed hardware checks remain
   pending; the isolated wake result does not qualify production orchestration.
   Remaining camera checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
+  The experimental [ONE RS BE80 command candidate](one_rs_profile.md) implements
+  explicit StartVideo/Stop delivery through the shared central. The reference
+  tested ONE R 360 and only proposed ONE RS compatibility; actual ONE RS route,
+  firmware/security and recording remain untested. ATT completion leaves observed
+  state Unknown, Query/Wake Unsupported and group confirmation incomplete.
   Official GO 3S accessory documentation identifies the camera as the remote
   pairing target and lists GPS Action Remote compatibility. The experimental
   [GO 3S BE80 FFFrame adapter](go3s_profile.md) implements source-backed sync,

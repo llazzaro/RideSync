@@ -76,6 +76,13 @@ power-state and final composed camera observations remain pending in #46.
 Support remains Experimental
 ([serial wake contract](docs/x5_serial_milestone.md#optional-bounded-wakerecovery-9)).
 
+The experimental [ONE RS BE80 command profile](docs/one_rs_profile.md) uses the
+licensed explicit StartVideo/Stop candidate with declared ONE RS Core, ordinary
+360 Lens and firmware. The upstream route was tested on ONE R and only proposed
+for ONE RS. Completed writes establish ATT delivery, with recording Unknown and
+Query/Wake Unsupported. Actual ONE RS operation remains Not tested in #46/#22;
+this candidate does not inherit X5 observations or confirm group recording.
+
 The experimental [GO 3S BE80 profile](docs/go3s_profile.md) implements sync,
 strict authorization and explicit normal-video Start/Stop. Source-backed ACKs
 complete commands while observed recording stays Unknown; Query/Wake/GPS remain

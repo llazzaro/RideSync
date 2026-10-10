@@ -6,19 +6,24 @@ wake have been observed with isolated diagnostics. A card-ready retry on
 owner-reported X5 firmware 1.11.10 established one remote recording start, a
 playable clip after manual stop. A later probe session completed three
 camera-observed remote Start/Stop cycles and reconnect. The production X5
-adapter and connection-fresh state integration remain unimplemented. Known
-CE80 display fields are now decoded under the explicit profile below; camera-dependent
+adapter and connection-fresh typed state integration are implemented and
+Experimental. The final composed hardware check remains pending; camera-dependent
 follow-up checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
 ## ONE RS profile evidence (#5)
 
-The [ONE RS decision record](one_rs_profile.md) separates the source-reported
-CE80 RS 1-inch route from the BE80 ONE R 360-mod reference. Exact fitted
-Core/lens/firmware and authoritative receive state remain unobserved. #5 stays
-open; its bounded capture and subsequent smoke check are in the existing ONE RS
-row of #46. X5 display qualification must not be reused as ONE RS evidence.
+The [ONE RS decision record](one_rs_profile.md) selects an opt-in experimental
+BE80 explicit StartVideo/Stop candidate for a declared ONE RS Core and ordinary
+360 Lens, reusing the licensed Garmin request codec. The source reports ONE R
+360-mod testing and proposes RS compatibility; it is not a local RS observation.
+Completed commands mean ATT write delivery only; no camera ACK/state is inferred,
+recording stays Unknown and Query/Wake are Unsupported. Software acceptance and
+the existing #46 commissioning/three-cycle/reconnect check remain separate.
+Exact fitted Core/lens/firmware and authoritative receive state remain unobserved.
+The earlier CE80 capture route is an unselected alternative; X5 display
+qualification must not be reused as ONE RS evidence.
 
 ## GO 3S and Action Pod feasibility (#6)
 
@@ -110,7 +115,8 @@ submission. The later [three-cycle session](hardware-results/2026-10-09-x5-pairi
 completed three camera-observed remote Start/Stop cycles, with the last Stop
 submitted after reconnect. An expired-window request was refused locally; no
 automatic shutter replay occurred. Incoming display framing is now classified by the published-capture comparison below;
-production adapter/state integration remains unimplemented. Keep NVS refusal guards;
+production adapter/state integration is implemented, with final composed hardware
+qualification pending in #46. Keep NVS refusal guards;
 no event from this encoder should be sent on the unrelated BE80 path.
 
 ## Licensed BE80 control reference (#19, #5)
@@ -120,8 +126,10 @@ The October 9 audit found another licensed direct-control reference:
 pinned with its MPL-2.0 licenses in [sources](sources.md). It declares distinct
 18-byte video-start and stop packets, changes a one-byte sequence at offset 10,
 and writes BE81 with notifications on BE82. This supplies source-level command
-expectations separately from the CE82 shutter toggle. The pure source-derived request encoder and fixtures now retain MPL-2.0; no
-RideSync camera profile enables this route.
+expectations separately from the CE82 shutter toggle. The pure source-derived
+request encoder and fixtures retain MPL-2.0. The experimental
+[ONE RS command candidate](one_rs_profile.md) enables this request route after
+explicit commissioning, retaining Unknown recording state.
 
 Its receive callback reads a command byte and byte 17 from the first fragment,
 ignores later fragments, and can label stopped after command/service errors.

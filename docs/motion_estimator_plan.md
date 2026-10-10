@@ -124,3 +124,56 @@ wheel lift or body articulation also defeats a motorcycle-lean interpretation.
 These limits invalidate angle/gravity separation, not the recorded specific-
 force and angular-rate bytes; BMI270 endpoint checks cannot prove no prior
 clipping ([raw-path evidence](raw_imu.md)).
+
+## GitHub implementation comparison (October 10, 2026)
+
+This comparison inspects upstream implementations rather than treating missing
+physical validation as proof that no algorithm can be implemented. No dependency
+was added and no upstream code was copied. General dynamic lean/pitch and
+acceleration remain #13 goals; the software proposal below does not remove them
+or claim that the current static core already implements them.
+
+| Pinned implementation and license | Useful approach / RideSync boundary |
+| --- | --- |
+| [xioTechnologies/Fusion, `a8d7224`](https://github.com/xioTechnologies/Fusion/tree/a8d7224f36a0ec82345ef49a3db50e65f8d3bab8), [MIT](https://github.com/xioTechnologies/Fusion/blob/a8d7224f36a0ec82345ef49a3db50e65f8d3bab8/LICENSE.md) | Embedded C six-axis quaternion integration, gravity and body linear acceleration, adjustable sample period and explicit recovery flags. Its startup/recovery can force accelerometer correction during sustained acceleration; those modes must not establish trustworthy motorcycle attitude. |
+| [VQF v2.1.2, `86ba56b`](https://github.com/dlaidig/vqf/tree/86ba56bdd3158b9b05f9f9fe5596866ba326438c), [MIT](https://github.com/dlaidig/vqf/blob/86ba56bdd3158b9b05f9f9fe5596866ba326438c/LICENSES/MIT.txt) | C++ six-axis and offline orientation comparator. It supports disabling moving/rest bias estimation; filter output is not independent ground truth or evidence that coordinated-turn ambiguity is solved. |
+| [MotoNav research, `c5dd088`](https://github.com/shbmx/motonav/blob/c5dd08888071b8245a16958524210a7b5d79e630/research/lean-estimation/README.md), [PolyForm Noncommercial 1.0.0 plus Share-Alike](https://github.com/shbmx/motonav/blob/c5dd08888071b8245a16958524210a7b5d79e630/LICENSE) | Motorcycle comparison documents cornering underestimation with ordinary complementary/Mahony filters and evaluates GPS/gyro coordinated-turn proxies. Its GPS-course/road-geometry scoring is model comparison, not independent chassis-angle measurement. Study the approach; do not copy code under an assumed permissive license. |
+
+The [pinned Fusion source](https://github.com/xioTechnologies/Fusion/blob/a8d7224f36a0ec82345ef49a3db50e65f8d3bab8/Fusion/FusionAhrs.c)
+provides quaternion initialization, startup bypass and gyro propagation. A
+concrete next production scope is bounded gyro-only propagation from an
+externally declared initial attitude, followed by body-frame gravity subtraction.
+Reuse qualified calibrated counts and mounting, explicitly carry initialization,
+timing source, elapsed horizon and invalidation reasons, and reject gaps,
+saturation and changed configurations. Do not adapt bias while moving or use
+forced accelerometer recovery to restore validity. A nominal-cadence experiment
+can calculate numeric attitude/acceleration with **Unreliable** quality; it must
+not set trusted dynamic validity merely because a finite number was computed.
+Qualified timing and a demonstrated propagation error budget are required to
+promote those outputs. Absolute ENU heading remains unknown without qualified
+aiding; body-frame gravity subtraction does not require claiming absolute yaw.
+
+The FIFO timing limitation is specific, not a blanket prohibition on integration.
+[Bosch BMI270 datasheet BST-BMI270-DS000-08, page 36, “Sensortime Frame”](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf#page=36)
+specifies that the trailer snapshots SENSORTIME when the final sample's last byte
+is read, and is emitted only when the FIFO empties during the burst. The
+[Bosch parser at `41129fc`](https://github.com/BoschSensortec/BMI270_SensorAPI/blob/41129fcfe39c583ee5462d79195741945d51c1fe/bmi2.c#L8746)
+extracts that trailer; it does not reconstruct each sample's acquisition epoch.
+Backdating samples from it at the configured 200 Hz would be a modelled relative
+cadence, not measured acquisition timing. Keep that distinction in any estimator
+input/output; qualify cadence, loss accounting and clock alignment before making
+accuracy or latency claims. The same datasheet, section 4.6.15 on page 32,
+defines a sensor-time sampling grid (bit 7 toggles at 200 Hz). That offers a
+concrete basis to investigate cadence reconstruction with verified unchanged
+settings and complete frame accounting; it does not by itself align the FIFO
+read trailer to the last acquisition or establish host/GNSS synchronization.
+
+An opt-in host replay comparison of Fusion, VQF and independent analytic
+rotation/translation fixtures is a proposed first evaluation step, not an
+implemented subsystem or additional campaign. Include sustained turns, bias,
+vibration, gaps and recovery, and keep modelled timing explicit. Physical
+reference collection stays in the existing #31 plan. Low-rate GNSS can inform a
+future constrained observer, but the current receipt-time/no-uncertainty route
+must not silently become qualified velocity aiding. Implementing experimental
+dynamic computation is feasible; demonstrating its useful operating envelope
+and measured accuracy remains separate work.

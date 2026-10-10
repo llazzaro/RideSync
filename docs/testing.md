@@ -70,16 +70,46 @@ one model. Test unavailable SD, full SD, GNSS no-fix/stale fixes, and reset.
 Acceptance for the first X5 camera milestone: repeatable single-X5 start/stop with observed state,
 bounded connect/command timeouts and honest serial status. It is not met yet.
 
-## ONE RS evidence prerequisite (#5)
+## ONE RS source-backed profile verification (#5)
 
-Use the [ONE RS target/route decision and finite capture procedure](one_rs_profile.md)
-within the existing ONE RS row of #46. Declare the exact Core, lens, firmware
-and video settings; collect bounded CE80 receive evidence before qualifying a
-state decoder. The isolated probe supports capture, not production ONE RS
-control. Its X5 observations and `X5CapturedDisplayV1` do not qualify ONE RS.
-The existing three REC/STOP cycles and reconnect follow the implemented profile;
-BE80 investigation is conditional if the selected CE80 route is unusable.
-No ONE RS hardware observation or unsupported finding is currently recorded.
+Software profile: **Experimental**. Physical compatibility: **Not tested**.
+Use the [ONE RS target/route and delivery contract](one_rs_profile.md).
+The candidate uses the existing `GarminBe80ControlV1` pure encoder with shared
+central BE80 discovery, BE81 Write and BE82 Notify/CCCD. Its ordinary-360 ONE RS
+Core and firmware declaration, commissioned verified bond identity, security,
+subscription and actual MTU of at least 21 are explicit prerequisites.
+
+Focused software verification covers independent literal StartVideo/Stop requests,
+disabled/wrong target qualification, missing GATT/security/subscription, MTU,
+malformed or opaque notifications, failed/missing/late ATT completions, deadlines,
+cancellation, sequence exhaustion and reconnect without replay. Completed means
+ATT write delivery only; no camera ACK or recording observation is inferred.
+Observed recording remains Unknown; Query/Wake are Unsupported.
+
+October 10 local verification: `pio test -e native -f test_one_rs_adapter` passed
+9 focused cases, including reserved-host/MTU admission and group/audit semantics.
+`pio run -e lilygo_t_a7670e_r2 -e one_rs_adapter_compile` passed both pinned builds;
+the latter retains `ridesync_one_rs_runtime` and `ridesync_one_rs_service` without
+activation. Fixtures are independent source-derived/synthetic packets, not local
+ONE RS observations. Mandatory pipeline and final CI evidence accompany the
+delivery record; no firmware upload or physical test was performed.
+
+The existing ONE RS row of [#46](https://github.com/llazzaro/RideSync/issues/46)
+now selects finite BE80 commissioning, three separately requested explicit
+StartVideo/Stop cycles with camera-display and playable-footage verification,
+and one reconnect/no replay check. #22 retains compatibility ownership. Declare
+Core, ordinary 360 Lens, battery, camera firmware, normal-video settings and
+ESP32 revision; preserve installed flash, bonds and card data. Record actual
+GATT/security/CCCD/MTU and ATT outcomes separately from camera behavior. Serial
+recording must stay Unknown even when the owner observes successful recording.
+A missing camera, service or security prerequisite remains Blocked/unresolved.
+
+Annotated complete BE82 receive traffic is optional evidence for a later state
+decoder; it is no longer a prerequisite to trying the source-backed command
+candidate. The earlier CE80 capture probe remains an unselected alternative,
+not a required duplicate campaign. Its X5 observations and
+`X5CapturedDisplayV1` do not qualify ONE RS. No real ONE RS hardware observation
+or reproducible unsupported finding is currently recorded.
 
 ## GO 3S source-backed profile verification (#21)
 
