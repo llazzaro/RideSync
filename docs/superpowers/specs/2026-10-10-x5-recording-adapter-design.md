@@ -1,7 +1,7 @@
 # Single-X5 production recording adapter (#3)
 
 Date: October 10, 2026, Europe/Amsterdam.
-Status: conversational architecture approved; written spec awaiting review.
+Status: written spec and native execution approved by the owner on October 10, 2026.
 
 ## Intended outcome and closure
 

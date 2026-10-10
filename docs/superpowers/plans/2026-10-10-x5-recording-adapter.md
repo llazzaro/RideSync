@@ -1,6 +1,6 @@
 # Single-X5 Recording Adapter Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Native execution in this session is recommended. This written plan awaits the owner's review before implementation.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Native execution in this session is recommended. The owner approved this plan and native execution in the prior session on October 10, 2026.
 
 **Goal:** Complete #3's production single-X5 serial REC/STOP path and its finite acceptance, reusing existing camera evidence.
 

@@ -13,6 +13,16 @@ public:
   bool ready(Operation) const;
   X5Failure failure() const { return failure_; }
   RecordingState observed() const;
+  bool connected() const { return connected_; }
+  bool subscribed() const { return subscribed_; }
+  bool active() const { return active_; }
+  bool observationAge(uint32_t &age) const {
+    if (!connected_ || !subscribed_ || !has_observation_ || !fresh())
+      return false;
+    age = clock_.now() - observed_ms_;
+    return true;
+  }
+  X5Failure refusal(Operation) const;
   static RetryPolicy managerPolicy();
 
 private:
@@ -29,7 +39,7 @@ private:
            cutoff_ = 0;
   bool configured_ = false, connected_ = false, subscribed_ = false, active_ = false,
        video_ = false, has_observation_ = false, send_pending_ = false, send_consumed_ = false,
-       returned_ = false, complete_pending_ = false;
+       returned_ = false, complete_pending_ = false, input_lost_ = false;
   X5Input input_;
   void invalidate(bool mode = true, bool publish = true);
   void publishObservation();

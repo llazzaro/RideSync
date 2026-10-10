@@ -673,3 +673,55 @@ checks, default/retained builds and bench audits. #19 is closed for codec softwa
 scope. Closure does not enable the unimplemented production Insta360 adapter
 or supersede #3/#22/#46 acceptance. Subsequent closure-note edits are prose only;
 the passing source/build evidence is reused under the acceptance policy.
+
+## Production X5 adapter and serial milestone — October 10, 2026 (#3)
+
+The production route has portable adapter, mailbox/admission, runtime and strict
+line-parser suites, plus actual-backend and actual-main SDK stand-in harnesses.
+Use the [commissioning guide](x5_serial_milestone.md); build-only targets do not
+qualify the camera. The current implementation adds the real CE80 service/SDK
+backend, exclusive shared-host reservation, one-attempt runtime and bounded
+serial main selection. It preserves the existing captured decoder and shutter
+wire bytes. No physical result or ticket closure is asserted by these commands.
+
+```sh
+.venv/bin/pio test -e native -f test_x5_adapter -f test_x5_peripheral_policy -f test_x5_runtime -f test_x5_serial
+.venv/bin/python -m unittest discover -s test -p 'test_x5*esp32.py' -v
+.venv/bin/pio run -e lilygo_t_a7670e_r2 -e x5_adapter_compile -e x5_serial_milestone -e x5_store_inspect
+scripts/check_pipeline.sh
+git diff --check
+```
+
+Independent literal display/shutter fixtures test missing/mismatching identity,
+subscription, stale/photo/malformed/lost state, passive Query, pre-send receipt
+cutoff, one-send ambiguous errors, deadlines, handle reuse and no replay. Actual
+SDK harnesses cover registration failure, wrong peer, allocation refusal,
+subscription loss, queue overflow, cancel/expiry and delayed SDK return after
+disconnect, with retained callback barriers. Actual `setup()`/`loop()` and runtime
+harnesses cover missing provider, safe-mode/NVS/task refusal, late configuration,
+revocation persistence, explicit CONNECT and continued deadlines under serial
+flooding. The private inspector is read-only and never commissions a camera.
+
+Local software verification: repository pipeline passed 57 Python tests, all
+three existing bench harnesses, 469 native tests and formatting. Four portable
+X5 suites passed 52/52 under strict C++11 `-Wall -Wextra -Werror` with ASan/UBSan.
+The actual backend/main harnesses also use sanitizers. The lookup-under-critical
+regression failed before moving the NimBLE mutex-taking lookup outside the
+critical section, then passed. The existing local-telemetry actual composition
+harness passed after excluding these independently tested SDK units from its
+portable compile list. No failing test is waived.
+
+Pinned default/retained-X5/serial/inspector builds passed. Before final-review
+fixes, the retained image used RAM 73,068 bytes and flash 693,949 bytes; the
+uncommissioned serial image used RAM 57,500 bytes and flash 682,729 bytes. The
+retained symbol audit includes the actual backend factory, GAP callback, worker,
+notification and serial service. ESP32 compiler frames were 96 bytes each for
+GAP and send, 64 for workerStep, 240 for serial service and 2112 for the existing
+store inspection. These are individual compiler frames, not peak stack/heap,
+latency or physical initialization observations. The 4096-byte SDK worker and
+12288-byte configuration owner retain their declared storage; runtime high-water
+measurements remain unperformed. One fresh review found three Important defects (queued display admission, idle
+loss replay and duplicate-result masking); all three were fixed with focused
+regressions. No Critical or Minor findings were confirmed or deferred. Source
+CI and the declared final composed-path camera check remain required for #3
+closure.

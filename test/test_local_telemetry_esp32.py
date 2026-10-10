@@ -133,7 +133,15 @@ inline void vTaskDelayUntil(TickType_t *,TickType_t) { throw std::runtime_error(
 int spawn(void(*)(void *),const char *,void *);
 inline int xTaskCreate(void(*f)(void *),const char *n,unsigned,void *a,unsigned,TaskHandle_t *h) { *h=a;return spawn(f,n,a); }
 inline int xTaskCreatePinnedToCore(void(*f)(void *),const char *n,unsigned,void *a,unsigned,void *,int) { return spawn(f,n,a); }
-inline void vTaskDelay(unsigned) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+extern bool test_motion_fixture;
+// Model the requested sample interval for motion output: running the IMU every
+// 100us overwrote fresh evidence with duplicate-clock samples before logging.
+inline void vTaskDelay(unsigned ticks) {
+  if (test_motion_fixture)
+    std::this_thread::sleep_for(std::chrono::milliseconds(ticks));
+  else
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+}
 inline void vTaskDelete(void *) {}
 ''',
         }
@@ -164,7 +172,8 @@ int test_close(int);
                 p.write_text(data)
             portable = [p for p in (ROOT / 'src').rglob('*.cpp')
                         if p.name not in ('main.cpp', 'storage_sd.cpp', 'bmi270_imu.cpp', 'ble_esp32.cpp',
-                                          'ble_wake_esp32.cpp', 'insta360_wake_esp32.cpp', 'nvs_boot_guard.cpp', 'config_storage_nvs.cpp')]
+                                          'ble_wake_esp32.cpp', 'ble_peripheral_esp32.cpp', 'x5_peripheral_esp32.cpp',
+                                          'insta360_x5_esp32.cpp', 'insta360_wake_esp32.cpp', 'nvs_boot_guard.cpp', 'config_storage_nvs.cpp')]
             exe = folder / 'runtime'
             cmd = ['c++', '-std=c++11', '-DARDUINO', '-DARDUINO_ARCH_ESP32',
                    '-Wall', '-Wextra', '-Werror', '-Wno-return-type-c-linkage', '-pthread', '-I', str(folder),

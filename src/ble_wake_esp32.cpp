@@ -22,7 +22,8 @@ private:
 } // namespace
 WakeSubmit Esp32BleHost::reserveWake(const WakeOperation &op, uint32_t deadline, uint32_t now) {
   WakeGate routing(routing_lock_);
-  if (!routing.held() || wakeReserved() || reset_gate_.load(std::memory_order_acquire) ||
+  if (!routing.held() || wakeReserved() || peripheralReserved() ||
+      reset_gate_.load(std::memory_order_acquire) ||
       reset_.phase.load(std::memory_order_acquire) == 1 || reset_.phase.load() == 2 ||
       sdk_calls_.load(std::memory_order_acquire))
     return WakeSubmit::Busy;
@@ -198,6 +199,8 @@ bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle, bool r
   return true;
 }
 bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const void *value_pointer) {
+  if (peripheralReserved())
+    return false; // Exclusive single-X5 lease; no security/store mutation.
   if (!wakeReserved())
     return true;
   if (wake_identity_pending_.load(std::memory_order_acquire))
@@ -275,6 +278,8 @@ bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const voi
   }
 }
 bool Esp32BleHost::wakeSecurityAllowed(uint16_t handle) {
+  if (peripheralReserved())
+    return false; // Exclusive single-X5 lease; no security/store mutation.
   if (!wakeReserved())
     return true;
   if (wakeOwnsConnection(handle) || handle == kBleNoHandle)

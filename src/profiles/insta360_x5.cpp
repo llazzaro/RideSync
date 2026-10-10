@@ -66,13 +66,34 @@ bool X5Adapter::ready(Operation op) const {
     return false;
   if (op == Operation::Connect)
     return !connected_ && (!token_.connection || port_.released(token_.connection));
-  if (!connected_ || !subscribed_)
+  if (!connected_ || !subscribed_ || input_lost_)
     return false;
   if (op == Operation::Query)
     return true;
   if (op != Operation::Start && op != Operation::Stop)
     return false;
   return video_ && fresh() && recording_ != RecordingState::Unknown;
+}
+X5Failure X5Adapter::refusal(Operation op) const {
+  if (ready(op))
+    return X5Failure::None;
+  if (!configured_)
+    return X5Failure::Disabled;
+  if (active_ || (op == Operation::Connect && connected_))
+    return X5Failure::Busy;
+  if (op == Operation::Connect)
+    return X5Failure::Busy; // Actual cleanup barrier pending.
+  if (!connected_ || !subscribed_)
+    return X5Failure::Subscription;
+  if (input_lost_)
+    return X5Failure::LostInput;
+  if (op != Operation::Start && op != Operation::Stop && op != Operation::Query)
+    return X5Failure::Qualification;
+  if (!fresh())
+    return X5Failure::Stale;
+  if (!video_)
+    return X5Failure::WrongMode;
+  return X5Failure::UnknownState;
 }
 bool X5Adapter::begin(size_t peer, const CameraConfig &camera, Operation op, Token token) {
   if (peer != 0 || camera.family != CameraFamily::Insta360 || camera.model != CameraModel::X5 ||
@@ -102,6 +123,7 @@ bool X5Adapter::begin(size_t peer, const CameraConfig &camera, Operation op, Tok
   failure_ = X5Failure::None;
   deadline_ = clock_.now() + (op == Operation::Connect ? 15000 : 5000);
   if (op == Operation::Connect) {
+    input_lost_ = false;
     last_sequence_ = observation_sequence_ = 0;
     handle_ = kBleNoHandle;
     invalidate(true, false);
@@ -260,7 +282,8 @@ void X5Adapter::input(const X5Input &e) {
     }
     break;
   case X5InputKind::Display:
-    display(e);
+    if (!input_lost_)
+      display(e);
     break;
   case X5InputKind::Disconnected:
     if (connected_ && e.handle == handle_) {
@@ -285,6 +308,8 @@ void X5Adapter::service() {
     return;
   port_.service(clock_.now());
   if (token_.connection && port_.takeLoss(token_.connection)) {
+    input_lost_ = true;
+    failure_ = X5Failure::LostInput;
     invalidate();
     if (active_)
       fail(X5Failure::LostInput);
@@ -314,6 +339,7 @@ void X5Adapter::service() {
     request.handle = handle_;
     request.deadline_ms = deadline_;
     request.observation_sequence = observation_sequence_;
+    request.observation_ms = observed_ms_;
     invalidate(false); // Keep Video epoch; no old observation can complete this send.
     if (!port_.notify(request))
       fail(X5Failure::Transport);

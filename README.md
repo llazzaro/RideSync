@@ -170,3 +170,8 @@ RideSync-authored files are MIT licensed. Pinned dependencies and retained sourc
 fixtures have component-specific licenses/notices; see
 [sources](docs/sources.md) and [NimBLE fixture notices](test/fixtures/nimble/NOTICE-Apache-NimBLE).
 Synthetic protocol fixtures are not physical camera captures.
+
+The [single-X5 serial milestone](docs/x5_serial_milestone.md) provides a privately
+commissioned production CE80 route with explicit CONNECT/REC/STOP/QUERY/STATUS/
+DISCONNECT commands. Default activation remains off; observations, command
+outcomes and transport acceptance are reported separately.
