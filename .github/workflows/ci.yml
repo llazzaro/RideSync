@@ -33,7 +33,13 @@ jobs:
       - name: Link opt-in Insta360 wake SDK worker (activation disabled)
         run: pio run -e insta360_wake_compile
       - name: Link opt-in HERO12 adapter with the shared ESP32 host (activation disabled)
-        run: pio run -e hero12_adapter_compile
+        run: |
+          pio run -e hero12_adapter_compile
+          python - <<'PYCODE'
+          import os, subprocess
+          symbols = subprocess.check_output([os.path.expanduser('~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm'), '.pio/build/hero12_adapter_compile/firmware.elf'], text=True)
+          assert not any(line.endswith(' ridesync_x5_peripheral_backend') for line in symbols.splitlines()), 'HERO12 image unexpectedly retains the X5 backend'
+          PYCODE
       - name: Build production X5 backend and uncommissioned serial milestone
         run: pio run -e x5_adapter_compile -e x5_serial_milestone -e x5_store_inspect
       - name: Audit retained pure GPS encoder (compile only)
