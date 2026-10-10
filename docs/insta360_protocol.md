@@ -45,14 +45,14 @@ See [Action Pod connection](https://onlinemanual.insta360.com/go3s/en-us/operati
 [connection FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/connection),
 and [firmware guidance](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/firmware).
 
-These sources do **not** identify which unit advertises or accepts a third-party
-BLE connection, publish GATT UUIDs, pairing/bonding requirements for such a
-controller, or map recording transitions to bytes. A Bluetooth control/preview
-link between camera and Pod is documented; whether an ESP32 can control the
-camera as a BLE peer, whether the Pod is the control target, and whether either
-unit exposes CE80/BE80 are **unknown**. Camera/Pod owner, address identity and
-firmware-specific behavior must be captured. Nothing in the X5 community
-CE80/BE80 reports can be transferred to GO 3S.
+The October 10 [GO 3S profile decision](go3s_profile.md) adds official accessory
+compatibility and pairing-target evidence: Insta360 lists GO 3S for the GPS
+Action Remote and says accessory remotes pair directly with the camera. This
+resolves the documented vendor-accessory target to the camera, while the Pod
+provides its UI and its own control/preview link. It does not establish an ESP32
+connection, BLE roles, CE80/BE80 services, security or recording-state bytes.
+Those remain unobserved. Investigate the camera first under the finite #46
+procedure; do not assume the Pod is a proxy or reuse X5 qualification.
 
 **Operation evidence:** no GO 3S start, stop, toggle, mode-selection or
 authoritative state operation is currently evidenced for RideSync. The
