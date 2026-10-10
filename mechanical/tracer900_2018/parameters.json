@@ -1,0 +1,20 @@
+{
+  "bracket_width": 94.0,
+  "leg_thickness": 10.0,
+  "leg_drop": 80.0,
+  "leg_sweep": 40.0,
+  "pivot_y": 30.0,
+  "pivot_z": -68.0,
+  "pivot_hole_diameter": 5.5,
+  "ball_diameter_reference": 25.4,
+  "ball_bolt_hole_diameter": 6.5,
+  "case_length": 134.0,
+  "case_depth": 50.0,
+  "case_height": 34.0,
+  "wall": 3.0,
+  "lid_thickness": 3.0,
+  "cable_hole_diameter": 8.0,
+  "board_length": 111.0,
+  "board_width": 34.0,
+  "board_height": 19.0
+}

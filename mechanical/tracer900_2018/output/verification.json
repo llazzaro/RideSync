@@ -1,0 +1,74 @@
+{
+  "status": "DESIGN DRAFT: motorcycle fit, retention, sealing and strength unverified",
+  "units": "mm",
+  "parts": {
+    "bracket_enclosure": {
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -67.0,
+          -59.0,
+          -80.0
+        ],
+        [
+          67.0,
+          40.0,
+          15.0
+        ]
+      ],
+      "volume_mm3": 109390.7749446113
+    },
+    "lid": {
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -67.0,
+          -59.0,
+          13.0
+        ],
+        [
+          67.0,
+          -9.0,
+          18.0
+        ]
+      ],
+      "volume_mm3": 20945.52981914205
+    },
+    "board_envelope_reference": {
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -55.5,
+          -51.0,
+          -13.0
+        ],
+        [
+          55.5,
+          -17.0,
+          6.0
+        ]
+      ],
+      "volume_mm3": 71706.0
+    },
+    "ball_hardware_reference": {
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -12.699999809265137,
+          -12.699999809265137,
+          12.0
+        ],
+        [
+          12.699999809265137,
+          12.699999809265137,
+          47.400001525878906
+        ]
+      ],
+      "volume_mm3": 9709.67357687544
+    }
+  }
+}
