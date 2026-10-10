@@ -258,6 +258,95 @@ void reusable_configuration_qualification_rejects_unknown_and_improper_mounts() 
   c.accel_compensation = 3;
   TEST_ASSERT_FALSE(MotionEstimator::configValid(c));
 }
+void persistent_gyro_bias_never_integrates_into_attitude() {
+  MotionEstimator estimator(qualifiedConfig());
+  auto e = sample();
+  e.accel[1] = 700;
+  e.accel[2] = 1924;
+  auto initial = estimator.update(e, reference(e, 1));
+  TEST_ASSERT_TRUE(initial.static_tilt_valid);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.349066f, initial.roll_rad);
+  e = sample();
+  // 64 counts at 125/2048 degrees/s/count = 3.90625 degrees/s.
+  // Over 100 seconds, integrating this uncorrected bias would invent 390.625 degrees.
+  e.gyro[0] = 64;
+  for (unsigned i = 0; i < 1000; ++i) {
+    e.receipt_millis32 += 100;
+    ++e.frame_sequence;
+    const auto out = estimator.update(e, {});
+    TEST_ASSERT_TRUE(out.measurements_valid);
+    TEST_ASSERT_FLOAT_WITHIN(0.000001f, 0.068176924f, out.angular_rate_rad_s.x);
+    TEST_ASSERT_FALSE(out.static_tilt_valid || out.dynamic_lean_valid ||
+                      out.dynamic_acceleration_valid);
+    TEST_ASSERT_EQUAL_FLOAT(0, out.roll_rad);
+    TEST_ASSERT_EQUAL_FLOAT(0, out.pitch_rad);
+  }
+  // A fresh declaration cannot override the rate veto; qualified residual
+  // calibration can remove the bias and permit a new static observation.
+  TEST_ASSERT_FALSE(estimator.update(e, reference(e, 2)).static_tilt_valid);
+  auto corrected = qualifiedConfig();
+  ++corrected.calibration_id;
+  e.config.calibration_id = corrected.calibration_id;
+  ++e.config.generation;
+  e.config.gyro_offset[0] = 64;
+  MotionEstimator calibrated(corrected);
+  const auto out = calibrated.update(e, reference(e, 1));
+  TEST_ASSERT_TRUE(out.measurements_valid && out.static_tilt_valid);
+  TEST_ASSERT_EQUAL_FLOAT(0, out.angular_rate_rad_s.x);
+}
+void alternating_vibration_clears_tilt_and_requires_new_reference_for_recovery() {
+  MotionEstimator estimator(qualifiedConfig());
+  auto e = sample();
+  e.accel[1] = 700;
+  e.accel[2] = 1924;
+  const auto initial = estimator.update(e, reference(e, 1));
+  TEST_ASSERT_TRUE(initial.static_tilt_valid);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.349066f, initial.roll_rad);
+  e = sample();
+  // Literal 0.75g/1.25g vibration samples straddle gravity. Their average
+  // must not be used to publish tilt for either rejected sample.
+  for (uint32_t i = 0; i < 20; ++i) {
+    e.accel[2] = i % 2 ? 2560 : 1536;
+    const auto out = estimator.update(e, reference(e, i + 2));
+    TEST_ASSERT_TRUE(out.measurements_valid);
+    TEST_ASSERT_FALSE(out.static_tilt_valid || out.dynamic_lean_valid ||
+                      out.dynamic_acceleration_valid);
+    TEST_ASSERT_EQUAL_FLOAT(0, out.roll_rad);
+    TEST_ASSERT_EQUAL_FLOAT(0, out.pitch_rad);
+  }
+  e.accel[2] = 2048;
+  TEST_ASSERT_FALSE(estimator.update(e, reference(e, 21)).static_tilt_valid);
+  TEST_ASSERT_TRUE(estimator.update(e, reference(e, 22)).static_tilt_valid);
+}
+void declaration_exhaustion_never_wraps_or_replays_after_reset() {
+  MotionEstimator estimator(qualifiedConfig());
+  auto e = sample();
+  TEST_ASSERT_TRUE(estimator.update(e, reference(e, UINT32_MAX)).static_tilt_valid);
+  estimator.reset();
+  for (uint32_t id : {uint32_t(0), uint32_t(1), UINT32_MAX}) {
+    const auto out = estimator.update(e, reference(e, id));
+    TEST_ASSERT_TRUE(out.measurements_valid);
+    TEST_ASSERT_FALSE(out.static_tilt_valid);
+  }
+}
+void missing_sample_replaces_tilt_and_does_not_reuse_its_declaration() {
+  MotionEstimator estimator(qualifiedConfig());
+  auto e = sample();
+  e.accel[1] = 700;
+  e.accel[2] = 1924;
+  const auto initial = estimator.update(e, reference(e, 1));
+  TEST_ASSERT_TRUE(initial.static_tilt_valid);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.349066f, initial.roll_rad);
+  e.kind = RecordKind::ImuHealth;
+  const auto out = estimator.update(e, reference(e, 2));
+  TEST_ASSERT_FALSE(out.measurements_valid || out.static_tilt_valid);
+  TEST_ASSERT_EQUAL_FLOAT(0, out.specific_force_mps2.z);
+  TEST_ASSERT_EQUAL_FLOAT(0, out.roll_rad);
+  TEST_ASSERT_EQUAL_FLOAT(0, out.pitch_rad);
+  e.kind = RecordKind::ImuSample;
+  TEST_ASSERT_FALSE(estimator.update(e, reference(e, 2)).static_tilt_valid);
+  TEST_ASSERT_TRUE(estimator.update(e, reference(e, 3)).static_tilt_valid);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -270,5 +359,9 @@ int main() {
   RUN_TEST(receipt_time_is_not_a_gyro_epoch_and_missing_time_cannot_publish_tilt);
   RUN_TEST(acceleration_turn_and_vibration_do_not_establish_stationarity);
   RUN_TEST(saturation_invalid_metadata_and_singular_attitude_fail_closed);
+  RUN_TEST(persistent_gyro_bias_never_integrates_into_attitude);
+  RUN_TEST(alternating_vibration_clears_tilt_and_requires_new_reference_for_recovery);
+  RUN_TEST(declaration_exhaustion_never_wraps_or_replays_after_reset);
+  RUN_TEST(missing_sample_replaces_tilt_and_does_not_reuse_its_declaration);
   return UNITY_END();
 }

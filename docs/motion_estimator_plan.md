@@ -2,8 +2,9 @@
 
 Inspected 2026-10-09. This records the design decision; no physical reference
 campaign has run. The later [static core](motion_estimator.md) implements only
-the qualified static subset, with host tests; dynamic estimation and application
-telemetry integration remain incomplete. BMI270 activation, exact mount and electrical setup remain
+the qualified static subset, with host tests and opt-in
+[runtime/MotionV4 logging](motion_logging.md#implemented-static-motion-logging-v4).
+Dynamic estimation remains incomplete. BMI270 activation, exact mount and electrical setup remain
 unqualified ([raw IMU path](raw_imu.md)).
 
 ## Decision and #13 scope
