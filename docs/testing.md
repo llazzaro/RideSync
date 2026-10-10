@@ -739,7 +739,11 @@ The existing motion CSV acceptance fixture also had an invalid zero-filled FIFO
 trailer, so its IMU stopped after three read attempts and scheduling determined
 whether a valid sample survived logging. The positive motion fixture now supplies
 the literal valid `0x80` end marker and waits at most one wall-clock second for
-ten admitted sample rows. The original scheduler delay is preserved; the initial
-delay workaround was reverted. The focused composition test and ten consecutive
-motion CSV runs passed, including actual static-tilt rows. Production telemetry
+ten admitted sample rows. The initial whole-worker delay workaround was reverted. Only the positive
+IMU thread now honors its requested sample interval, preventing producer
+flooding from making sample admission depend on scheduler phase; storage and
+negative/runtime cases preserve their original delay. The focused composition test and ten consecutive
+paced motion CSV runs passed, including actual static-tilt rows. A matching
+Ubuntu x86 reproduction also passed before this pacing correction; the CI
+admission failure was scheduler dependent. Production telemetry
 and motion estimation were unchanged.

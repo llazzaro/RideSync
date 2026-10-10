@@ -133,7 +133,15 @@ inline void vTaskDelayUntil(TickType_t *,TickType_t) { throw std::runtime_error(
 int spawn(void(*)(void *),const char *,void *);
 inline int xTaskCreate(void(*f)(void *),const char *n,unsigned,void *a,unsigned,TaskHandle_t *h) { *h=a;return spawn(f,n,a); }
 inline int xTaskCreatePinnedToCore(void(*f)(void *),const char *n,unsigned,void *a,unsigned,void *,int) { return spawn(f,n,a); }
-inline void vTaskDelay(unsigned) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+extern thread_local bool test_motion_imu_thread;
+inline void vTaskDelay(unsigned ticks) {
+  // Pace only the positive IMU stream; keep the storage worker unchanged.
+  // A producer faster than the writer turns this fixture into an overflow test.
+  if (test_motion_imu_thread)
+    std::this_thread::sleep_for(std::chrono::milliseconds(ticks));
+  else
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+}
 inline void vTaskDelete(void *) {}
 ''',
         }
