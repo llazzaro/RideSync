@@ -692,6 +692,28 @@ void runtime_stop_during_settling_or_ready_does_not_restart_or_repeat_gpio() {
     TEST_ASSERT_EQUAL_STRING(sent.c_str(), f.uart.tx.c_str());
   }
 }
+struct GpsConsumer : GpsSnapshotConsumer {
+  unsigned offers = 0, cancellations = 0;
+  void offer(const RecordTimestamp &, const ModemSnapshot &) override { ++offers; }
+  void cancel() override { ++cancellations; }
+};
+void composed_gnss_publishes_without_delaying_local_storage() {
+  Rig f;
+  GpsConsumer consumer;
+  auto c = qualified();
+  c.imu_enabled = false;
+  c.gps_forwarding_consumer = &consumer;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_TRUE(r.start());
+  for (unsigned n = 0; n < 30; ++n)
+    f.pass(r);
+  TEST_ASSERT_TRUE(consumer.offers > 0);
+  TEST_ASSERT_TRUE(r.status().kinds[0].accepted > 0);
+  TEST_ASSERT_EQUAL_UINT(0, consumer.cancellations);
+  f.finish(r);
+  TEST_ASSERT_EQUAL_UINT(1, consumer.cancellations);
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, f.sd.fs.bytes.find("gps,"));
+}
 void setUp() {}
 void tearDown() {}
 struct ControlInput : ButtonInput {
@@ -944,6 +966,7 @@ void pre_allocation_motion_revocation_is_permanent() {
 }
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(composed_gnss_publishes_without_delaying_local_storage);
   RUN_TEST(pre_allocation_motion_revocation_is_permanent);
   RUN_TEST(runtime_motion_current_expiry_revocation_and_refusal);
   RUN_TEST(invalid_clock_records_the_completed_terminal_at_pass_without_restarting);

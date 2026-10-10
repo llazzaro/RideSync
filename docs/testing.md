@@ -20,6 +20,16 @@ probe’s three remote Start/Stop cycles and reconnect are already confirmed.
 
 ## Automated baseline
 
+GPS forwarding (#14): `pio test -e native -f test_gps_forwarding -f test_local_telemetry`
+checks the real encoder/central and GNSS producer path, literal71-byte delivery,
+default-off/model/route selection, coalescing/rate/freshness/MTU, shared sequences,
+control preemption/interleaving, deadlines/errors, callback generations and peer
+isolation. Producer invalidation/cancellation must not enter the BLE SDK.
+`pio run -e lilygo_t_a7670e_r2 -e hero12_adapter_compile` verifies pinned target
+compatibility; the latter retains the forwarding backend without activation.
+The [binding/failure contract](gps_forwarding.md) and existing #46 GPS row own
+the finite physical follow-up; synthetic success is not metadata qualification.
+
 `pio run -e lilygo_t_a7670e_r2` compiles serial-only firmware.
 `python -m unittest discover -s test -v` validates the sample configuration's
 repository contract (including all three target models).

@@ -47,7 +47,8 @@ captures and golden fixtures. Store citations with every field definition.
 Local CSV logging must continue without BLE: UTC, coordinates, optional altitude,
 speed, heading, validity and satellites. Bounded buffers must prevent a missing
 or full microSD card from stalling control. Telemetry injection is opt-in per
-camera and disabled until its profile is validated.
+camera. The [experimental BE80 forwarding component](gps_forwarding.md) is
+implemented; metadata interpretation remains untested and defaults stay off.
 
 ## Licensed binary telemetry reference (#29)
 
@@ -158,6 +159,12 @@ acceptance, ACK, stored metadata or enabled profile evidence. Tests and CI
 commands are in [testing](testing.md#pure-insta360-gps-encoder-software-checks-29).
 
 ## Local ride logger scope
+
+The [#14 forwarding contract](gps_forwarding.md) implements real encoder-to-ATT
+delivery, opt-in ONE RS source-profile selection and optional composed GNSS
+publication. Bounded latest-fix/rate/MTU admission and a shared command-stream
+lease prevent uncontrolled telemetry queues and interleaved control bytes.
+Camera metadata stays unobserved in #46/#22; other model routes remain disabled.
 
 Local GPS logging is a core project goal. An external IMU will add raw motion
 and separately validated derived acceleration/lean/pitch records. These use a

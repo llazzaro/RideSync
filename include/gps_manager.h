@@ -2,6 +2,14 @@
 #include "modem_gnss.h"
 #include "session_clock.h"
 namespace ridesync {
+// Optional copied-snapshot producer binding; serialized owner only. These calls
+// must not transmit, wait, tick a BLE owner or block local GNSS/storage work.
+class GpsSnapshotConsumer {
+public:
+  virtual ~GpsSnapshotConsumer() = default;
+  virtual void offer(const RecordTimestamp &, const ModemSnapshot &) = 0;
+  virtual void cancel() = 0;
+};
 class GnssPowerControl {
 public:
   virtual ~GnssPowerControl() = default;
@@ -17,7 +25,8 @@ enum class PowerStage { Disabled, KeyActive, Settling, Complete, InvalidClock, C
 class GpsManager {
 public:
   GpsManager(SessionClock &clock, ModemGnss &modem, GnssPowerControl *power = nullptr,
-             const QualifiedPowerTiming &timing = QualifiedPowerTiming{});
+             const QualifiedPowerTiming &timing = QualifiedPowerTiming{},
+             GpsSnapshotConsumer *consumer = nullptr);
   void tick();
   // Terminal owner cancellation: nonblocking release of an asserted key only.
   // Supply ownership remains with the caller. Later tick/restart cannot start IO.
@@ -36,6 +45,7 @@ private:
   ModemGnss &modem_;
   GnssPowerControl *power_;
   QualifiedPowerTiming timing_;
+  GpsSnapshotConsumer *consumer_;
   PowerStage stage_;
   uint32_t completed_ = 0;
   bool started_ = false;

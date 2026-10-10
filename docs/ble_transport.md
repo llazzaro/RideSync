@@ -178,7 +178,7 @@ records still need independent commissioning evidence before a later boot.
 - Application: four peers, three services/eight endpoints and at most 32 discovered
   characteristic declarations per peer; excess or duplicates retire the link.
   Queue is 32 records, each 132 bytes (4224 bytes); one command copy is 120 bytes.
-  The pinned Xtensa `sizeof(BleCentral)` is 9400 bytes and each target callback context is 32 bytes. No application
+  The pinned Xtensa `sizeof(BleCentral)` is 9416 bytes after the #14 per-peer stream leases and each target callback context is 32 bytes. No application
   transport heap allocation or per-command FIFO is used; one caller request per ready peer is admitted.
 - Host: configured five total connections and five bonds, with four central peers
   admitted and one connection reserved for a future raw peripheral role; 32 CCCD

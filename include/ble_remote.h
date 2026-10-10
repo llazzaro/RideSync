@@ -196,7 +196,15 @@ public:
   // True only after terminal delivery, quiescence and actual host context release.
   bool scanReleased() const { return !scanning_ && !scan_.receiver; }
   bool read(uint8_t peer, uint8_t endpoint, uint32_t now);
-  bool write(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now);
+  bool write(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now,
+             const void *stream_owner = nullptr);
+  // Serialized application lease for a fragmented command. Unrelated producers
+  // cannot interleave reads/writes between fragments. Retiring a link clears it.
+  // No SDK ownership, wait or queue; owner must release on completion/cancellation.
+  bool reserveWrites(uint8_t peer, const void *stream_owner);
+  void releaseWrites(uint8_t peer, const void *stream_owner);
+  bool endpointMatches(uint8_t peer, uint8_t endpoint, const BleUuid &service,
+                       const BleUuid &characteristic) const;
   void disconnect(uint8_t peer);
   void stop(); // Admission sealed immediately; cleanup is asynchronous.
   void service(uint32_t now);
@@ -234,6 +242,7 @@ private:
     bool cancel_submitted = false, deferred = false, security_waiting = false,
          connect_waiting = false;
     BleCommand deferred_command;
+    const void *write_owner = nullptr;
     int error = 0;
     BleFault retirement = BleFault::None;
   };
