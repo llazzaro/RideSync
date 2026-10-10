@@ -90,6 +90,15 @@ and context mismatch, repeated/missing host receipt, endpoint saturation,
 singularity, and acceleration/turn ambiguity. These host fixtures verify software
 behavior and quantization tolerance; they do not qualify an installed sensor.
 
+Sequence fixtures also cover 1,000 samples over 100 seconds of uncompensated
+3.90625 degrees/s gyro bias, alternating literal 0.75g/1.25g vibration samples,
+missing-sample health records, recovery with a fresh stationary declaration, and
+declaration-counter exhaustion across reset. Bias must remain visible as angular
+rate without inventing integrated attitude; qualified residual compensation can
+restore a static observation. Rejected vibration samples must clear tilt even
+when their average is 1g. These synthetic checks do not measure physical drift,
+vibration tolerance or dynamic accuracy.
+
 October 9, 2026 verification: the selected native suite passed all seven tests
 (final run 1.879 s). The pinned `lilygo_t_a7670e_r2` SDK build compiled the new
 core and passed (17.813 s; RAM 37,816 bytes, flash 353,437 bytes). Application
@@ -98,3 +107,15 @@ or a claim that the core is retained in the default firmware after linker garbag
 collection. Clang-format 18 dry-run, tracked diff whitespace check, and explicit
 new-file trailing-whitespace/final-newline checks passed. No hardware test or
 whole-suite rerun was performed.
+
+October 10, 2026 sequence-test reconciliation: all 12 focused estimator cases
+passed, followed by `scripts/check_pipeline.sh` (58 Python tests, the three
+bench runners, 481 native cases and the pinned formatting check). Temporary
+mutations removing per-update clearing or the angular-rate veto caused the new
+sequence tests to fail; the production source was restored before the passing
+pipeline. Independent review verified calibration identity changes and nonzero
+initial tilt fixtures. No production source/dependency changed; pinned firmware
+build evidence is reused from passing [baseline CI](https://github.com/llazzaro/RideSync/actions/runs/38047663566)
+at `3bcb10d`. No hardware test was needed for this test/documentation change.
+#13 remains open for dynamic scope resolution; physical reference acceptance
+remains unperformed in #31.
