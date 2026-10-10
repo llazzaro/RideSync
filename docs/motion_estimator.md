@@ -25,6 +25,9 @@ both vectors. Positive finite rational scales/gains, known offsets/gains, and
 qualified sensor/mount/calibration metadata are required. Endpoint counts
 (-32768, -32767, +32767) or the recorded endpoint flag invalidate both vectors.
 This detects software-visible endpoints, not undocumented prior clipping.
+Undefined timing flag bits (4..7) invalidate both measurements and tilt, matching
+the retained IMU storage schema. A rejected record clears the previous output
+and consumes any fresh stationary declaration; recovery needs a new declaration.
 
 The caller must independently qualify this residual convention for the specified
 calibration ID and the exact enabled/disabled device offset-compensation states.
@@ -119,3 +122,15 @@ build evidence is reused from passing [baseline CI](https://github.com/llazzaro/
 at `3bcb10d`. No hardware test was needed for this test/documentation change.
 #13 remains open for dynamic scope resolution; physical reference acceptance
 remains unperformed in #31.
+
+October 10, 2026 undefined-flag regression: the core previously accepted timing
+flag `0x10` and published valid measurements/tilt, although the storage schema
+rejects undefined bits 4..7. The new regression failed on that first value before
+the fix. All 14 focused estimator tests now pass, covering every undefined flag
+value (16..255), previous-output clearing, consumed declarations, fresh recovery,
+and all 16 defined flag combinations. The repository pipeline passed 58 Python
+tests, all three bench runners, 483 native cases and formatting. Independent code
+review found no actionable issues. The pinned `lilygo_t_a7670e_r2` firmware build passed (RAM 38,576 bytes,
+flash 358,249 bytes). This is software validation; no hardware test is needed for
+the flag check. Existing physical reference checks remain in #31 and are collected
+in #46. Dynamic estimation remains unresolved in #13.

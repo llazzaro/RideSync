@@ -347,6 +347,49 @@ void missing_sample_replaces_tilt_and_does_not_reuse_its_declaration() {
   TEST_ASSERT_FALSE(estimator.update(e, reference(e, 2)).static_tilt_valid);
   TEST_ASSERT_TRUE(estimator.update(e, reference(e, 3)).static_tilt_valid);
 }
+void undefined_timing_flags_clear_all_output_and_consume_reference() {
+  MotionEstimator estimator(qualifiedConfig());
+  auto e = sample();
+  e.accel[1] = 700;
+  e.accel[2] = 1924;
+  uint32_t declaration = 0;
+  for (unsigned flags = 16; flags <= 255; ++flags) {
+    e.timing_flags = 0;
+    const auto before = estimator.update(e, reference(e, ++declaration));
+    TEST_ASSERT_TRUE(before.measurements_valid && before.static_tilt_valid);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.349066f, before.roll_rad);
+    // Bits 4..7 have no meaning in the retained IMU schema. Even a fresh
+    // stationary declaration cannot qualify unknown evidence semantics.
+    e.timing_flags = uint8_t(flags);
+    const auto rejected = estimator.update(e, reference(e, ++declaration));
+    TEST_ASSERT_FALSE(rejected.measurements_valid || rejected.static_tilt_valid ||
+                      rejected.dynamic_lean_valid || rejected.dynamic_acceleration_valid);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.specific_force_mps2.x);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.specific_force_mps2.y);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.specific_force_mps2.z);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.angular_rate_rad_s.x);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.angular_rate_rad_s.y);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.angular_rate_rad_s.z);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.roll_rad);
+    TEST_ASSERT_EQUAL_FLOAT(0, rejected.pitch_rad);
+    e.timing_flags = 0;
+    TEST_ASSERT_FALSE(estimator.update(e, reference(e, declaration)).static_tilt_valid);
+    TEST_ASSERT_TRUE(estimator.update(e, reference(e, ++declaration)).static_tilt_valid);
+  }
+}
+void known_timing_flags_retain_measurements_without_qualifying_tilt() {
+  MotionEstimator estimator(qualifiedConfig());
+  auto e = sample();
+  for (uint8_t flags = 0; flags < 16; ++flags) {
+    e.timing_flags = flags;
+    const auto out = estimator.update(e, reference(e, uint32_t(flags) + 1));
+    TEST_ASSERT_EQUAL(flags < 8, out.measurements_valid);
+    TEST_ASSERT_EQUAL(flags == 0, out.static_tilt_valid);
+    if (flags < 8)
+      TEST_ASSERT_FLOAT_WITHIN(0.00001f, 9.80665f, out.specific_force_mps2.z);
+    TEST_ASSERT_FALSE(out.dynamic_lean_valid || out.dynamic_acceleration_valid);
+  }
+}
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -363,5 +406,7 @@ int main() {
   RUN_TEST(alternating_vibration_clears_tilt_and_requires_new_reference_for_recovery);
   RUN_TEST(declaration_exhaustion_never_wraps_or_replays_after_reset);
   RUN_TEST(missing_sample_replaces_tilt_and_does_not_reuse_its_declaration);
+  RUN_TEST(undefined_timing_flags_clear_all_output_and_consume_reference);
+  RUN_TEST(known_timing_flags_retain_measurements_without_qualifying_tilt);
   return UNITY_END();
 }
