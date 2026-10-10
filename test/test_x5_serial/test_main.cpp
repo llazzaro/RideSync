@@ -109,10 +109,23 @@ void busy_result_is_reported_without_retry() {
     serial.service();
   TEST_ASSERT_EQUAL_UINT(1, port.requests);
 }
+void wake_dispatches_once_without_shutter_replay() {
+  FakePort port;
+  port.outcome = CameraError::Disabled;
+  X5SerialControl serial(port);
+  feed(serial, "WAKE\n");
+  serial.service();
+  TEST_ASSERT_EQUAL_UINT(1, port.requests);
+  TEST_ASSERT_EQUAL_INT(int(Operation::Wake), int(port.op));
+  TEST_ASSERT_EQUAL_INT(int(CameraError::Disabled), int(serial.error()));
+  serial.service();
+  TEST_ASSERT_EQUAL_UINT(1, port.requests);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(wake_dispatches_once_without_shutter_replay);
   RUN_TEST(exact_lines_dispatch_once);
   RUN_TEST(status_and_disconnect_have_no_shutter_side_effect);
   RUN_TEST(oversized_line_cannot_embed_recording);

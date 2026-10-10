@@ -45,7 +45,7 @@ static SerialStub Serial;
 '''
 PROVIDER = r'''
 #pragma once
-#include "x5_runtime.h"
+#include "x5_wake.h"
 static bool ridesyncPrivateX5Qualification(ridesync::X5Qualification &q,ridesync::SourceConfig &s){
  using namespace ridesync;
  q.enabled=true;q.identity.verified=true;q.identity.type=IdentityType::Public;q.identity.address={{1,2,3,4,5,6}};
@@ -53,6 +53,10 @@ static bool ridesyncPrivateX5Qualification(ridesync::X5Qualification &q,ridesync
  std::memcpy(q.firmware.data(),"1.11.10",7);q.firmware_size=7;
  s.count=1;auto&c=s.cameras[0];c.name="Synthetic X5";c.family=CameraFamily::Insta360;c.model=CameraModel::X5;
  c.identifier="06:05:04:03:02:01";c.address_type=AddressType::Public;return true;
+}
+static bool ridesyncPrivateX5WakeConfig(ridesync::WakePeerConfig &c, ridesync::WakePolicy &){
+ c.enabled=c.source_qualified=true;c.profile=ridesync::insta360::WakeProfile::M5WakeV1;
+ c.identifier={{'A','B','C','1','2','3'}};return true;
 }
 '''
 HARNESS = r'''
@@ -77,6 +81,20 @@ struct Peripheral : ridesync::X5PeripheralPort {
  bool released(uint32_t)const override{return true;}void service(uint32_t)override{}
 } peripheral;
 extern "C" ridesync::X5PeripheralPort *ridesync_x5_peripheral_backend(){return &peripheral;}
+#ifdef RIDESYNC_X5_WAKE_MILESTONE
+#include "x5_wake_esp32.h"
+namespace ridesync {
+struct TestRadio : WakeRadio {
+ unsigned calls=0;WakeRadioResult result;
+ WakeSubmit begin(const WakeOperation &o,const insta360::WakeEncoding&,uint32_t,uint32_t)override{
+  ++calls;result={};result.operation=o;return WakeSubmit::Accepted;
+ }
+ void cancel(const WakeOperation&)override{result.terminal=result.released=true;}
+ WakeRadioResult poll(const WakeOperation&,uint32_t)override{return result;}
+};
+WakeRadio &x5WakeRadio(){static TestRadio radio;return radio;}
+}
+#endif
 #include "src/profiles/insta360_x5_esp32.cpp"
 #include "src/main.cpp"
 int main(int argc,char**argv){
@@ -99,6 +117,13 @@ int main(int argc,char**argv){
 #endif
  Serial.input("STATUS\n");loop();assert(peripheral.connects==0);
  if(scenario==6){boot.format_refused=true;loop();boot.format_refused=false;loop();valid=false;}
+#ifdef RIDESYNC_X5_WAKE_MILESTONE
+ Serial.input("WAKE\n");loop();loop();
+ auto &radio=static_cast<ridesync::TestRadio&>(ridesync::x5WakeRadio());
+ assert(radio.calls==unsigned(valid)&&peripheral.connects==0&&peripheral.notifies==0);
+ Serial.input("REC\n");loop();assert(peripheral.notifies==0);
+ Serial.input("DISCONNECT\n");loop();loop();
+#endif
  Serial.input("CONNECT\n");loop();assert(peripheral.connects==unsigned(valid));
  if(scenario==5&&valid){
    unsigned before=Serial.reads;for(int i=0;i<80;++i)Serial.bytes.push_back('x');
@@ -126,10 +151,11 @@ namespace ridesync { class Esp32BleHost { public:
 ''')
             (temp/'provider.h').write_text(PROVIDER)
             (temp/'harness.cpp').write_text(HARNESS)
-            units=['x5_runtime.cpp','x5_serial_control.cpp','profiles/insta360_x5.cpp','protocol/insta360_codec.cpp','camera_manager.cpp','config.cpp','health_supervisor.cpp']
-            for provider,inspector in [(False,False),(True,False),(True,True)]:
-                binary=temp/f'harness-{provider}-{inspector}'
+            units=['recording_manager.cpp','x5_wake.cpp','wake_manager.cpp','insta360_wake_encoder.cpp','x5_runtime.cpp','x5_serial_control.cpp','profiles/insta360_x5.cpp','protocol/insta360_codec.cpp','camera_manager.cpp','config.cpp','health_supervisor.cpp']
+            for provider,inspector,wake in [(False,False,False),(True,False,False),(True,True,False),(False,False,True),(True,False,True)]:
+                binary=temp/f'harness-{provider}-{inspector}-{wake}'
                 command=['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-DRIDESYNC_X5_SERIAL_MILESTONE','-DRIDESYNC_X5_NO_PRIVATE_HEADER','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-ffunction-sections','-fdata-sections','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(temp/'harness.cpp')]
+                if wake:command+=['-DRIDESYNC_X5_WAKE_MILESTONE']
                 if inspector:command+=['-DRIDESYNC_X5_STORE_INSPECT']
                 if provider:command+=['-DTEST_PROVIDER','-DRIDESYNC_X5_PRIVATE_HEADER="provider.h"']
                 command += ['-Wl,-dead_strip' if sys.platform == 'darwin' else '-Wl,--gc-sections']

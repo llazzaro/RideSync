@@ -12,8 +12,8 @@ void X5SerialControl::consume(char c) {
     X5SerialCommand parsed = X5SerialCommand::Invalid;
     if (!discard_) {
       line_[size_] = 0;
-      const char *names[] = {"CONNECT", "REC", "STOP", "QUERY", "STATUS", "DISCONNECT"};
-      for (unsigned i = 0; i < 6; ++i)
+      const char *names[] = {"CONNECT", "REC", "STOP", "QUERY", "STATUS", "DISCONNECT", "WAKE"};
+      for (unsigned i = 0; i < 7; ++i)
         if (std::strcmp(line_.data(), names[i]) == 0)
           parsed = static_cast<X5SerialCommand>(i + 1);
     }
@@ -62,6 +62,9 @@ X5SerialCommand X5SerialControl::service() {
     break;
   case X5SerialCommand::Query:
     error_ = port_.request(Operation::Query);
+    break;
+  case X5SerialCommand::Wake:
+    error_ = port_.request(Operation::Wake);
     break;
   case X5SerialCommand::Status:
     port_.status();

@@ -173,7 +173,7 @@ int test_close(int);
             portable = [p for p in (ROOT / 'src').rglob('*.cpp')
                         if p.name not in ('main.cpp', 'storage_sd.cpp', 'bmi270_imu.cpp', 'ble_esp32.cpp',
                                           'ble_wake_esp32.cpp', 'ble_peripheral_esp32.cpp', 'x5_peripheral_esp32.cpp',
-                                          'insta360_x5_esp32.cpp', 'insta360_wake_esp32.cpp', 'nvs_boot_guard.cpp', 'config_storage_nvs.cpp')]
+                                          'insta360_x5_esp32.cpp', 'x5_wake_esp32.cpp', 'insta360_wake_esp32.cpp', 'nvs_boot_guard.cpp', 'config_storage_nvs.cpp')]
             exe = folder / 'runtime'
             cmd = ['c++', '-std=c++11', '-DARDUINO', '-DARDUINO_ARCH_ESP32',
                    '-Wall', '-Wextra', '-Werror', '-Wno-return-type-c-linkage', '-pthread', '-I', str(folder),

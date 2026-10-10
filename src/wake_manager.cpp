@@ -49,6 +49,11 @@ CameraError WakeManager::request(const WakeOperation &op, const WakePeerConfig &
   slot.status.error = CameraError::None;
   last_ids_[op.peer] = op.id;
   generation_ = op.generation;
+  const auto observed = recovery_ ? recovery_->currentObserved(op.peer) : RecordingState::Unknown;
+  if (observed == RecordingState::Stopped || observed == RecordingState::Recording) {
+    slot.status.phase = WakePhase::Ready;
+    slot.status.observed = observed;
+  }
   return CameraError::None;
 }
 void WakeManager::updateReleaseOnly(Slot &slot) {

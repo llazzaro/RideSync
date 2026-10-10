@@ -1,6 +1,9 @@
 #include "profiles/insta360_x5_esp32.h"
 #if defined(ARDUINO_ARCH_ESP32)
 #include "nvs_boot_guard.h"
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+#include "x5_wake_esp32.h"
+#endif
 #if defined(RIDESYNC_X5_STORE_INSPECT)
 #include "ble_esp32.h"
 #endif
@@ -29,6 +32,16 @@ bool begun = false, finalized = false, provider_present = false;
 uint32_t begun_ms = 0;
 X5Qualification qualification;
 SourceConfig source;
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+WakePeerConfig wake_config;
+WakePolicy wake_policy;
+bool wake_provider_present = false;
+X5WakeControl &wakeControl() {
+  static ArduinoClock clock;
+  static X5WakeControl control(x5Runtime(), clock, x5WakeRadio());
+  return control;
+}
+#endif
 void proofTask(void *) {
   pairingProofMaintenance().beginOwner(); // The only NVS configuration owner in this image.
 #if defined(RIDESYNC_X5_STORE_INSPECT)
@@ -73,8 +86,19 @@ void report(const X5RuntimeStatus &s, const char *action, uint32_t rejected) {
 }
 class SerialPort final : public X5CommandPort {
 public:
-  CameraError request(Operation op) override { return x5Runtime().request(op); }
-  void disconnect() override { x5Runtime().disconnect(); }
+  CameraError request(Operation op) override {
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+    return wakeControl().command(op);
+#else
+    return x5Runtime().request(op);
+#endif
+  }
+  void disconnect() override {
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+    wakeControl().cancel();
+#endif
+    x5Runtime().disconnect();
+  }
   void status() override {} // The caller reports one copied snapshot after dispatch.
 };
 X5SerialControl &serialControl() {
@@ -84,6 +108,9 @@ X5SerialControl &serialControl() {
   static X5SerialControl serial(port);
   return serial;
 }
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+WakeStatus previous_wake;
+#endif
 X5RuntimeStatus previous;
 bool have_previous = false;
 bool changed(const X5RuntimeStatus &a, const X5RuntimeStatus &b) {
@@ -107,6 +134,9 @@ void x5MilestoneBegin(bool safe_mode) {
   begun_ms = millis();
 #ifdef RIDESYNC_HAS_X5_PROVIDER
   provider_present = ridesyncPrivateX5Qualification(qualification, source);
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+  wake_provider_present = ridesyncPrivateX5WakeConfig(wake_config, wake_policy);
+#endif
 #endif
 #if defined(RIDESYNC_X5_STORE_INSPECT)
   provider_present = true; // Read-only diagnostic, never commissions a camera.
@@ -128,7 +158,7 @@ void x5MilestoneBegin(bool safe_mode) {
   x5Runtime().revoke();
   Serial.println("X5 private store inspection only; camera commands disabled.");
 #else
-  Serial.println("X5 commands: CONNECT REC STOP QUERY STATUS DISCONNECT. Boot is idle.");
+  Serial.println("X5 commands: CONNECT REC STOP QUERY STATUS DISCONNECT WAKE. Boot is idle.");
 #endif
 }
 void x5MilestoneService(bool admission_allowed) {
@@ -147,18 +177,40 @@ void x5MilestoneService(bool admission_allowed) {
       finalized = true;
       if (!runtime.configure(qualification, source))
         Serial.println("X5 commissioning refused: qualification/profile mismatch.");
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+      if (!wake_provider_present || !wakeControl().configure(wake_config, wake_policy))
+        Serial.println("X5 wake commissioning refused: missing or unqualified wake provider.");
+#endif
     }
   }
   runtime.service(); // Deadline/receive progress precedes serial dispatch.
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+  wakeControl().service();
+#endif
   auto &serial = serialControl();
   for (unsigned n = 0; n < 32 && Serial.available(); ++n)
     serial.consume(static_cast<char>(Serial.read()));
   const auto command = serial.service();
   const auto snapshot = runtime.status();
-  if (command != X5SerialCommand::None || !have_previous || changed(snapshot, previous)) {
-    const char *actions[] = {"event", "CONNECT", "REC",        "STOP",
-                             "QUERY", "STATUS",  "DISCONNECT", "invalid-line"};
+  bool wake_changed = false;
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+  const auto wake = wakeControl().status();
+  wake_changed = wake.operation.id != previous_wake.operation.id ||
+                 wake.phase != previous_wake.phase || wake.error != previous_wake.error ||
+                 wake.released != previous_wake.released || wake.observed != previous_wake.observed;
+#endif
+  if (command != X5SerialCommand::None || !have_previous || changed(snapshot, previous) ||
+      wake_changed) {
+    const char *actions[] = {"event",  "CONNECT",    "REC",  "STOP",        "QUERY",
+                             "STATUS", "DISCONNECT", "WAKE", "invalid-line"};
     report(snapshot, actions[static_cast<unsigned>(command)], serial.rejected());
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+    previous_wake = wake;
+    Serial.printf("X5_WAKE id=%lu phase=%u error=%u released=%u observed=%s command_error=%u\n",
+                  static_cast<unsigned long>(wake.operation.id), unsigned(wake.phase),
+                  unsigned(wake.error), unsigned(wake.released), recordingName(wake.observed),
+                  unsigned(serial.error()));
+#endif
     previous = snapshot;
     have_previous = true;
   }

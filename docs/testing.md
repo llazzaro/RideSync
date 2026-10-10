@@ -749,3 +749,36 @@ paced motion CSV runs passed, including actual static-tilt rows. A matching
 Ubuntu x86 reproduction also passed before this pacing correction; the CI
 admission failure was scheduler dependent. Production telemetry
 and motion estimation were unchanged.
+
+## Composed X5 wake/recovery (#9)
+
+`test_x5_wake` uses the real X5Runtime, CE80 adapter/decoder, WakeManager and
+X5WakeRecovery with controlled radio/peripheral inputs. It checks idle boot,
+wake/connect/fresh Video status then separately requested Start, subscription
+and Photo refusal, original-deadline expiry across clock wrap, revocation,
+cancellation with delayed display, actual cleanup release, live-link protection,
+unqualified identifiers and stale Ready observations. `test_x5_serial` checks
+WAKE dispatch and refusal without replay. A separate real RecordingManager/
+WakePreparation/X5WakeRecovery composition test confirms one Start and the
+recording result, including adapter event delivery through the group authority
+and REC → STOP → REC with one wake/connection.
+
+`test_x5_wake_esp32.py` compiles the actual startup worker with controlled SDK
+outcomes: allocation failure, failed host, never-ready host and late return cannot
+advertise. Startup creates one worker with no replacement/retry. Cancellation retains
+its admission lease until the final worker access; an expired optional wake
+cannot fail a Ready host or race a replacement CONNECT.
+`test_x5_milestone_esp32.py` exercises actual main/serial commissioning with and
+without the wake/private provider under ASan/UBSan. A pending wake refuses REC;
+DISCONNECT retires wake, and missing qualification does not enable radio.
+
+```sh
+.venv/bin/pio test -e native -f test_x5_wake -f test_x5_serial -f test_x5_runtime
+.venv/bin/python -m unittest discover -s test -p 'test_x5_wake_esp32.py' -v
+.venv/bin/python -m unittest discover -s test -p 'test_x5_milestone_esp32.py' -v
+.venv/bin/pio run -e x5_wake_milestone
+```
+
+The composed build links both shared-host concrete workers and is included in
+CI. This is synthetic/compile evidence; no camera, startup-stack high-water or
+latency result is claimed. The physical composed-path check is in #46.

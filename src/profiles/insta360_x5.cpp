@@ -1,4 +1,5 @@
 #include "profiles/insta360_x5.h"
+#include "recording_manager.h"
 namespace ridesync {
 namespace {
 bool due(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL; }
@@ -56,6 +57,18 @@ bool X5Adapter::attach(CameraManager &m) {
     return false;
   manager_ = &m;
   return true;
+}
+bool X5Adapter::attachRecording(RecordingManager &owner) {
+  if (!manager_ || !owner.uses(*manager_) || active_ || recording_owner_)
+    return false;
+  recording_owner_ = &owner;
+  return true;
+}
+void X5Adapter::publish(const Event &event) {
+  if (recording_owner_)
+    recording_owner_->event(event);
+  else
+    manager_->event(event);
 }
 bool X5Adapter::fresh() const { return has_observation_ && clock_.now() - observed_ms_ <= 5000; }
 RecordingState X5Adapter::observed() const {
@@ -146,7 +159,7 @@ void X5Adapter::publishObservation() {
     return;
   Event e(0, token_.connection, EventKind::RecordingObserved);
   e.recording = observed();
-  manager_->event(e);
+  publish(e);
 }
 void X5Adapter::invalidate(bool mode, bool publish) {
   has_observation_ = false;
@@ -182,7 +195,7 @@ void X5Adapter::fail(X5Failure reason) {
   active_ = false;
   send_pending_ = complete_pending_ = false;
   Event e(0, token_, EventKind::Failed);
-  manager_->event(e); // max_attempts=1 retires and closes this connection.
+  publish(e); // max_attempts=1 retires and closes this connection.
 }
 void X5Adapter::complete() {
   if (!active_)
@@ -192,7 +205,7 @@ void X5Adapter::complete() {
   e.capabilities.wake = e.capabilities.gps = CapabilityState::Unsupported;
   active_ = send_pending_ = complete_pending_ = false;
   failure_ = X5Failure::None;
-  manager_->event(e);
+  publish(e);
 }
 bool X5Adapter::desiredObserved() const {
   if (!fresh())
@@ -291,7 +304,7 @@ void X5Adapter::input(const X5Input &e) {
       active_ = send_pending_ = complete_pending_ = false;
       connected_ = subscribed_ = false;
       failure_ = X5Failure::Transport;
-      manager_->event(Event(0, token_.connection, EventKind::Disconnected));
+      publish(Event(0, token_.connection, EventKind::Disconnected));
     } else if (active_) {
       fail(X5Failure::Transport);
     }
