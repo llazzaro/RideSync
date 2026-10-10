@@ -45,24 +45,19 @@ See [Action Pod connection](https://onlinemanual.insta360.com/go3s/en-us/operati
 [connection FAQ](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/connection),
 and [firmware guidance](https://onlinemanual.insta360.com/go3s/en-us/faq/operationtutorials/firmware).
 
-The October 10 [GO 3S profile decision](go3s_profile.md) adds official accessory
-compatibility and pairing-target evidence: Insta360 lists GO 3S for the GPS
-Action Remote and says accessory remotes pair directly with the camera. This
-resolves the documented vendor-accessory target to the camera, while the Pod
-provides its UI and its own control/preview link. It does not establish an ESP32
-connection, BLE roles, CE80/BE80 services, security or recording-state bytes.
-Those remain unobserved. Investigate the camera first under the finite #46
-procedure; do not assume the Pod is a proxy or reuse X5 qualification.
+The [GO 3S profile](go3s_profile.md) now implements the source-backed
+camera-hosted BE80 FFFrame route. Global GitHub research found nicecx and
+OpenGraphLabs GO 3S reports at 8.0.4.11, including explicit Start/Stop, normal
+video options and sync/auth. The codec/adapter are independently authored from
+published wire facts; no upstream implementation or GO 3 state schema is copied.
+The earlier CE80-first proposal and all-implementation blocker are superseded.
 
-**Operation evidence:** no GO 3S start, stop, toggle, mode-selection or
-authoritative state operation is currently evidenced for RideSync. The
-community shutter frame elsewhere in this document remains a reported toggle
-for another target, not a GO 3S command. A UI change, BLE write accepted by a
-stack, elapsed-time heuristic or file appearing later is insufficient alone to
-claim a command/state mapping. Require repeatable packet correlation with the
-camera/Pod recording indicator and saved media; classify each operation and
-firmware combination independently. The recording procedure and exact gaps are
-in [validation](testing.md#go-3s-and-action-pod-evidence-protocol).
+Official accessory pairing identifies the camera target; it does not specify
+this wire protocol. Local camera/Pod firmware, security and actual recording
+remain Not tested. A camera ACK completes the command while observed state stays
+Unknown; Query/Wake/GPS are Unsupported. No decoded GO 3S state capture exists.
+The finite implemented-profile verification is in #46; missing local hardware
+does not prevent source-derived command/error tests or prove incompatibility.
 
 ## Separate BLE roles
 

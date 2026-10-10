@@ -1,73 +1,114 @@
-# GO 3S recording profile decision (#21)
+# GO 3S recording profile (#21)
 
-Reviewed October 10, 2026. **Recording implementation remains blocked; RideSync
-support Not tested.** The official accessory target is now documented as the
-camera. An actual third-party BLE route and receive-state evidence remain
-missing. #21 stays open; this is a prerequisite decision, not an adapter.
+Implemented October 10, 2026 from pinned Community wire descriptions. Software
+is Experimental; physical GO 3S support remains Not tested. Verification on the
+fitted camera/Action Pod is deferred to [#46](https://github.com/llazzaro/RideSync/issues/46).
+This supersedes the earlier CE80-first capture proposal and implementation blocker.
 
-## Official target and evidence limits
+## References and route
 
-Insta360's [GPS Action Remote product page](https://store.insta360.com/gb/product/gps-action-remote)
-lists GO 3S compatibility. Its
-[GO Series accessory troubleshooting page](https://onlinemanual.insta360.com/go3s/en-us/troubleshooting/connect/wake-camera)
-says remotes pair directly with the camera; the Pod has separate power control.
-These Official facts make **the GO 3S camera the first candidate control peer**.
-They supersede treating camera versus Pod ownership as wholly undocumented for
-vendor accessory pairing. They do not establish an ESP32-accessible GATT route,
-BLE central/peripheral roles, UUIDs, security policy, or recording-state schema.
+The independently authored codec/adapter use **camera-hosted BE80**, BE81 Write
+and BE82 Notify, with the GO-series FFFrame wrapper, 16-byte inner message and
+CRC16/MODBUS. This differs from both CE82 shutter events and the Garmin Header16
+profile even where UUIDs or command numbers coincide.
 
-The [camera/Pod connection instructions](https://onlinemanual.insta360.com/go3s/en-us/operating_tutorials/connect/actionpod)
-use powered devices, docking and successful live view; firmware incompatibility
-needs resolution. The Pod's UI/control role does not make it a third-party
-protocol proxy. Record camera and Pod firmware separately, plus docking/power
-state and the actual Bluetooth Remote UI offered by that firmware. No local
-GO 3S baseline has been observed.
+- [nicecx camera_remote.py](https://github.com/nicecx/insta360-ai-content-studio/blob/abf472566198aeefb493b742f3fe69d9132ff460/lib/camera_remote.py)
+  and its result report describe GO 3S firmware **8.0.4.11**, BE80 remote
+  Start/Stop and subsequent footage retrieval.
+- [OpenGraphLabs GO 3S protocol](https://github.com/OpenGraphLabs/syncfield-python/blob/88a74d84e09602d73c0e8a77f0fe583beb33cb61/src/syncfield/adapters/insta360_go3s/ble/protocol.py)
+  claims validation on three GO 3S cameras at that firmware. Its camera wrapper
+  supplies sync, CheckAuth, normal-video options, StartCapture and StopCapture.
 
-GPS Action Remote is distinct from GPS Preview Remote and its built-in-mic
-variant. The broad troubleshooting page names several accessories across GO
-models; that list cannot qualify each model/accessory combination. This decision
-uses the Action Remote's explicit GO 3S compatibility entry. It neither selects
-an accessory purchase nor imports accessory wake/GPS support into #21.
+These are author-reported Community observations, not local captures. The
+reviewed repositories contain no annotated raw GO 3S state fixture. Their
+shared insta360ctl lineage is not independent confirmation. Source licenses and
+provenance limits are in [sources](sources.md#go-3s-be80-implementation-references-21).
+No upstream implementation, protobuf generator or camera binary is copied.
 
-## Route decision
+Official [GPS Action Remote compatibility](https://store.insta360.com/gb/product/gps-action-remote)
+and [direct camera pairing guidance](https://onlinemanual.insta360.com/go3s/en-us/troubleshooting/connect/wake-camera)
+identify the vendor-accessory target as the camera. They do not specify BE80.
+The Pod supplies its UI/control link; it is not used as a third-party proxy.
+Camera and Pod firmware must be recorded separately in the hardware session.
 
-Investigate the camera's remote-search path first within the existing #46 row.
-The bounded CE80 receive-only probe is a **Hypothesis** candidate when the fitted
-UI permits remote search; it is not evidenced GO 3S protocol support. A camera
-acting as central would not expose that remote service to a central scanner.
-An absent camera GATT service therefore cannot establish incompatibility.
+## Software contract
 
-Do not configure GO 3S as X5, enable `X5CapturedDisplayV1`, transmit the CE82
-shutter event, or send source-derived BE81 commands before target qualification.
-Existing X5 and ONE R/RS reports do not provide GO 3S expected state fixtures.
-If the bounded attempt fails, record UI, role, security and connection outcome
-before choosing any alternate route. Do not automatically reset or erase bonds.
+`go3s::encode` supports CheckAuth (0x27), normal Video options (0x02), explicit
+StartCapture (0x04, mode 1) and StopCapture (0x05). Seven zero sync bytes have a
+separate FFFrame subtype. Sequence numbers 1..254 are owned by each connection;
+the adapter never wraps, reuses an uncertain number or automatically replays a
+command. Exhaustion retires that link and requires an explicit new connection.
 
-The [finite capture procedure](testing.md#go-3s-and-action-pod-evidence-protocol)
-records one annotated manual Start/Stop and mode change, complete traffic and a
-playable clip when a route exists. Three production REC/STOP cycles and one
-reconnect follow only after implementation. Missing equipment/stages stay
-Blocked; no all-accessory, app, wake, GPS or mixed-group campaign is added.
+The pure decoder checks camera-to-app direction, exact outer/inner lengths,
+CRC, message/protobuf header and a complete inner message. The 256-byte receive
+cap is a local resource bound, not a camera maximum. Fragmented ATT delivery and
+multiple complete frames in one notification are assembled with fixed storage;
+inner protocol continuation/fragment offsets are refused. Bad framing or an
+unfinished receive frame after 1 s retires the link. Unknown payload/status
+fields remain opaque; response status is matched by sequence, not command ID.
 
-## Gate for an enabled adapter
+`Go3sAdapter` implements `CameraTransport` over the existing `BleCentral`, with
+four fixed peer slots, copied bounded notifications and host final-access
+barriers. Each independently commissioned slot supplies a verified stable bond
+identity, the source-qualified firmware string `8.0.4.11` and an explicit
+printable authorization ID of 1..32 bytes. The authorization ID is not derived
+from a MAC or example identifier. Other firmware needs a newly evidenced profile.
+The shared host retains existing NVS refusal, encryption/bond/identity checks.
+Actual camera security compatibility remains Not tested.
 
-| Required fact | Current evidence | Implementation consequence |
-|---|---|---|
-| Vendor accessory target | Official: camera | Investigate camera first; Pod UI is a separate role |
-| Fitted camera/Pod firmware and pairing prerequisites | No local observation | Do not assume a compatible firmware or commissioned identity |
-| ESP32 route, services, security and subscriptions | Unobserved | No enabled GO 3S transport/profile |
-| Video mode, recording state and command/response mapping | No complete GO 3S fixtures | Keep Unknown; do not reuse X5 display vocabulary or timer heuristics |
-| Deadline, reconnect and lost-response behavior | Pending an evidenced route | Test malformed/ambiguous frames, missing prerequisites, expiry and disconnect without replay |
+After verified subscription the adapter waits for a valid camera SYNC. If none
+arrives within 2 s, it sends the source-backed single zero-byte prompt once and
+waits 1 s after ATT completion. Missing SYNC retires the link. Once received, it
+sends one sync response, then CheckAuth; a missing or rejected authorization ACK never becomes Ready. It does not copy
+the references' best-effort auth continuation, substring sync detector, parser
+CRC omissions or automatic connect/command retries. ATT write completion and a
+validated sequence-correlated status 200 are both required for each message.
+The local single-write profile requires MTU >= packet size + 3 (maximum 62 for
+32-byte auth; normal-video packet requires 32). Smaller MTUs fail explicitly;
+no unqualified outbound fragmentation is enabled.
 
-Retain reviewed, licensed independent fixtures in
-[`test/fixtures/go3s/`](../test/fixtures/go3s/README.md) after capture. An enabled
-profile must expose only evidenced capabilities, tie observations to fresh
-peer/generation/mode evidence, and return Unknown after reset or lost response.
-Only then can #21 satisfy its recording implementation criteria; #22/#46 retain
-physical smoke/compatibility decisions. A disabled entry is not implementation.
+Start waits for normal-video options success, then sends StartCapture once;
+Stop sends the explicit stop request once. Per-step response deadline is 5 s,
+whole control intent 10 s and connection setup 60 s, including host delays.
+Cancellation, disconnect, queue/driver faults, malformed or late ACKs seal the
+link; another peer can still finish. Manager policy permits one attempt only.
+The keepalive is a source-backed CheckAuth every 3 s while idle; an arriving
+control intent can wait for that in-flight heartbeat within its original
+bounded deadline. Keepalive also consumes sequence space (about 12 minutes of
+otherwise idle connection); this is not unattended endurance qualification.
 
-This change copies no vendor code, images or protocol packets. Source provenance
-is recorded in [sources](sources.md#go-3s-recording-profile-source-reconciliation-21).
-Documentation checks apply under the [acceptance policy](acceptance_policy.md);
-unchanged firmware evidence is reused. No upload, camera command or hardware
-qualification was performed.
+## Command success and observed state
+
+Start/Stop are Supported commands. A status 200 completes the command but
+**does not publish Recording or Stopped**. Reset, disconnect and all command
+responses keep observed state Unknown. Passive or queried GO 3S recording-state
+fields are not independently qualified; Query, Wake and GPS are Unsupported.
+No GO 3-only state mapping, X5 timer/settings vocabulary, filename heuristic or
+silence-to-Stopped rule is transferred.
+
+The group manager therefore cannot confirm GO 3S recording from this profile;
+it reports an unconfirmed result/finite failure rather than successful observed
+recording. This is an implemented command path, not a claim of full status or
+mixed-camera compatibility. A later evidenced GO 3S state decoder can extend
+capabilities without changing the honesty contract.
+
+## ESP32 integration and verification
+
+`go3sRuntime()` returns boot-lifetime adapter/manager/group objects on the
+existing `Esp32BleHost`. Construction and the default application perform no
+GO 3S radio or store operations. The serialized owner commissions slots,
+configures the manager, explicitly calls `adapter.start(true, true)` and
+requests Connect/Start/Stop; `ridesync_go3s_service()` advances that same owner.
+Stop then service until `canDestroy()` before releasing a non-static instance.
+Do not run another group/manager owner tick concurrently. This component does
+not automatically replace the X5 or HERO12 application runtime.
+
+`pio run -e go3s_adapter_compile` retains the actual shared SDK backend, adapter
+and owner entry points with activation disabled. Native codec and adapter tests
+use independent literal wire vectors and synthetic host events, including
+malformed/partial frames, auth rejection, missing GATT/CCCD, MTU, stale/late ACK,
+control during keepalive, sequence exhaustion, independent peers and reset/no
+replay. [Fixture labels](../test/fixtures/go3s/README.md) preserve their origin.
+The [finite hardware procedure](testing.md#go-3s-source-backed-profile-verification-21)
+in #46 owns real pairing, observed recording, playable footage and reconnect.
+No firmware was uploaded or camera command issued during implementation.

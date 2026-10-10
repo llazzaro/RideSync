@@ -36,10 +36,11 @@
   and the isolated wake result is not production orchestration. Remaining camera
   checks are consolidated in [#46](https://github.com/llazzaro/RideSync/issues/46).
   Official GO 3S accessory documentation identifies the camera as the remote
-  pairing target and lists GPS Action Remote compatibility. RideSync's actual
-  third-party BLE route, services, security, recording commands and authoritative
-  state remain unresolved; missing captures do not prove incompatibility. See
-  the [GO 3S profile decision](go3s_profile.md). Support remains Not tested.
+  pairing target and lists GPS Action Remote compatibility. The experimental
+  [GO 3S BE80 FFFrame adapter](go3s_profile.md) implements source-backed sync,
+  authorization and explicit Start/Stop on the shared host. ACKs leave observed
+  recording Unknown; Query, Wake and GPS are Unsupported. Actual security,
+  camera/Pod firmware and physical recording remain Not tested in #46.
 - A7670E GNSS parsing/acquisition, session clocks, isolated microSD logging,
   durable session allocation and independent local telemetry composition have
   implemented software contracts. Real modem AT behavior/fix, commissioned

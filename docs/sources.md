@@ -43,6 +43,28 @@ variant are distinct accessories; names in generic troubleshooting prose do
 not establish interchangeable compatibility. No purchase or remote capture is
 required by this documentation change.
 
+## GO 3S BE80 implementation references (#21)
+
+Inspected October 10, 2026 after a global GitHub code/repository/issue and
+GitHub-indexed web search. The references identify a model-specific BE80 route;
+no annotated GO 3S PCAP/btsnoop/raw receive fixture was found in reviewed trees.
+Reports remain Community; local software fixtures are source-derived/synthetic.
+
+| Source | Pin and license inspected | Use/limit |
+|---|---|---|
+| [nicecx camera_remote.py](https://github.com/nicecx/insta360-ai-content-studio/blob/abf472566198aeefb493b742f3fe69d9132ff460/lib/camera_remote.py) | `abf472566198aeefb493b742f3fe69d9132ff460`; root MIT read | Reports GO 3S 8.0.4.11 BE80 Start/Stop/footage retrieval; no copied implementation or installed qualification |
+| [OpenGraphLabs protocol](https://github.com/OpenGraphLabs/syncfield-python/blob/88a74d84e09602d73c0e8a77f0fe583beb33cb61/src/syncfield/adapters/insta360_go3s/ble/protocol.py) and [camera owner](https://github.com/OpenGraphLabs/syncfield-python/blob/88a74d84e09602d73c0e8a77f0fe583beb33cb61/src/syncfield/adapters/insta360_go3s/ble/camera.py) | `88a74d84e09602d73c0e8a77f0fe583beb33cb61`; root Apache-2.0 read | Reports three GO 3S cameras at 8.0.4.11, FFFrame/CRC, sync, auth, Video mode and Start/Stop; response tests are generated, not captures |
+
+Both describe an insta360ctl-derived lineage; its existing pinned repository
+has no detected license, and GO 3 state descriptions cannot qualify GO 3S.
+RideSync independently implements the published wire facts and standard CRC;
+no upstream code, generated protobuf, assets or extracted binary is vendored.
+Root license labels do not resolve upstream provenance or promote reports to
+independent confirmation. Body/state fields remain opaque. See the
+[implemented profile](go3s_profile.md) and fixture README for exact admission,
+resource, no-replay and Unknown contracts. User authorized these references for
+implementation, with physical qualification deferred to #46.
+
 The ESP32 example informs CE80 role/command research. The M5Stick fork and its
 original project are multicamera/wake comparison points; their reported device
 support does not prove RideSync support. insta360ctl compares remote emulation

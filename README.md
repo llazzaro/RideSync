@@ -76,6 +76,12 @@ power-state and final composed camera observations remain pending in #46.
 Support remains Experimental
 ([serial wake contract](docs/x5_serial_milestone.md#optional-bounded-wakerecovery-9)).
 
+The experimental [GO 3S BE80 profile](docs/go3s_profile.md) implements sync,
+strict authorization and explicit normal-video Start/Stop. Source-backed ACKs
+complete commands while observed recording stays Unknown; Query/Wake/GPS remain
+Unsupported. The shared-host ESP32 component is opt-in; actual camera/Pod
+firmware, pairing and recording verification remain Not tested in #46.
+
 GoPro HERO12 Black is the first implemented GoPro profile. Its opt-in adapter
 uses [Open GoPro](https://gopro.github.io/OpenGoPro/) for initial pairing/control,
 identity/API qualification and explicit start/stop with observed Encoding

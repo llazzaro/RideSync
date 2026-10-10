@@ -76,53 +76,47 @@ The existing three REC/STOP cycles and reconnect follow the implemented profile;
 BE80 investigation is conditional if the selected CE80 route is unusable.
 No ONE RS hardware observation or unsupported finding is currently recorded.
 
-## GO 3S and Action Pod evidence protocol
+## GO 3S source-backed profile verification (#21)
 
-Status: **not run; #21 is blocked on an actual third-party route and state
-capture**. The [profile decision](go3s_profile.md) identifies the camera as the
-documented accessory target. This procedure refines the existing GO 3S row in
-[#46](https://github.com/llazzaro/RideSync/issues/46); #22 retains physical
-compatibility ownership. It replaces the earlier blanket app/Pod/remote capture
-matrix rather than adding a campaign.
+Software profile: **Experimental**. Physical compatibility: **Not tested**.
+`pio test -e native -f test_go3s_codec -f test_go3s_adapter` checks independent
+literal framing/CRC vectors, auth/input bounds, malformed lengths/headers,
+fragmented/coalesced notifications, the real shared central and manager,
+qualification/disabled startup, missing GATT/security prerequisites, delayed or
+missing initial SYNC, rejected/missing/late ACKs, sequence exhaustion, control
+queued behind keepalive, cancellation/reconnect and no shutter replay.
+`pio run -e go3s_adapter_compile` checks the opt-in ESP32 runtime against the
+pinned host stack. Fixtures are source-derived or synthetic, not hardware captures.
 
-1. Declare GO 3S camera, Action Pod and app firmware/version separately, camera
-   mode/settings, camera/Pod power and docking state, pairing history, capture
-   equipment/software and exact probe revision. Preserve existing flash, bonds
-   and footage. Public labels are `camera-A`, `pod-A` and `controller-A`; keep
-   identities/keys and complete raw captures private. Missing hardware or capture
-   equipment makes the row Blocked. No official remote purchase is assumed.
-2. Establish normal camera/Pod live view using powered devices and docking, with
-   the first-use sticker removed and contacts aligned. Record any firmware
-   incompatibility or UI refusal; do not automatically update, reset or unbind.
-   On the Pod UI, inspect and record the fitted firmware's Bluetooth Remote
-   search entry. Its existence/name is an observation, not an assumed handshake.
-3. Within one declared 120-second receive-only attempt, record the actual camera
-   connection direction, peer association, services/properties, MTU, subscription
-   and security requirements. The existing CE80 peripheral probe may be a
-   **Hypothesis** candidate if that UI is available: private `H`, then `A`, and
-   `X`/deadline to finish, with no `S` or wake. A central GATT scan alone cannot
-   rule out a camera-central/remote-peripheral route. Do not switch to BE80 or
-   disconnect the Pod automatically after failure; record the result first.
-4. If the route connects, capture stopped Video, one camera/Pod-button Start,
-   running recording, Stop and one mode change with display timestamps, idle
-   controls and a playable new clip. Record complete frame boundaries,
-   direction/generation/sequence and drop/truncation counts; encrypted or
-   incomplete data cannot become state fixtures. Docking disables the camera
-   buttons, so record which button actually supplied each action. If an already
-   available compatible official remote supplies evidence, record its exact
-   model/firmware separately; accessory traffic does not qualify ESP32 access.
-5. Publish only reviewed anonymized facts and licensed independent fixtures.
-   Identify the actual control peer, operation semantics and fresh mode/state
-   fields, or retain Unknown and name the missing evidence. Timer-like traffic,
-   silence, SDK success and later saved footage alone do not establish a
-   command/state decoder. Once #21 implements the evidenced route, execute the
-   existing three independently requested video REC/STOP cycles and one
-   reconnect in #46, reusing matching evidence. No automatic toggle replay.
+The [profile decision](go3s_profile.md) pins the GitHub reference sources and
+explains the BE80-first route, authorization commissioning and Unknown status.
+The following replaces the earlier CE80-first capture proposal in the existing
+GO 3S row of [#46](https://github.com/llazzaro/RideSync/issues/46); #22 retains
+physical compatibility ownership. It adds no separate campaign.
 
-No GO 3S capture was run during the documentary reconciliation. Remote vendor
-compatibility resolves a candidate target, not production support. Record an
-unusable attempt as unresolved under its exact conditions; it is not proof of
-model incompatibility. Wake, GPS and mixed groups remain outside #21.
+1. Record camera firmware (source-qualified `8.0.4.11`), Action Pod/app versions,
+   camera mode, docking/power state, board/build revision and existing pairing
+   state. Privately commission the verified camera bond identity and printable
+   authorization ID. Preserve existing bonds and footage; publish anonymized
+   camera/controller labels. Unavailable hardware/commissioning stays Blocked.
+2. Verify direct camera BE80 service, BE81 Write, BE82 Notify/CCCD, actual
+   negotiated MTU sufficient for the selected auth packet, host security/bond
+   checks, camera SYNC (including bounded one-byte prompt if needed) and a
+   correlated successful CheckAuth. Record actual target/security requirements
+   and any rejection. Do not silently relax encryption or reset/unbind devices.
+3. Run three independently requested video Start/Stop cycles and one explicit
+   reconnect. Record camera/Pod display observations with timestamps and playable
+   new footage. Confirm Stop does not toggle back to recording. A lost response,
+   reconnect or controller reset must not replay an earlier shutter intent.
+4. Verify SDK completion and status-200 ACK leave RideSync's recording state
+   Unknown and group confirmation incomplete; Query, wake and GPS return
+   Unsupported. Record timeout/failure honestly. If complete receive evidence
+   with camera-observed state becomes available, retain private raw captures and
+   publish only reviewed anonymized/licensed fixtures for later state decoding.
+
+No camera hardware was exercised for #21. Reference authors' firmware reports
+support an implementation choice, not measured RideSync compatibility. Other
+firmware, passive state decoding, wake, GPS and mixed groups remain unqualified.
 
 ## Planned GoPro and mixed-camera validation
 
