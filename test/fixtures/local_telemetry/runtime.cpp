@@ -18,6 +18,7 @@
 using namespace ridesync;
 SerialPort Serial;
 bool test_motion_fixture = false;
+thread_local bool test_motion_imu_thread = false;
 struct FixtureMotionSource : StaticMotionReferenceSource {
   uint32_t declaration = 0;
   StaticMotionReference referenceFor(const ImuEvidence &e) override {
@@ -86,7 +87,10 @@ int spawn(void (*fn)(void *), const char *name, void *arg) {
     if (fail_imu)
       return 0;
   }
-  worker_threads.emplace_back([=] { fn(arg); });
+  worker_threads.emplace_back([=] {
+    test_motion_imu_thread = !sd && test_motion_fixture;
+    fn(arg);
+  });
   return 1;
 }
 int test_open(const char *path, int flags, unsigned) {
@@ -371,6 +375,13 @@ int main(int argc, char **argv) {
     const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     while (runtime->status().kinds[1].accepted < 10 && std::chrono::steady_clock::now() < limit)
       pass(*runtime);
+    if (runtime->status().kinds[1].accepted < 10) {
+      const auto state = runtime->status();
+      std::fprintf(stderr,
+                   "motion fixture: worker=%u completed=%u admitted=%u dropped=%u rejected=%u\n",
+                   unsigned(state.imu_worker.outcome), state.imu_worker.completed,
+                   state.kinds[1].accepted, state.kinds[1].dropped, state.kinds[1].rejected);
+    }
     assert(runtime->status().kinds[1].accepted >= 10);
   }
   if (mode == "local") {
