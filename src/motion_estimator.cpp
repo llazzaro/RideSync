@@ -76,7 +76,8 @@ MotionEstimate MotionEstimator::update(const ImuEvidence &e,
       c.mount_id != config_.mount_id || c.calibration_id != config_.calibration_id ||
       !c.calibration_offsets_known || !c.calibration_gains_known ||
       c.accel_offset_compensation != config_.accel_compensation ||
-      c.gyro_offset_compensation != config_.gyro_compensation || (e.timing_flags & 8))
+      c.gyro_offset_compensation != config_.gyro_compensation || e.timing_flags > 15 ||
+      (e.timing_flags & 8))
     return estimate_;
   MotionVector force, rate;
   if (!convert(e.accel, c.accel_offset, c.accel_gain_numerator, c.accel_gain_denominator,
