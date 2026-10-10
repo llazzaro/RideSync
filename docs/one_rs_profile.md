@@ -149,6 +149,19 @@ Unknown recording. Use the pinned ESP32 compile, formatting and CI required by
 the [acceptance policy](acceptance_policy.md); record final results in the
 [testing guide](testing.md#one-rs-source-backed-profile-verification-5).
 
-This record does not itself close #5 or claim a hardware pass. No camera command,
-firmware upload or ONE RS hardware qualification was performed during this
-software work.
+The owner requested initial software delivery on October 10 and deferred needed
+physical tests to #46. Under that explicit scope resolution, #5 can close for
+the implemented experimental command path after software verification; a
+physical working-path observation and a model-specific state decoder are not
+part of this software closure. The existing commissioning, three observed
+cycles/playback and reconnect/no replay checklist remains unchecked in #46,
+with compatibility decisions owned by #22.
+
+The implementation at `1ccac93e909b5d6688a9eaff7eb4e4bd75bbb49a` passed
+[CI run 38064718809](https://github.com/llazzaro/RideSync/actions/runs/38064718809),
+including native behavior/error tests, formatting, the pinned ESP32 build and
+the retained opt-in ONE RS runtime build. Reuse this evidence for unchanged
+software. Closure does not establish that the proposed BE80 route controls an
+actual ONE RS: recording stays Unknown, support stays Experimental and physical
+compatibility stays Not tested. No camera command, firmware upload or ONE RS
+hardware qualification was performed during this software work.
