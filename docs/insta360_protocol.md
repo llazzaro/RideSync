@@ -302,8 +302,9 @@ transmitted a manufacturer value derived from the observed X5 name; a passive
 Mac scan matched the exact expected value. On an explicitly requested repeat
 with the same settings, the owner confirmed the X5 woke. This is an observed
 bench result with firmware still unrecorded, not a general compatibility claim.
-#9 still needs its actual bounded shared advertising/reconnect route; #22 owns
-physical per-model wake confirmation. Do not add wake data to normal pairing
+#9 now has a bounded opt-in X5 shared advertising/reconnect route
+([composition](x5_serial_milestone.md#optional-bounded-wakerecovery-9)); #22 owns
+physical per-model wake confirmation, collected in #46. Do not add wake data to normal pairing
 or infer recording state from a wake or connection response.
 
 Multi-camera wake is a hypothesis to test by rotating identifiers with deadlines
@@ -425,9 +426,14 @@ prepare and invalidate revoke it. Only one preparation owner may attach, so this
 bridge is not automatically added to HERO12, HandlebarControl or startup.
 
 The compile-only `insta360_wake_compile` environment retains the actual worker
-and GAP paths while application activation remains disabled. A real Insta360
-control/state adapter and model/radio qualification remain necessary for the
-end-to-end #9 recording path (#3/#5/#21/#22).
+and GAP paths while application activation remains disabled. The later
+`x5_wake_milestone` composes that worker with the real X5 CE80 control/state
+adapter and `X5WakeRecovery`. Its startup lease survives cancellation until final
+worker access. Existing WakePreparation/group authority receives the real adapter
+events and reuses a fresh Video control link for REC after STOP without another
+advertisement. Other models remain disabled pending their own adapters/evidence;
+physical model/radio qualification remains in #22/#46. See the
+[composed contract](x5_serial_milestone.md#optional-bounded-wakerecovery-9).
 
 ## Implemented CE80 display interpretation (#19)
 
