@@ -200,6 +200,10 @@ fixtures have component-specific licenses/notices; see
 [sources](docs/sources.md) and [NimBLE fixture notices](test/fixtures/nimble/NOTICE-Apache-NimBLE).
 Synthetic protocol fixtures are not physical camera captures.
 
+Start with the [initial X5 test version](docs/initial_test_version.md) for build,
+private commissioning and the bounded camera check in #46. Open later
+compatibility and release tickets do not block this first bench stage.
+
 The [single-X5 serial milestone](docs/x5_serial_milestone.md) provides a privately
 commissioned production CE80 route with explicit CONNECT/REC/STOP/QUERY/STATUS/
 DISCONNECT commands. Default activation remains off; observations, command

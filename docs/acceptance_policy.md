@@ -61,6 +61,17 @@ evidence needed by #19. It reuses the completed X5 probe smoke/wake evidence,
 without promoting the probe to production support or changing ticket completion
 requirements. Schedule ready rows together and label unavailable stages Blocked.
 
+On October 10 the owner requested delivery of the initial software version and
+deferral of needed physical tests to #46. For #5 this accepts the implemented,
+verified experimental explicit StartVideo/Stop command path as the software
+delivery boundary. It does not require a model-specific receive-state decoder or
+a physical working-path observation to close that software ticket. The existing
+ONE RS commissioning, three camera-observed cycles/playback and reconnect/no
+replay row stays unchecked in #46; #22 retains compatibility acceptance. The
+selected BE80 route remains unconfirmed on ONE RS, recording stays Unknown and
+support stays Experimental / Not tested. This scope resolution does not accept
+unimplemented code or turn any physical test into a pass.
+
 #31 starts with one declared 30-minute bench campaign as an initial baseline,
 not an endurance certification. Its checklist fixes the scenarios before the run.
 Longer soaks need a stated failure hypothesis or intended ride-duration target;

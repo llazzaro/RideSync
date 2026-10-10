@@ -117,8 +117,9 @@ confirm camera stop. Retain the serial outcomes and observed status separately.
 Reuse the existing three-cycle/reconnect evidence when the wire profile matches;
 do not repeat the generic capture campaign. Record failures honestly and rerun
 only affected cases after a fix. Playback/support matrix/integrated ride claims
-retain their existing owners. #3 closes only after this final composed-path
-observation and its software criteria pass.
+retain their existing owners. #3 has closed at the owner’s request after software verification and reuse of
+the accepted three-cycle/reconnect probe evidence. This final composed-path
+observation remains pending in #46; closure does not claim it passed.
 
 A lost receive generation stays unqualified until disconnect and a fresh CONNECT.
 At final SDK admission, any newer CE81 receipt or expired approving observation

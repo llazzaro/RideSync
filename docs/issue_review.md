@@ -2,29 +2,28 @@
 
 ## Remaining work — 2026-10-10
 
-GitHub currently has 11 open issues, including the owner-requested consolidated
-camera-check execution ticket #46. This reconciliation reuses the retained
-evidence; it does not close a ticket or add acceptance requirements. The
-[finite acceptance policy](acceptance_policy.md) remains authoritative.
+The owner requested an initial version to test, software-ticket completion with
+real-hardware checks collected in #46, and explicit comments on blockers. Open
+acceptance tickets are not a prerequisite for starting the initial test.
+The [initial X5 test version](initial_test_version.md) gives the build and finite
+execution order. The [acceptance policy](acceptance_policy.md) preserves physical
+qualification separately from software delivery.
 
-| Issues | Current evidence and next dependency |
+| Issue | Disposition and next action |
 |---|---|
-| #3 (#19 codec complete) | The card-ready X5 retry on owner-reported firmware 1.11.10 established a playable clip after manual stop. A later probe session completed three camera-observed remote Start/Stop cycles and reconnect; #3’s hardware smoke criterion is checked. The [October 10 private receive capture](hardware-results/2026-10-10-x5-receive-capture.md#follow-up-completed-manual-sequence-and-photo-mode-observation) now covers an owner-completed manual Start/Stop/photo-mode sequence and playable new clip with zero drops/truncation. Per-action timing is coarse; a [published-capture comparison](insta360_protocol.md#published-ce80-capture-compared-with-retained-x5-data-19) now identifies framing and typed display fields from existing data. The [typed CE80 decoder](insta360_protocol.md#implemented-ce80-display-interpretation-19) implements known captured display fields and passed full local verification, fresh review and [final source CI](https://github.com/llazzaro/RideSync/actions/runs/38000783464). #19 is closed for codec software scope. The [production CE80 composition](x5_serial_milestone.md) implements the shared-host backend, one-shot adapter and bounded serial milestone. #3 is closed after focused verification, final review and [passing source CI](https://github.com/llazzaro/RideSync/actions/runs/38044779040), reusing the completed three-cycle/reconnect smoke evidence. The final composed-path observation and private commissioning remain pending in #46; support stays Experimental; dedicated authoritative query semantics remain unavailable. No generic repeat capture is required. The [pure BE80 request codec](insta360_protocol.md#implemented-pure-be80-recording-requests-19-partial) encodes source-backed StartVideo/Stop; the [receive-envelope decoder](insta360_protocol.md#implemented-be80-receive-envelope-19-partial) validates complete length/header with a bounded malformed corpus and honest Unknown state. Usable target/state and production integration remain open. |
-| #9 | The isolated source-derived advertisement produced one owner-confirmed X5 wake. The bounded encoder, four-peer scheduler, opt-in shared-host advertising worker and explicit RecordingPreparation seam now have source/synthetic tests. A real qualified Insta360 reconnect/state/control provider and physical coexistence remain required for end-to-end recording; #9 stays open. Reuse the observed wake rather than repeat it without a new question. |
-| #5 | ONE RS needs its own lens/module and recording-path evidence. The newly audited [licensed BE80 reference](insta360_protocol.md#licensed-be80-control-reference-19-5) supplies source-level command candidates for ONE R; it does not qualify ONE RS configurations or authoritative state. |
-| #21 | GO 3S/Action Pod control ownership and usable third-party recording path remain unresolved after #6. No enabled profile can be justified yet. |
-| #13 | The qualified static estimator and approved [runtime/MotionV4 logging](motion_logging.md#implemented-static-motion-logging-v4) integration are implemented and tested synthetically, with exact ABI/stack-frame evidence. Default activation remains disabled. Dynamic lean/gravity-free acceleration and physical accuracy remain unresolved and invalid. |
-| #14 (encoder #29 complete) | The licensed source-backed [pure BE80 encoder](gps_protocol.md#implemented-pure-encoder-29) is implemented with independent packets, strict UTC/freshness/numeric errors and retained-target evidence. The [approved plan](superpowers/plans/2026-10-09-insta360-gps-encoder.md) passed fresh review and [final CI](https://github.com/llazzaro/RideSync/actions/runs/37926210431); #29 is closed for its software scope. No camera capability is enabled. #14 still requires a real forwarding profile and #22 owns stored metadata qualification. |
-| #22 | The staged physical camera matrix remains open. The X5 probe completed three remote Start/Stop cycles and reconnect, with earlier separate playback evidence. Production orchestration, other models and mixed-radio capacity remain unqualified. |
-| #30 | Actual supply/enclosure/mount selection and finite installed-hardware observations are still required. |
-| #31 | The declared integrated bench/controlled-ride campaign requires qualified enabled hardware and actual observations; synthetic software tests cannot complete it. |
-| #46 | Owner-requested single execution checklist for remaining camera checks, annotated protocol capture, staged model/group qualification and the camera portion of #31. Reuses existing X5 smoke/wake evidence; no duplicate component campaign. |
-| #16 | Roadmap stays open while required milestones above remain incomplete. |
+| #5 | Experimental ONE RS explicit StartVideo/Stop software is implemented in `1ccac93` with passing [CI](https://github.com/llazzaro/RideSync/actions/runs/38064718809). Close software scope after reconciling its mixed documentation/hardware criterion at the owner's request. Actual ONE RS recording, identity/bond commissioning and the ordinary-360 assembly remain unconfirmed in #22/#46. Recording state remains Unknown. |
+| #22 | Physical staged camera matrix remains open. Run the software-ready single-X5 composed row first; unavailable later models/groups do not block it. Reuse the three observed probe cycles/reconnect, but do not claim composed or mixed-camera qualification. |
+| #30 | Blocked for physical installation: actual supply/enclosure/mount, wiring and finite inspection observations are absent. This is required before a motorcycle ride, not before the isolated USB bench X5 test. |
+| #31 | Integrated release/ride acceptance remains open. Declare the existing 30-minute bench configuration, budgets and fault methods before execution; run the controlled ride after bench and #30 installation acceptance. It does not gate the first X5 test. |
+| #46 | Single execution checklist already collects camera checks and pointers to existing #30/#31 GNSS/SD/IMU/reference checks. Next is private X5 store/identity commissioning followed by one composed serial REC/STOP/status check. No duplicate hardware campaign is needed. |
+| #16 | Roadmap remains open for physical compatibility, installation and release milestones. All software components have delivery decisions; initial testing proceeds while acceptance tickets remain open. |
 
-Evidence: [X5 pairing and shutter trial](hardware-results/2026-10-09-x5-pairing.md),
-[X5 wake](hardware-results/2026-10-09-x5-wake.md),
-[implemented static motion integration](motion_logging.md#implemented-static-motion-logging-v4), and its approved
-[motion runtime/logging spec](superpowers/specs/2026-10-09-motion-logging-design.md).
+The initial source baseline `ea21b13` has passing
+[full pinned CI](https://github.com/llazzaro/RideSync/actions/runs/38067609621).
+X5 support remains Experimental, other models remain physically Not tested, and
+MotionV4 dynamic estimates remain invalid. The offline dynamic replay is an
+Unreliable comparison prototype, not measured lean accuracy. Software closures
+and a buildable test candidate do not claim a ride-ready system.
 
 ## Original review and subsequent scope changes
 
