@@ -5,7 +5,9 @@ fixed-size, performs no allocation, and is connected to opt-in serialized
 [MotionV4 telemetry](motion_logging.md#implemented-static-motion-logging-v4).
 This implements the feasible static portion of the
 [estimator plan](motion_estimator_plan.md); #13 remains open for resolution of its dynamic lean/gravity-free acceleration goal. Physical accuracy
-is unmeasured; independent reference measurements belong to #31.
+is unmeasured; independent reference measurements belong to #31. The separate
+[bounded dynamic replay experiment](dynamic_motion_estimator.md) computes
+unreliable numeric attitude/body acceleration without promoting trusted validity.
 
 ## Frames and calibration
 

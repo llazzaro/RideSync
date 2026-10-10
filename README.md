@@ -29,6 +29,10 @@ firmware/API and required store evidence are qualified. The handlebar and local
 telemetry workflows are composed and tested synthetically; physical bench
 validation remains open. Qualified static force/rate and externally referenced
 roll/pitch now have [runtime logging](docs/motion_logging.md#implemented-static-motion-logging-v4).
+An [experimental dynamic replay](docs/dynamic_motion_estimator.md) now computes
+bounded gyro attitude and gravity-free body acceleration for later reference
+tests; its numeric outputs remain Unreliable and are not logged as MotionV4
+dynamic results.
 Dynamic linear acceleration/lean and Insta360 GPS forwarding still need
 their required protocol or reference evidence. X5 recording and opt-in wake/recovery
 software are implemented; composed hardware qualification remains pending.
