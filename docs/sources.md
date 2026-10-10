@@ -35,6 +35,23 @@ and telemetry investigation starting point. Vendor examples guide board setup.
 is an additional documentation reference. Record exact modem AT manual revision
 and license before adding GNSS implementation sources.
 
+## ONE RS profile evidence audit (#5)
+
+On October 10, 2026, the pinned ESP32 README/source and Garmin README/source
+above were reviewed for model applicability. The former reports RS 1-inch
+without a precise module/firmware baseline; the latter reports ONE R 360-mod
+testing and only proposes ONE RS compatibility. No source implementation or
+external capture was copied. See [the route decision](one_rs_profile.md).
+
+| Official source | Accessed | Use and limit |
+|---|---|---|
+| [ONE RS product introduction](https://onlinemanual.insta360.com/oners/en-us/camera/firstuse/introduction) | 2026-10-10 | Distinguishes modular assemblies; does not publish BLE fields |
+| [ONE RS module compatibility](https://onlinemanual.insta360.com/oners/en-us/faq/compatibility/modules) | 2026-10-10 | Cross-Core lens compatibility makes Core and lens separate target declarations |
+| [ONE RS GPS remote connection](https://onlinemanual.insta360.com/oners/en-us/camera/connect/gpsremote) | 2026-10-10 | Camera-side remote selection and mode-dependent shutter behavior; no third-party GATT/state contract |
+
+Official pages are content references only; no vendor code, prose or images
+are vendored. All ONE RS physical findings remain Not tested.
+
 ## IMU selection references (#27)
 
 Inspected 2026-10-07 for a bounded module/driver comparison. No sensor code was

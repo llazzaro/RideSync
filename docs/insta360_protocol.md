@@ -12,6 +12,14 @@ follow-up checks are consolidated in [#46](https://github.com/llazzaro/RideSync/
 External reports are community reverse engineering, not confirmation for our
 X5/GO 3S/ONE RS firmware versions. [Sources and licensing](sources.md).
 
+## ONE RS profile evidence (#5)
+
+The [ONE RS decision record](one_rs_profile.md) separates the source-reported
+CE80 RS 1-inch route from the BE80 ONE R 360-mod reference. Exact fitted
+Core/lens/firmware and authoritative receive state remain unobserved. #5 stays
+open; its bounded capture and subsequent smoke check are in the existing ONE RS
+row of #46. X5 display qualification must not be reused as ONE RS evidence.
+
 ## GO 3S and Action Pod feasibility (#6)
 
 **Finding: unresolved; no RideSync GO 3S or Action Pod capture has been obtained.**

@@ -55,6 +55,17 @@ one model. Test unavailable SD, full SD, GNSS no-fix/stale fixes, and reset.
 Acceptance for the first X5 camera milestone: repeatable single-X5 start/stop with observed state,
 bounded connect/command timeouts and honest serial status. It is not met yet.
 
+## ONE RS evidence prerequisite (#5)
+
+Use the [ONE RS target/route decision and finite capture procedure](one_rs_profile.md)
+within the existing ONE RS row of #46. Declare the exact Core, lens, firmware
+and video settings; collect bounded CE80 receive evidence before qualifying a
+state decoder. The isolated probe supports capture, not production ONE RS
+control. Its X5 observations and `X5CapturedDisplayV1` do not qualify ONE RS.
+The existing three REC/STOP cycles and reconnect follow the implemented profile;
+BE80 investigation is conditional if the selected CE80 route is unusable.
+No ONE RS hardware observation or unsupported finding is currently recorded.
+
 ## GO 3S and Action Pod evidence protocol
 
 Status: **not run; target/firmware capture pending**. Run this before adapter work
