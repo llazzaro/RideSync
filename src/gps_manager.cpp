@@ -1,11 +1,16 @@
 #include "gps_manager.h"
 namespace ridesync {
 GpsManager::GpsManager(SessionClock &clock, ModemGnss &modem, GnssPowerControl *power,
-                       const QualifiedPowerTiming &timing)
-    : clock_(clock), modem_(modem), power_(power), timing_(timing), stage_(PowerStage::Disabled) {}
+                       const QualifiedPowerTiming &timing, GpsSnapshotConsumer *consumer)
+    : clock_(clock), modem_(modem), power_(power), timing_(timing), consumer_(consumer),
+      stage_(PowerStage::Disabled) {}
 void GpsManager::cancel() {
+  if (stage_ == PowerStage::Cancelled)
+    return;
   const bool release_key = power_ && stage_ == PowerStage::KeyActive;
   stage_ = PowerStage::Cancelled;
+  if (consumer_)
+    consumer_->cancel();
   if (release_key)
     power_->key(false);
 }
@@ -23,6 +28,8 @@ void GpsManager::tick() {
     auto invalid = now;
     invalid.monotonic_quality = MonotonicQuality::InvalidSession;
     modem_.tick(invalid);
+    if (consumer_)
+      consumer_->cancel();
     if (completed_ != UINT32_MAX)
       ++completed_; // Returned terminal AT service, no UART command/restart.
     return;
@@ -51,6 +58,8 @@ void GpsManager::tick() {
     stage_ = PowerStage::Complete;
   if (stage_ == PowerStage::Complete) {
     modem_.tick(now);
+    if (consumer_)
+      consumer_->offer(now, modem_.snapshot(now));
     if (completed_ != UINT32_MAX)
       ++completed_;
   }

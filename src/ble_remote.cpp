@@ -109,6 +109,7 @@ bool BleCentral::connect(uint8_t i, uint32_t gen, const BondIdentity &id,
   p.service_start = {};
   p.service_end = {};
   p.next_procedure = 0;
+  p.write_owner = nullptr;
   p.deferred = p.security_waiting = p.connect_waiting = false;
   p.active = p.complete = p.retired_reported = p.terminate_submitted = p.cancel_submitted = false;
   p.retirement = BleFault::None;
@@ -167,7 +168,7 @@ bool BleCentral::admissionOpen(uint8_t i) const {
          p.procedure.fault.load() == BleFault::None && !p.link.terminal.load();
 }
 bool BleCentral::read(uint8_t i, uint8_t endpoint, uint32_t now) {
-  if (!admissionOpen(i) || endpoint >= peers_[i].spec.endpoint_count ||
+  if (!admissionOpen(i) || peers_[i].write_owner || endpoint >= peers_[i].spec.endpoint_count ||
       !(peers_[i].spec.endpoints[endpoint].properties & 2))
     return false;
   auto &p = peers_[i];
@@ -177,10 +178,11 @@ bool BleCentral::read(uint8_t i, uint8_t endpoint, uint32_t now) {
   c.handle = p.endpoints[endpoint].value;
   return launch(i, c, now);
 }
-bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t size,
-                       uint32_t now) {
-  if (!admissionOpen(i) || endpoint >= peers_[i].spec.endpoint_count || !data || !size ||
-      size > kBlePayload || !(peers_[i].spec.endpoints[endpoint].properties & 8))
+bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t size, uint32_t now,
+                       const void *stream_owner) {
+  if (!admissionOpen(i) || peers_[i].write_owner != stream_owner ||
+      endpoint >= peers_[i].spec.endpoint_count || !data || !size || size > kBlePayload ||
+      !(peers_[i].spec.endpoints[endpoint].properties & 8))
     return false;
   auto &p = peers_[i];
   p.endpoint = endpoint;
@@ -190,6 +192,25 @@ bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t 
   c.size = size;
   std::memcpy(c.bytes.data(), data, size);
   return launch(i, c, now);
+}
+bool BleCentral::reserveWrites(uint8_t i, const void *owner) {
+  if (!owner || !admissionOpen(i) || peers_[i].write_owner)
+    return false;
+  peers_[i].write_owner = owner;
+  return true;
+}
+void BleCentral::releaseWrites(uint8_t i, const void *owner) {
+  if (i < kBlePeers && owner && peers_[i].write_owner == owner)
+    peers_[i].write_owner = nullptr;
+}
+bool BleCentral::endpointMatches(uint8_t i, uint8_t endpoint, const BleUuid &service,
+                                 const BleUuid &characteristic) const {
+  if (!admissionOpen(i) || endpoint >= peers_[i].spec.endpoint_count)
+    return false;
+  const auto &p = peers_[i];
+  const auto &spec = p.spec.endpoints[endpoint];
+  return spec.service < p.spec.service_count && p.spec.services[spec.service] == service &&
+         spec.uuid == characteristic && (spec.properties & 8);
 }
 void BleCentral::disconnect(uint8_t i) {
   if (i < kBlePeers)
@@ -314,6 +335,7 @@ void BleCentral::retire(uint8_t i, BleFault fault, int error) {
   if (p.phase == BlePhase::Empty || p.phase == BlePhase::Closed)
     return;
   p.link.sealed.store(true);
+  p.write_owner = nullptr;
   p.procedure.sealed.store(true);
   if (!p.retired_reported) {
     p.retirement = fault;

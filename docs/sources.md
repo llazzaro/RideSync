@@ -298,6 +298,13 @@ Actual-source fixture modes83..102 exercise all five schemas for these four case
 
 ## Pure GPS encoder file licensing (#29)
 
+The #14 source-derived files `include/gps_forwarding.h`, `src/gps_forwarding.cpp`
+and `test/test_gps_forwarding/test_main.cpp` also retain MPL-2.0, referencing the
+same pinned Garmin `sendPosition`/`sendCMD` 20-byte chunk and1..254 sequence facts
+and existing independent literal fixtures. No upstream controller/state code is
+copied. Application leases, freshness/admission, failure policy and owner
+bindings are independently authored; other existing files keep their licensing.
+
 The source-derived wire layout and ordinary numeric precision use
 `arsfabula/Insta360-Remote-CIQ` at
 `39c51b3aa7c453227831d811355899371bbb8b94`, `BLE Barrel/BLEBarrel.mc`,

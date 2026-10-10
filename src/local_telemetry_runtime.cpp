@@ -20,7 +20,8 @@ LocalTelemetryRuntime::Active::Active(Clock &raw, StorageSink &sink, ModemUart &
                                       StaticMotionReferenceSource *source)
     : session(raw, sink, adapter, manager, group, id, config.firmware, config.provenance,
               motionOptions(config), source),
-      modem(uart, config.modem), gps(session.clock(), modem, power, config.power_timing) {}
+      modem(uart, config.modem),
+      gps(session.clock(), modem, power, config.power_timing, config.gps_forwarding_consumer) {}
 LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
                                              TelemetryStorageWorker &sd, TelemetryImuWorker &imu,
                                              Hero12Adapter &adapter, CameraManager &manager,

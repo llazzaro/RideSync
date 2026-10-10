@@ -59,6 +59,9 @@ struct LocalTelemetryConfig {
   ModemConfig modem;
   // Qualified already-powered modem is supported without any GPIO operations.
   QualifiedPowerTiming power_timing;
+  // Optional copied GNSS producer only. BLE/command owner services the consumer
+  // separately with current control priority. Consumer outlives canRelease().
+  GpsSnapshotConsumer *gps_forwarding_consumer = nullptr;
   const char *firmware = nullptr, *provenance = nullptr;
   CameraPeers peers;
 };

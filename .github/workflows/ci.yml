@@ -38,6 +38,7 @@ jobs:
           python - <<'PYCODE'
           import os, subprocess
           symbols = subprocess.check_output([os.path.expanduser('~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm'), '.pio/build/hero12_adapter_compile/firmware.elf'], text=True)
+          assert any(line.endswith(' ridesync_insta360_gps_forwarding_backend') for line in symbols.splitlines()), 'GPS forwarding service was not retained'
           assert not any(line.endswith(' ridesync_x5_peripheral_backend') for line in symbols.splitlines()), 'HERO12 image unexpectedly retains the X5 backend'
           PYCODE
       - name: Build production X5 backend and uncommissioned serial milestone

@@ -64,6 +64,11 @@ passing synthetic tests does not promote a camera to Confirmed.
 | Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested |
 | GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
 
+Optional [BE80 GPS forwarding](docs/gps_forwarding.md) is implemented as a
+default-off experimental ONE RS source-profile component using the real encoder,
+central and optional composed GNSS producer. Actual footage metadata stays
+untested in #46; this does not complete ONE RS recording support or enable X5 CE80.
+
 Observed probe results do not establish production support or firmware-qualified
 compatibility. X5 recording/state decoding and the composed opt-in wake/reconnect
 path are implemented. The three-cycle smoke evidence is reused; the declared
