@@ -77,8 +77,13 @@ public:
   void disconnect() override { x5Runtime().disconnect(); }
   void status() override {} // The caller reports one copied snapshot after dispatch.
 };
-SerialPort port;
-X5SerialControl serial(port);
+X5SerialControl &serialControl() {
+  // Construct only when this milestone is serviced. A global port/parser would
+  // root its virtual methods and retain the entire X5 backend in other images.
+  static SerialPort port;
+  static X5SerialControl serial(port);
+  return serial;
+}
 X5RuntimeStatus previous;
 bool have_previous = false;
 bool changed(const X5RuntimeStatus &a, const X5RuntimeStatus &b) {
@@ -145,6 +150,7 @@ void x5MilestoneService(bool admission_allowed) {
     }
   }
   runtime.service(); // Deadline/receive progress precedes serial dispatch.
+  auto &serial = serialControl();
   for (unsigned n = 0; n < 32 && Serial.available(); ++n)
     serial.consume(static_cast<char>(Serial.read()));
   const auto command = serial.service();

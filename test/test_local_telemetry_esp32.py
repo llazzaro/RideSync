@@ -133,15 +133,7 @@ inline void vTaskDelayUntil(TickType_t *,TickType_t) { throw std::runtime_error(
 int spawn(void(*)(void *),const char *,void *);
 inline int xTaskCreate(void(*f)(void *),const char *n,unsigned,void *a,unsigned,TaskHandle_t *h) { *h=a;return spawn(f,n,a); }
 inline int xTaskCreatePinnedToCore(void(*f)(void *),const char *n,unsigned,void *a,unsigned,void *,int) { return spawn(f,n,a); }
-extern bool test_motion_fixture;
-// Model the requested sample interval for motion output: running the IMU every
-// 100us overwrote fresh evidence with duplicate-clock samples before logging.
-inline void vTaskDelay(unsigned ticks) {
-  if (test_motion_fixture)
-    std::this_thread::sleep_for(std::chrono::milliseconds(ticks));
-  else
-    std::this_thread::sleep_for(std::chrono::microseconds(100));
-}
+inline void vTaskDelay(unsigned) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
 inline void vTaskDelete(void *) {}
 ''',
         }

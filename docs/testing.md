@@ -725,3 +725,21 @@ loss replay and duplicate-result masking); all three were fixed with focused
 regressions. No Critical or Minor findings were confirmed or deferred. Source
 CI and the declared final composed-path camera check remain required for #3
 closure.
+
+The first source CI attempt exposed an unintended static retention regression:
+a global X5 serial parser rooted its virtual port methods and the X5 backend in
+the retained HERO12 image, overflowing DRAM by 13,520 bytes. The same pinned
+local build reproduced that failure. Lazy construction at X5 milestone service
+removed that root; HERO12 and all three X5 images then linked successfully, and
+actual-main sanitizer tests passed. Symbol checks prove HERO12 does not retain
+the X5 backend while the two intended X5 runtime targets do. CI now checks that
+absence explicitly. No firmware was uploaded during software verification.
+
+The existing motion CSV acceptance fixture also had an invalid zero-filled FIFO
+trailer, so its IMU stopped after three read attempts and scheduling determined
+whether a valid sample survived logging. The positive motion fixture now supplies
+the literal valid `0x80` end marker and waits at most one wall-clock second for
+ten admitted sample rows. The original scheduler delay is preserved; the initial
+delay workaround was reverted. The focused composition test and ten consecutive
+motion CSV runs passed, including actual static-tilt rows. Production telemetry
+and motion estimation were unchanged.

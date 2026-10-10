@@ -218,6 +218,9 @@ int main(int argc, char **argv) {
     for (unsigned i = 1; i < 13; ++i)
       wire.payload[i] = 0;
     wire.payload[12] = 8;
+    // The real driver reads FIFO length plus its four-byte end trailer. Zero
+    // padding is an unsupported header and exhausts retries after three reads.
+    wire.payload[13] = 0x80;
   }
   if (mode == "camera" || mode == "control" || mode == "control-route-refusal") {
     auto camera = hero12Runtime();
@@ -361,6 +364,14 @@ int main(int argc, char **argv) {
     if (mode == "camera" && runtime->owner().session())
       hero12Runtime().manager.request(0, Operation::Wake);
     pass(*runtime);
+  }
+  if (mode == "motion-csv") {
+    // Wait for actual worker evidence, not a guessed host scheduling window.
+    // Keep the wait finite; production readiness/error behavior is unchanged.
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (runtime->status().kinds[1].accepted < 10 && std::chrono::steady_clock::now() < limit)
+      pass(*runtime);
+    assert(runtime->status().kinds[1].accepted >= 10);
   }
   if (mode == "local") {
     QualifiedHandlebar h;
