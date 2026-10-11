@@ -25,6 +25,24 @@ probe’s three remote Start/Stop cycles and reconnect are already confirmed.
 
 ## Automated baseline
 
+Install the repository hook with `git config core.hooksPath .githooks` (already
+configured in the maintainer checkout). The pre-commit hook runs
+`scripts/check_pipeline.sh`, including Ruff and a Linux GCC/libstdc++ syntax
+check of every native source except `main.cpp`, matching the native PlatformIO
+source selection. On Linux the check requires `g++`; on macOS it requires a
+running Docker daemon and downloads a digest-pinned Debian Bookworm image on
+first use. It selects the host architecture, mounts the source read-only and
+disables container networking. Missing tools or a compiler error block the
+commit. CI runs the same portability check with its Ubuntu compiler.
+
+The check catches the October 11 supervisor-header regression: unqualified
+`size_t` happened to compile with macOS libc++, but failed with Linux libstdc++.
+The header and definitions now explicitly use `<cstddef>` and `std::size_t`.
+Regression tests compile the real header alone, then reproduce the broken
+unqualified declarations and require validation to fail. The local hook also
+runs repository Python tests, bench tests, native tests and formatting; CI's
+ESP32 builds and link audits remain the target-firmware acceptance evidence.
+
 CI runs pinned Ruff 0.15.0 with `ruff check scripts test tools mechanical`.
 The selected rules (`E9`, `F63`, `F7`, `F82`) catch syntax and selected undefined-name
 errors. PlatformIO/SCons supplies `Import` and `env` to extra scripts at runtime;
