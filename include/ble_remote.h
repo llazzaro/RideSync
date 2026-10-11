@@ -31,6 +31,9 @@ struct BleProfileSpec {
   std::array<BleEndpointSpec, kBleEndpoints> endpoints{};
   uint8_t service_count = 0, endpoint_count = 0;
   bool require_authenticated = false;
+  // Bonded/encrypted is the default. A reviewed camera protocol may instead
+  // perform its own user-confirmed authentication after transport discovery.
+  bool require_bonded = true;
 };
 enum class BlePhase : uint8_t {
   Empty,
@@ -48,7 +51,8 @@ enum class BlePhase : uint8_t {
   Retiring,
   Quarantined,
   Closed,
-  Scan
+  Scan,
+  WriteWithoutResponse
 };
 enum class BleFault : uint8_t {
   None,
@@ -198,6 +202,9 @@ public:
   bool read(uint8_t peer, uint8_t endpoint, uint32_t now);
   bool write(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now,
              const void *stream_owner = nullptr);
+  // Local submission completion only; no ATT response or camera ACK is implied.
+  bool writeWithoutResponse(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now,
+                            const void *stream_owner = nullptr);
   // Serialized application lease for a fragmented command. Unrelated producers
   // cannot interleave reads/writes between fragments. Retiring a link clears it.
   // No SDK ownership, wait or queue; owner must release on completion/cancellation.

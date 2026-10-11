@@ -1,7 +1,7 @@
 # RideSync
 
 An ESP32 motorcycle camera remote and ride logger for **Insta360 X5, GO 3S,
-ONE RS, and GoPro HERO12 Black**, targeting the **LILYGO TTGO T-A7670E R2
+ONE RS, GoPro HERO12 Black, and DJI Osmo**, targeting the **LILYGO TTGO T-A7670E R2
 with A7670E built-in GPS**. One handlebar button is intended to wake/reconnect
 supported cameras and start recording, then stop recording on the next press.
 RideSync will also save timestamped GPS, acceleration, and estimated lean/pitch
@@ -12,7 +12,7 @@ telemetry forwarding depend on each model's verified capabilities.
 
 **Software modules are implemented; hardware qualification is incomplete.**
 The [composed bench image](docs/bench_test_version.md) now brings configured X5,
-ONE RS, GO 3S and HERO12 adapters into one group/control/logging owner. It starts
+ONE RS, GO 3S, HERO12 and DJI adapters into one group/control/logging owner. It starts
 the declared GNSS/SD route and optional button/LED/IMU from private commissioning,
 with explicit serial commands for testing before motorcycle installation.
 Use `bench_application` for this workflow; the single-X5 serial image remains a
@@ -101,6 +101,12 @@ strict authorization and explicit normal-video Start/Stop. Source-backed ACKs
 complete commands while observed recording stays Unknown; Query/Wake/GPS remain
 Unsupported. The shared-host ESP32 component is opt-in; actual camera/Pod
 firmware, pairing and recording verification remain Not tested in #46.
+
+The experimental [DJI profile](docs/dji_camera_profile.md) adds Osmo Action 4,
+Action 5 Pro, Action 6 and Osmo 360 using the pinned official controller demo's
+protocol. It implements camera-approved pairing, explicit REC/STOP and decoded
+status/query in the same mixed group. GPS/wake and automatic mode switching are
+unsupported. All DJI models remain physically Not tested; #46 holds execution.
 
 GoPro HERO12 Black is the first implemented GoPro profile. Its opt-in adapter
 uses [Open GoPro](https://gopro.github.io/OpenGoPro/) for initial pairing/control,

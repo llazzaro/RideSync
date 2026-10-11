@@ -289,7 +289,7 @@ def _validate_camera_numbers(row):
     if any(not row[field] or not 0 <= int(row[field]) <= 0xffffffff for field in numeric):
         raise ValueError('camera numeric fields')
     if int(row['peer_slot']) not in range(8) or int(row['peer_id']) == 0 or \
-            int(row['model']) not in range(1, 5) or int(row['event_kind']) not in range(10) or \
+            int(row['model']) not in range(1, 9) or int(row['event_kind']) not in range(10) or \
             int(row['operation']) not in range(5) or int(row['error']) not in range(11) or \
             int(row['recording']) not in range(3) or int(row['ack_domain']) not in range(3) or \
             int(row['ack_action']) not in range(16) or row['delivery_admitted'] not in ('0', '1'):

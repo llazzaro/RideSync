@@ -181,11 +181,16 @@ while observed recording remains Unknown; group confirmation then expires with
 an explicit timeout. That is a missing observation capability, not a fabricated
 successful recording result. Their physical wake and query remain unsupported.
 
-X5 must occupy slot zero; the supported shared group has at most four slots.
-Populate `cameras.one_rs`, `cameras.go3s` and `cameras.hero12` at each corresponding
+An X5, if configured, must occupy slot zero; the supported shared group has at most
+four slots.
+Populate `cameras.one_rs`, `cameras.go3s`, `cameras.hero12` and `cameras.dji` at each
+corresponding
 source slot with the actual profile qualifications from
-[ONE RS](one_rs_profile.md), [GO 3S](go3s_profile.md) and
-[HERO12](gopro_plan.md). Supply a distinct opaque event ID for every source slot.
+[ONE RS](one_rs_profile.md), [GO 3S](go3s_profile.md),
+[HERO12](gopro_plan.md) and [DJI](dji_camera_profile.md). A DJI-only group does
+not need the X5 provider shown in the example: supply its source configuration
+and actual DJI qualification instead, retaining the board/logger declarations.
+Supply a distinct opaque event ID for every source slot.
 No per-model singleton is independently ticked within the shared application.
 
 Optional X5 wake uses `cameras.x5_wake` and `cameras.x5_wake_policy`, matching the

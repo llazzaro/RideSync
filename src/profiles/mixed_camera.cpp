@@ -15,6 +15,10 @@ WakeRadio &unsupportedRadio() {
   static UnsupportedRadio r;
   return r;
 }
+bool isDji(CameraModel m) {
+  return m == CameraModel::DJI_ACTION4 || m == CameraModel::DJI_ACTION5_PRO ||
+         m == CameraModel::DJI_ACTION6 || m == CameraModel::DJI_OSMO360;
+}
 bool reached(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000u; }
 bool matches(const CameraConfig &camera, const BondIdentity &id) {
   if (!id.verified || camera.identifier.size() != 17 ||
@@ -40,7 +44,7 @@ MixedCameraAdapter::MixedCameraAdapter(BleHost &host, X5PeripheralPort &port, Cl
                                        WakeRadio *radio)
     : clock_(clock), wake_recovery_(*this),
       wake_(radio ? *radio : unsupportedRadio(), &wake_recovery_), x5_(port, clock),
-      one_(host, clock), go_(host, clock), hero_(host, clock) {}
+      one_(host, clock), go_(host, clock), hero_(host, clock), dji_(host, clock) {}
 void MixedCameraAdapter::attach(CameraManager &m, RecordingManager &g) {
   if (manager_)
     return;
@@ -51,6 +55,7 @@ void MixedCameraAdapter::attach(CameraManager &m, RecordingManager &g) {
   one_.attach(m);
   go_.attach(m);
   hero_.attach(m);
+  dji_.attach(m);
   attachGroup(g);
 }
 void MixedCameraAdapter::attachGroup(RecordingManager &g) {
@@ -58,11 +63,13 @@ void MixedCameraAdapter::attachGroup(RecordingManager &g) {
   one_.attachGroup(g);
   go_.attachGroup(g);
   hero_.attachGroup(g);
+  dji_.attachGroup(g);
 }
 void MixedCameraAdapter::detachGroup(const RecordingManager *g) {
   if (group_ == g) {
     group_ = nullptr;
     hero_.detachGroup(g);
+    dji_.detachGroup(g);
   }
 }
 RetryPolicy MixedCameraAdapter::managerPolicy() {
@@ -108,6 +115,13 @@ bool MixedCameraAdapter::configure(const SourceConfig &s, const MixedCameraQuali
     case CameraModel::HERO12_BLACK:
       ok = matches(s.cameras[i], q.hero12[i].identity) && hero_.configurePeer(i, q.hero12[i]);
       break;
+    case CameraModel::DJI_ACTION4:
+    case CameraModel::DJI_ACTION5_PRO:
+    case CameraModel::DJI_ACTION6:
+    case CameraModel::DJI_OSMO360:
+      ok = q.dji[i].model == s.cameras[i].model && matches(s.cameras[i], q.dji[i].identity) &&
+           dji_.configurePeer(i, q.dji[i]);
+      break;
     default:
       break;
     }
@@ -123,16 +137,17 @@ bool MixedCameraAdapter::configure(const SourceConfig &s, const MixedCameraQuali
 bool MixedCameraAdapter::start(bool enabled, bool qualified) {
   if (!configured_ || !enabled || !qualified || stopped_)
     return false;
-  bool one = false, go = false, hero = false;
+  bool one = false, go = false, hero = false, dji = false;
   for (size_t i = 0; i < source_.count; ++i)
     if (source_.cameras[i].enabled) {
       one |= source_.cameras[i].model == CameraModel::ONE_RS;
       go |= source_.cameras[i].model == CameraModel::GO3S;
       hero |= source_.cameras[i].model == CameraModel::HERO12_BLACK;
+      dji |= isDji(source_.cameras[i].model);
     }
   // X5 registration/restore was configured before any central starts the host.
   return (!one || one_.start(true, true)) && (!go || go_.start(true, true)) &&
-         (!hero || hero_.start(true, true));
+         (!hero || hero_.start(true, true)) && (!dji || dji_.start(true, true));
 }
 CameraTransport *MixedCameraAdapter::route(size_t i) {
   if (i >= source_.count || !source_.cameras[i].enabled)
@@ -146,6 +161,11 @@ CameraTransport *MixedCameraAdapter::route(size_t i) {
     return &go_;
   case CameraModel::HERO12_BLACK:
     return &hero_;
+  case CameraModel::DJI_ACTION4:
+  case CameraModel::DJI_ACTION5_PRO:
+  case CameraModel::DJI_ACTION6:
+  case CameraModel::DJI_OSMO360:
+    return &dji_;
   default:
     return nullptr;
   }
@@ -175,6 +195,7 @@ void MixedCameraAdapter::service(CameraServiceAction *action) {
   one_.service(false);
   go_.service(false);
   hero_.service(nullptr, false);
+  dji_.service(false);
   if (action)
     action->beforeAdvance();
   uint8_t mask = 0;
@@ -201,6 +222,7 @@ void MixedCameraAdapter::stop() {
   one_.stop();
   go_.stop();
   hero_.stop();
+  dji_.stop();
   if (manager_)
     for (size_t i = 0; i < source_.count; ++i)
       if (source_.cameras[i].enabled && source_.cameras[i].model == CameraModel::X5)
@@ -213,7 +235,7 @@ void MixedCameraAdapter::offer(const RecordTimestamp &t, const ModemSnapshot &s)
 bool MixedCameraAdapter::canDestroy() const {
   return wake_.status(0).released && !x5_.connected() && x5_.connectionReleased() &&
          one_.canDestroy() && one_.forwarding().canRelease() && go_.canDestroy() &&
-         hero_.canDestroy();
+         hero_.canDestroy() && dji_.canDestroy();
 }
 bool MixedCameraAdapter::commandReady(uint8_t i) const {
   if (i >= source_.count)
@@ -227,6 +249,11 @@ bool MixedCameraAdapter::commandReady(uint8_t i) const {
     return go_.commandReady(i);
   case CameraModel::HERO12_BLACK:
     return hero_.commandReady(i);
+  case CameraModel::DJI_ACTION4:
+  case CameraModel::DJI_ACTION5_PRO:
+  case CameraModel::DJI_ACTION6:
+  case CameraModel::DJI_OSMO360:
+    return dji_.commandReady(i);
   default:
     return false;
   }
@@ -322,6 +349,8 @@ bool MixedCameraAdapter::linkRetiring(uint8_t i) const {
     return false;
   if (source_.cameras[i].model == CameraModel::HERO12_BLACK)
     return hero_.linkRetiring(i);
+  if (isDji(source_.cameras[i].model))
+    return dji_.linkRetiring(i);
   if (source_.cameras[i].model == CameraModel::X5)
     return !wake_.status(0).released || (!x5_.connected() && !x5_.connectionReleased());
   return source_.cameras[i].model == CameraModel::ONE_RS ? one_.linkRetiring(i)
@@ -332,6 +361,8 @@ bool MixedCameraAdapter::linkReleased(uint8_t i) const {
     return false;
   if (source_.cameras[i].model == CameraModel::HERO12_BLACK)
     return hero_.linkReleased(i);
+  if (isDji(source_.cameras[i].model))
+    return dji_.linkReleased(i);
   if (source_.cameras[i].model == CameraModel::X5)
     return wake_.status(0).released && x5_.connectionReleased();
   return source_.cameras[i].model == CameraModel::ONE_RS ? one_.linkReleased(i)
@@ -342,6 +373,8 @@ Hero12Fault MixedCameraAdapter::fault(uint8_t i) const {
     return Hero12Fault::Qualification;
   if (source_.cameras[i].model == CameraModel::HERO12_BLACK)
     return hero_.fault(i);
+  if (isDji(source_.cameras[i].model))
+    return dji_.fault(i) == DjiFault::None ? Hero12Fault::None : Hero12Fault::Transport;
   bool error = source_.cameras[i].model == CameraModel::X5       ? x5_.failure() != X5Failure::None
                : source_.cameras[i].model == CameraModel::ONE_RS ? one_.fault(i) != OneRsFault::None
                                                                  : go_.fault(i) != Go3sFault::None;

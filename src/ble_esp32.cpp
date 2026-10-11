@@ -1143,6 +1143,18 @@ int Esp32BleHost::submit(const BleCommand &cmd, BleContext &ctx) {
   case BlePhase::VerifySubscription:
     rc = ble_gattc_read(cmd.connection, cmd.handle, attribute, &entry);
     break;
+  case BlePhase::WriteWithoutResponse: {
+    CallbackAccess access(entry.callbacks);
+    rc = ble_gattc_write_no_rsp_flat(cmd.connection, cmd.handle, cmd.bytes.data(), cmd.size);
+    if (!rc) {
+      BleEvent out;
+      out.kind = BleEventKind::Complete;
+      out.connection = cmd.connection;
+      out.handle = cmd.handle;
+      deliver(entry, out, true);
+    }
+    break;
+  }
   case BlePhase::Write:
   case BlePhase::Subscribe:
     rc = ble_gattc_write_flat(cmd.connection, cmd.handle, cmd.bytes.data(), cmd.size, attribute,

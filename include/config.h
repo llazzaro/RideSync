@@ -38,7 +38,8 @@ enum class ConfigError {
   InvalidIdentifier,
   DuplicateIdentifier,
   InvalidAddressType,
-  InvalidWakeIdentifier
+  InvalidWakeIdentifier,
+  UnsupportedCapability
 };
 struct ConfigResult {
   ConfigError error;

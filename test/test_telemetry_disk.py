@@ -194,6 +194,54 @@ class TelemetryDiskTest(unittest.TestCase):
             self.assertIn(before,self.data)
             with self.assertRaises(ValueError): parse(self.data.replace(before,after))
 
+    def test_appended_dji_model_codes_serialize_and_parse_with_explicit_bounds(self):
+        source = r'''
+#include "storage.h"
+#include <cassert>
+#include <cstdio>
+#include <string>
+using namespace ridesync;
+struct S : StorageSink {
+ std::string bytes;
+ bool mount() override {return true;} bool openExclusive(const char *) override {return true;}
+ size_t write(const char *p,size_t n) override {bytes.append(p,n);return n;}
+ bool flush() override {return true;} void close() override {}
+};
+int main() {
+ S sink; Storage storage(sink,{42,"fw","synthetic",2,4,StorageFormat::CameraV3});
+ RecordTimestamp t;t.session_id=42;t.monotonic_quality=MonotonicQuality::Valid;
+ CameraEvidence e;e.session_id=42;e.peer_id=301;e.kind=CameraEventKind::RequestRefused;
+ e.error=CameraError::Unsupported;
+ for(unsigned code=1;code<=8;++code) {
+   e.model=static_cast<CameraModel>(code);assert(storage.enqueueCamera(t,e,false));
+ }
+ for(unsigned code : {0u,9u,255u}) {
+   e.model=static_cast<CameraModel>(code);assert(!storage.enqueueCamera(t,e));
+ }
+ storage.requestStop();for(unsigned i=0;i<500;++i)storage.workerStep();
+ assert(storage.health().flushed==8 && storage.health().stopped);
+ std::fwrite(sink.bytes.data(),1,sink.bytes.size(),stdout);
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'camera.cpp').write_text(source)
+            subprocess.run(['c++', '-std=c++11', '-I'+str(ROOT/'include'),
+                            str(path/'camera.cpp'), str(ROOT/'src/storage.cpp'),
+                            str(ROOT/'src/motion_estimator.cpp'), '-o', str(path/'camera')], check=True)
+            data = subprocess.check_output([str(path/'camera')], text=True)
+        self.assertEqual([str(code) for code in range(1, 9)],
+                         [row['model'] for row in parse(data)])
+        camera_columns = ['kind'] + COMMON + CAMERA
+        for invalid in ('0', '9', '255'):
+            lines = data.splitlines()
+            index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
+            values = next(csv.reader([lines[index]]))
+            values[camera_columns.index('model')] = invalid
+            lines[index] = ','.join(values)
+            with self.assertRaises(ValueError):
+                parse('\n'.join(lines) + '\n')
+
     def test_camera_v3_keeps_gps_imu_and_distinct_ack(self):
         source = r'''
 #include "storage.h"

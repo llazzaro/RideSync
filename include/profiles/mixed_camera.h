@@ -1,5 +1,6 @@
 #pragma once
 #include "camera_runtime_port.h"
+#include "profiles/dji_camera.h"
 #include "profiles/gopro_hero12.h"
 #include "profiles/insta360_go3s.h"
 #include "profiles/insta360_one_rs.h"
@@ -14,6 +15,7 @@ struct MixedCameraQualifications {
   std::array<OneRsQualification, kMaxCameras> one_rs{};
   std::array<Go3sQualification, kMaxCameras> go3s{};
   std::array<Hero12Qualification, kMaxCameras> hero12{};
+  std::array<DjiQualification, kMaxCameras> dji{};
   std::array<GpsForwardingConfig, kMaxCameras> gps{};
 };
 // One manager/group/audit for every configured model on the shared host.
@@ -78,6 +80,7 @@ private:
   OneRsAdapter one_;
   Go3sAdapter go_;
   Hero12Adapter hero_;
+  DjiAdapter dji_;
   CameraManager *manager_ = nullptr;
   RecordingManager *group_ = nullptr;
   SourceConfig source_;

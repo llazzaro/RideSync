@@ -443,3 +443,10 @@ physical camera behavior or eliminate the need for a qualified recovery adapter.
   and no X5 capability enabled from its command table.
 
 See [comparison and local evidence](insta360_protocol.md#published-ce80-capture-compared-with-retained-x5-data-19).
+
+### DJI Osmo recording adapter — October 11, 2026
+
+The [DJI profile](dji_camera_profile.md) records the official demo pinned at
+`92fe23e5a749f189593f980a26a105c3bb66aa1c`, wire-layout/fixture provenance,
+source discrepancies and reuse terms. No upstream implementation is vendored.
+Software fixtures do not establish physical model compatibility.

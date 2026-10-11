@@ -393,8 +393,33 @@ void refusal_during_write_must_discard_pending() {
   TEST_ASSERT_EQUAL(1, m.writes);
 }
 
+void appended_models_roundtrip_and_legacy_bytes_remain_identical() {
+  for (unsigned code = 1; code <= 8; ++code) {
+    auto c = camera();
+    c.cameras[0].model = static_cast<CameraModel>(code);
+    c.cameras[0].family =
+        code <= 3 ? CameraFamily::Insta360 : static_cast<CameraFamily>(code == 4 ? 2 : 3);
+    ConfigRecord record, again;
+    TEST_ASSERT_EQUAL((int)PersistStatus::Encoded, (int)encodeConfig(c, 7, record).status);
+    TEST_ASSERT_EQUAL(2, record.bytes[6]);
+    // Header, count/capacity, three length-prefixed strings, then family/model.
+    const size_t model_offset = 24 + 2 + 1 + 5 + 1 + 17 + 1 + 1;
+    TEST_ASSERT_EQUAL(code, record.bytes[model_offset]);
+    SourceConfig out;
+    uint64_t generation = 0;
+    TEST_ASSERT_EQUAL((int)PersistStatus::Loaded,
+                      (int)decodeConfig(record, out, generation).status);
+    TEST_ASSERT_EQUAL(code, static_cast<unsigned>(out.cameras[0].model));
+    TEST_ASSERT_EQUAL((int)c.cameras[0].family, (int)out.cameras[0].family);
+    TEST_ASSERT_EQUAL((int)PersistStatus::Encoded,
+                      (int)encodeConfig(out, generation, again).status);
+    TEST_ASSERT_EQUAL(record.size, again.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(record.bytes.data(), again.bytes.data(), record.size);
+  }
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(appended_models_roundtrip_and_legacy_bytes_remain_identical);
   RUN_TEST(wake_identifiers_roundtrip_without_schema_change);
   RUN_TEST(refusal_during_write_must_discard_pending);
   RUN_TEST(refusal_during_request_must_discard_earlier_mailbox);

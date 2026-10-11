@@ -261,6 +261,12 @@ static int(*att_callback)(uint16_t,const ble_gatt_error*,ble_gatt_attr*,void*)=n
 static void *att_arg=nullptr;
 static int ble_gattc_read(uint16_t,uint16_t,int(*cb)(uint16_t,const ble_gatt_error*,ble_gatt_attr*,void*),void*a){att_callback=cb;att_arg=a;return 0;}
 static int ble_gattc_write_flat(uint16_t,uint16_t,const void*,uint16_t,int(*cb)(uint16_t,const ble_gatt_error*,ble_gatt_attr*,void*),void*a){att_callback=cb;att_arg=a;return 0;}
+static int no_rsp_error=0;
+static std::vector<uint8_t> no_rsp_bytes;
+static int ble_gattc_write_no_rsp_flat(uint16_t,uint16_t,const void*data,uint16_t size){
+ const auto*bytes=static_cast<const uint8_t*>(data);no_rsp_bytes.assign(bytes,bytes+size);
+ return no_rsp_error;
+}
 using nvs_handle_t=unsigned;
 using nvs_iterator_t=void*;
 #define NVS_READONLY 0
@@ -374,6 +380,29 @@ int main(int argc,char**argv){
  }
  ble_hs_cfg.sync_cb();assert(host.state()==BleHostState::Ready);
  assert(!host.inspectStore(true).complete); // Never read live NVS/store concurrently.
+ if(scenario>=29&&scenario<=31){
+  Receiver receiver;BleContext context;context.receiver=&receiver;context.peer=0;
+  context.phase=BlePhase::WriteWithoutResponse;context.generation=1;
+  context.procedure=1;context.connection=10;context.expected_handle=5;
+  context.terminal=false;BleCommand command;command.phase=context.phase;
+  command.connection=10;command.handle=5;command.size=2;command.bytes[0]=0xAA;
+  command.bytes[1]=0x02;
+  if(scenario==30)no_rsp_error=71;
+  if(scenario==31)queue_full=true;
+  const int rc=host.submit(command,context);
+  assert(rc==(scenario==30?71:0));
+  assert(no_rsp_bytes==std::vector<uint8_t>({0xAA,0x02}));
+  assert(att_callback==nullptr&&"write command has no ATT callback/acknowledgment");
+  assert(receiver.copies==(scenario==30?0u:1u));
+  if(receiver.copies){assert(receiver.latest.kind==BleEventKind::Complete);
+   assert(receiver.latest.connection==10&&receiver.latest.handle==5&&receiver.latest.status==0);}
+  assert(context.terminal.load()&&!host.quiescent(context));
+  pump();
+  if(scenario==31){assert(host.fault()==BleFault::Host&&context.sealed.load());
+   assert(!host.quiescent(context)&&!host.releaseContext(context));}
+  else {assert(host.quiescent(context)&&host.releaseContext(context));}
+  return 0;
+ }
  if(scenario==7){
   ble_store_status_event event;event.event_code=BLE_STORE_EVENT_OVERFLOW;
   assert(ble_hs_cfg.store_status_cb(&event,nullptr)!=0);
@@ -506,6 +535,6 @@ class BleEsp32(unittest.TestCase):
                             "-fno-sanitize-recover=all", "-g", "-O0", "-I", str(temp), "-I", str(ROOT / "include"),
                             "-I", str(ROOT), str(temp / "harness.cpp"), str(ROOT / "src/pairing_reset.cpp"), str(ROOT / "src/wake_radio_policy.cpp"), str(ROOT / "src/wake_manager.cpp"), str(ROOT / "src/insta360_wake_encoder.cpp"),
                             "-o", str(binary)], check=True)
-            for scenario in range(29):
+            for scenario in range(32):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")

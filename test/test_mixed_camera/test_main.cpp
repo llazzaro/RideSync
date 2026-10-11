@@ -68,7 +68,7 @@ void test_mixed_connect_routes_and_advances_once() {
   RecordingManager g(m, t);
   a.attach(m, g);
   SourceConfig c;
-  c.count = 2;
+  c.count = 3;
   MixedCameraQualifications q;
   for (unsigned i = 0; i < 2; ++i) {
     auto &x = c.cameras[i];
@@ -95,6 +95,24 @@ void test_mixed_connect_routes_and_advances_once() {
   go.firmware_size = 8;
   go.authorization_id[0] = 'a';
   go.authorization_size = 1;
+  auto &camera = c.cameras[2];
+  camera.name = "DJI synthetic";
+  camera.family = CameraFamily::DJI;
+  camera.model = CameraModel::DJI_ACTION4;
+  camera.address_type = AddressType::Public;
+  camera.identifier = "01:02:03:04:05:08";
+  auto &dji = q.dji[2];
+  dji.model = camera.model;
+  dji.source_qualified = dji.identity.verified = dji.controller_mac_verified = true;
+  dji.identity.type = IdentityType::Public;
+  dji.identity.address = {{8, 5, 4, 3, 2, 1}};
+  dji.firmware[0] = '1';
+  dji.firmware_size = 1;
+  dji.controller_mac = {{1, 2, 3, 4, 5, 6}};
+  dji.connection_challenge = 0x1234;
+  dji.unencrypted_protocol_reviewed = true;
+  dji.controller_id = 0x12345678;
+  dji.already_paired = true;
   TEST_ASSERT_TRUE(m.configure(c).ok());
   TEST_ASSERT_TRUE(a.configure(c, q));
   TEST_ASSERT_TRUE(a.start(true, true));
@@ -104,9 +122,10 @@ void test_mixed_connect_routes_and_advances_once() {
   a.service();
   TEST_ASSERT_EQUAL(ticks + 1, m.ticks());
   TEST_ASSERT_EQUAL(advances + 1, g.advancements());
-  TEST_ASSERT_EQUAL(2, h.commands.size());
+  TEST_ASSERT_EQUAL(3, h.commands.size());
   TEST_ASSERT_EQUAL(0, h.slots[0]);
   TEST_ASSERT_EQUAL(1, h.slots[1]);
+  TEST_ASSERT_EQUAL(2, h.slots[2]);
   TEST_ASSERT_EQUAL(RecordingState::Unknown, m.state(0)->observed);
   TEST_ASSERT_EQUAL(RecordingState::Unknown, m.state(1)->observed);
   a.stop();
@@ -181,10 +200,107 @@ void test_wake_recovery_connects_without_shutter_and_cancel_releases() {
     a.service();
   TEST_ASSERT_TRUE(a.canDestroy());
 }
+void test_dji_mixed_routes_all_models_and_reconnects_without_wake() {
+  Time t;
+  Host h;
+  Peripheral p;
+  Radio radio;
+  MixedCameraAdapter a(h, p, t, &radio);
+  CameraManager m(t, a, MixedCameraAdapter::managerPolicy());
+  RecordingManager g(m, t);
+  a.attach(m, g);
+  SourceConfig c;
+  c.count = 4;
+  MixedCameraQualifications q;
+  for (unsigned i = 0; i < 4; ++i) {
+    auto &cam = c.cameras[i];
+    cam.name = "DJI synthetic";
+    cam.family = CameraFamily::DJI;
+    cam.model = static_cast<CameraModel>(5 + i);
+    cam.address_type = AddressType::Public;
+    cam.identifier = "01:02:03:04:05:06";
+    cam.identifier.back() = "6789"[i];
+    auto &qual = q.dji[i];
+    qual.model = cam.model;
+    qual.source_qualified = qual.identity.verified = qual.controller_mac_verified = true;
+    qual.identity.type = IdentityType::Public;
+    qual.identity.address = {{uint8_t(6 + i), 5, 4, 3, 2, 1}};
+    qual.firmware[0] = '1';
+    qual.firmware_size = 1;
+    qual.controller_mac = {{1, 2, 3, 4, 5, 6}};
+    qual.connection_challenge = 0x1234;
+    qual.unencrypted_protocol_reviewed = true;
+    qual.controller_id = 0x12345678;
+    qual.already_paired = true;
+  }
+  TEST_ASSERT_TRUE(m.configure(c).ok());
+  // Source settings retain eight slots; BLE runtimes explicitly limit active slots to four.
+  {
+    Host other_host;
+    Peripheral other_port;
+    MixedCameraAdapter other(other_host, other_port, t);
+    CameraManager other_manager(t, other, MixedCameraAdapter::managerPolicy());
+    RecordingManager other_group(other_manager, t);
+    other.attach(other_manager, other_group);
+    SourceConfig beyond = c;
+    beyond.count = 5;
+    beyond.cameras[4] = c.cameras[0];
+    beyond.cameras[4].identifier = "01:02:03:04:05:0A";
+    for (unsigned i = 0; i < 4; ++i)
+      beyond.cameras[i].enabled = false;
+    MixedCameraQualifications beyond_q;
+    beyond_q.dji[4] = q.dji[0];
+    beyond_q.dji[4].identity.address[0] = 10;
+    TEST_ASSERT_TRUE(other_manager.configure(beyond).ok());
+    TEST_ASSERT_FALSE(other.configure(beyond, beyond_q));
+  }
+  auto mismatch = q;
+  mismatch.dji[0].model = CameraModel::DJI_ACTION6;
+  TEST_ASSERT_FALSE(a.configure(c, mismatch));
+  mismatch = q;
+  mismatch.dji[0].identity.type = IdentityType::RandomStatic;
+  TEST_ASSERT_FALSE(a.configure(c, mismatch));
+  TEST_ASSERT_TRUE(a.configure(c, q));
+  TEST_ASSERT_TRUE(a.start(true, true));
+  for (unsigned i = 0; i < 4; ++i) {
+    TEST_ASSERT_FALSE(a.wakeSupported(i));
+    TEST_ASSERT_FALSE(a.commandReady(i));
+    TEST_ASSERT_TRUE(a.linkReleased(i));
+    TEST_ASSERT_EQUAL(CameraError::Unsupported, a.requestRecovery(i, true));
+    TEST_ASSERT_EQUAL(CameraError::None, a.requestRecovery(i, false));
+  }
+  auto ticks = m.ticks();
+  auto advances = g.advancements();
+  a.service();
+  TEST_ASSERT_EQUAL(ticks + 1, m.ticks());
+  TEST_ASSERT_EQUAL(advances + 1, g.advancements());
+  TEST_ASSERT_EQUAL(1, h.commands.size()); // One shared central initiates one link at a time.
+  bool seen[4] = {};
+  for (unsigned i = 0; i < 4; ++i) {
+    TEST_ASSERT_EQUAL(i + 1, h.commands.size());
+    const auto peer = h.slots[i];
+    TEST_ASSERT_LESS_THAN(4, peer);
+    TEST_ASSERT_FALSE(seen[peer]);
+    seen[peer] = true;
+    TEST_ASSERT_EQUAL(RecordingState::Unknown, m.state(peer)->observed);
+    TEST_ASSERT_EQUAL(CameraError::None, a.cancelRecovery(peer));
+    for (unsigned pass = 0; pass < 3; ++pass)
+      a.service();
+  }
+  for (bool routed : seen)
+    TEST_ASSERT_TRUE(routed);
+  TEST_ASSERT_EQUAL(0, radio.starts);
+  TEST_ASSERT_EQUAL(0, p.connects);
+  a.stop();
+  for (unsigned i = 0; i < 10 && !a.canDestroy(); ++i)
+    a.service();
+  TEST_ASSERT_TRUE(a.canDestroy());
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_dji_mixed_routes_all_models_and_reconnects_without_wake);
   RUN_TEST(test_mixed_connect_routes_and_advances_once);
   RUN_TEST(test_wake_recovery_connects_without_shutter_and_cancel_releases);
   return UNITY_END();

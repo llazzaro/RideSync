@@ -48,11 +48,19 @@ ConfigResult validate(const SourceConfig &c) {
     case CameraModel::HERO12_BLACK:
       expected = CameraFamily::GoPro;
       break;
+    case CameraModel::DJI_ACTION4:
+    case CameraModel::DJI_ACTION5_PRO:
+    case CameraModel::DJI_ACTION6:
+    case CameraModel::DJI_OSMO360:
+      expected = CameraFamily::DJI;
+      break;
     default:
-      return {ConfigError::UnknownModel, i, "select X5, GO3S, ONE_RS or HERO12_BLACK"};
+      return {ConfigError::UnknownModel, i, "select a supported camera model"};
     }
     if (p.family != expected)
       return {ConfigError::FamilyMismatch, i, "family does not match model"};
+    if (expected == CameraFamily::DJI && (p.gps_telemetry || !p.wake_identifier.empty()))
+      return {ConfigError::UnsupportedCapability, i, "DJI GPS and wake are unsupported"};
     if (p.enabled && p.identifier.empty())
       return {ConfigError::MissingIdentifier, i, "enabled camera requires BLE address"};
     if (!p.identifier.empty() && !validMac(p.identifier))

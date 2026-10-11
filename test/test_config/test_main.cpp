@@ -124,8 +124,42 @@ void wake_identifiers_keep_legacy_values_and_accept_insta360_ascii_suffixes() {
   c.cameras[0].wake_identifier.clear();
   TEST_ASSERT_TRUE(validate(c).ok());
 }
+void dji_models_require_identity_and_reject_optional_features() {
+  TEST_ASSERT_EQUAL(1, static_cast<unsigned>(CameraModel::X5));
+  TEST_ASSERT_EQUAL(2, static_cast<unsigned>(CameraModel::GO3S));
+  TEST_ASSERT_EQUAL(3, static_cast<unsigned>(CameraModel::ONE_RS));
+  TEST_ASSERT_EQUAL(4, static_cast<unsigned>(CameraModel::HERO12_BLACK));
+  TEST_ASSERT_EQUAL(5, static_cast<unsigned>(CameraModel::DJI_ACTION4));
+  TEST_ASSERT_EQUAL(6, static_cast<unsigned>(CameraModel::DJI_ACTION5_PRO));
+  TEST_ASSERT_EQUAL(7, static_cast<unsigned>(CameraModel::DJI_ACTION6));
+  TEST_ASSERT_EQUAL(8, static_cast<unsigned>(CameraModel::DJI_OSMO360));
+  SourceConfig c;
+  c.count = 1;
+  c.cameras[0] = camera();
+  c.cameras[0].family = CameraFamily::DJI;
+  for (unsigned code = 5; code <= 8; ++code) {
+    auto &p = c.cameras[0];
+    p.model = static_cast<CameraModel>(code);
+    TEST_ASSERT_TRUE(validate(c).ok());
+    p.address_type = AddressType::Random;
+    TEST_ASSERT_TRUE(validate(c).ok());
+    p.address_type = AddressType::Unknown;
+    TEST_ASSERT_EQUAL((int)ConfigError::InvalidAddressType, (int)validate(c).error);
+    p.address_type = AddressType::Public;
+    p.gps_telemetry = true;
+    TEST_ASSERT_FALSE(validate(c).ok());
+    p.gps_telemetry = false;
+    p.wake_identifier = "01:23:45:67:89:AC";
+    TEST_ASSERT_FALSE(validate(c).ok());
+    p.wake_identifier.clear();
+    p.family = CameraFamily::GoPro;
+    TEST_ASSERT_EQUAL((int)ConfigError::FamilyMismatch, (int)validate(c).error);
+    p.family = CameraFamily::DJI;
+  }
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(dji_models_require_identity_and_reject_optional_features);
   RUN_TEST(wake_identifiers_keep_legacy_values_and_accept_insta360_ascii_suffixes);
   RUN_TEST(malformed_enum_and_source_bounds);
   RUN_TEST(counts_and_capacity);

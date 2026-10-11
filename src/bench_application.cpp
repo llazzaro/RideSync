@@ -237,6 +237,10 @@ ApplicationWorkers *commissionedApplication() {
   }
   // Keep the large boot-lifetime application in checked internal RAM. Allocation
   // failure precedes peripheral IO; never retry or free active owner resources.
+  if (!ensureMixedCameraRuntime()) {
+    status.error = BenchProviderError::Allocation;
+    return nullptr;
+  }
   application_memory =
       heap_caps_malloc(sizeof(SupervisedEsp32Application), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (!application_memory) {

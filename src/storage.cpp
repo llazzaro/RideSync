@@ -362,7 +362,7 @@ bool Storage::enqueueCamera(const RecordTimestamp &t, const CameraEvidence &e, b
         t.monotonic_ms - e.event_receipt_ms != e.event_receipt_age_ms)) ||
       (!e.event_receipt_known && (e.event_receipt_ms || e.event_receipt_age_ms)) ||
       e.model == CameraModel::Unknown ||
-      static_cast<unsigned>(e.model) > static_cast<unsigned>(CameraModel::HERO12_BLACK) ||
+      static_cast<unsigned>(e.model) > static_cast<unsigned>(CameraModel::DJI_OSMO360) ||
       !valid_event || static_cast<unsigned>(e.operation) > static_cast<unsigned>(Operation::Wake) ||
       static_cast<unsigned>(e.error) > static_cast<unsigned>(CameraError::InvalidPolicy) ||
       static_cast<unsigned>(e.recording) > static_cast<unsigned>(RecordingState::Recording) ||

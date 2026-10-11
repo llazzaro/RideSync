@@ -70,6 +70,14 @@ unsigned model(CameraModel m) {
     return 3;
   case CameraModel::HERO12_BLACK:
     return 4;
+  case CameraModel::DJI_ACTION4:
+    return 5;
+  case CameraModel::DJI_ACTION5_PRO:
+    return 6;
+  case CameraModel::DJI_ACTION6:
+    return 7;
+  case CameraModel::DJI_OSMO360:
+    return 8;
   default:
     return 255;
   }
@@ -199,7 +207,7 @@ PersistResult encodeConfig(const SourceConfig &c, uint64_t generation, ConfigRec
     string(p.name);
     string(p.identifier);
     string(p.wake_identifier);
-    number(p.family == CameraFamily::Insta360 ? 1 : 2, 1);
+    number(p.family == CameraFamily::Insta360 ? 1 : p.family == CameraFamily::GoPro ? 2 : 3, 1);
     number(model(p.model), 1);
     number(p.address_type == AddressType::Public   ? 1
            : p.address_type == AddressType::Random ? 2
@@ -255,11 +263,13 @@ PersistResult decodeConfig(const ConfigRecord &r, SourceConfig &out, uint64_t &g
     p.identifier = reader.string(17);
     p.wake_identifier = reader.string(17);
     auto f = reader.number(1), m = reader.number(1), a = reader.number(1);
-    if (f < 1 || f > 2 || m < 1 || m > 4 || a > 2)
+    if (f < 1 || f > 3 || m < 1 || m > 8 || a > 2)
       return PersistStatus::Corrupt;
-    p.family = f == 1 ? CameraFamily::Insta360 : CameraFamily::GoPro;
-    const CameraModel models[] = {CameraModel::X5, CameraModel::GO3S, CameraModel::ONE_RS,
-                                  CameraModel::HERO12_BLACK};
+    p.family = f == 1 ? CameraFamily::Insta360 : f == 2 ? CameraFamily::GoPro : CameraFamily::DJI;
+    const CameraModel models[] = {CameraModel::X5,          CameraModel::GO3S,
+                                  CameraModel::ONE_RS,      CameraModel::HERO12_BLACK,
+                                  CameraModel::DJI_ACTION4, CameraModel::DJI_ACTION5_PRO,
+                                  CameraModel::DJI_ACTION6, CameraModel::DJI_OSMO360};
     p.model = models[m - 1];
     p.address_type = a == 1   ? AddressType::Public
                      : a == 2 ? AddressType::Random

@@ -42,6 +42,14 @@ jobs:
           # Application composition now includes model-dispatched camera support;
           # per-model source builds remain separate from physical qualification.
           PYCODE
+      - name: Link experimental DJI adapter through mixed shared host (activation disabled)
+        run: |
+          pio run -e dji_adapter_compile
+          python - <<'PYCODE'
+          import os, subprocess
+          symbols = subprocess.check_output([os.path.expanduser('~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-nm'), '-C', '.pio/build/dji_adapter_compile/firmware.elf'], text=True)
+          assert 'ridesync::DjiAdapter::begin(' in symbols, 'DJI adapter was not retained'
+          PYCODE
       - name: Link opt-in GO 3S FFFrame adapter with shared host (activation disabled)
         run: pio run -e go3s_adapter_compile
       - name: Link experimental ONE RS BE80 command profile (activation disabled)

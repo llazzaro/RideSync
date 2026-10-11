@@ -74,7 +74,7 @@ bool BleCentral::connect(uint8_t i, uint32_t gen, const BondIdentity &id,
   if (!enabled_ || stopping_ || startup_failed_ || host_.state() != BleHostState::Ready ||
       host_.fault() != BleFault::None || i >= kBlePeers || gen == 0 || !validIdentity(id) ||
       spec.service_count == 0 || spec.service_count > kBleServices || spec.endpoint_count == 0 ||
-      spec.endpoint_count > kBleEndpoints)
+      spec.endpoint_count > kBleEndpoints || (spec.require_authenticated && !spec.require_bonded))
     return false;
   for (uint8_t n = 0; n < spec.service_count; ++n) {
     if (!validUuid(spec.services[n]))
@@ -188,6 +188,21 @@ bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t 
   p.endpoint = endpoint;
   BleCommand c;
   c.phase = BlePhase::Write;
+  c.handle = p.endpoints[endpoint].value;
+  c.size = size;
+  std::memcpy(c.bytes.data(), data, size);
+  return launch(i, c, now);
+}
+bool BleCentral::writeWithoutResponse(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t size,
+                                      uint32_t now, const void *stream_owner) {
+  if (!admissionOpen(i) || peers_[i].write_owner != stream_owner ||
+      endpoint >= peers_[i].spec.endpoint_count || !data || !size || size > kBlePayload ||
+      !(peers_[i].spec.endpoints[endpoint].properties & 4))
+    return false;
+  auto &p = peers_[i];
+  p.endpoint = endpoint;
+  BleCommand c;
+  c.phase = BlePhase::WriteWithoutResponse;
   c.handle = p.endpoints[endpoint].value;
   c.size = size;
   std::memcpy(c.bytes.data(), data, size);
@@ -377,7 +392,8 @@ bool BleCentral::launch(uint8_t i, BleCommand c, uint32_t now) {
     p.deadline = now + kPhaseDeadlineMs;
   p.deferred = true;
   p.deferred_command = c;
-  if (c.phase == BlePhase::Write || c.phase == BlePhase::Subscribe) {
+  if (c.phase == BlePhase::Write || c.phase == BlePhase::WriteWithoutResponse ||
+      c.phase == BlePhase::Subscribe) {
     const auto mtu = host_.mtu(p.link.connection.load());
     if (mtu == kBleMtuReserved)
       return true;
@@ -461,13 +477,18 @@ bool BleCentral::eventPeerLink(const BleEvent &e) {
       return true;
     }
     initiating_ = kBlePeers;
-    p.phase = BlePhase::Security;
+    p.phase = p.spec.require_bonded ? BlePhase::Security : BlePhase::Services;
     p.active = false;
     return true;
   }
   if (e.kind == BleEventKind::Security) {
     if (p.link.connection.load() == kBleNoHandle)
       return true;
+    if (!p.spec.require_bonded) {
+      if (e.status)
+        retire(e.peer, BleFault::Identity, e.status);
+      return true; // Protocol authentication is owned by the camera adapter.
+    }
     if (e.status || !e.encrypted || !e.bonded ||
         (p.spec.require_authenticated && !e.authenticated) ||
         !sameIdentity(e.identity, p.identity)) {
@@ -488,7 +509,7 @@ bool BleCentral::eventNotification(const BleEvent &e) {
   if (e.kind != BleEventKind::Notification)
     return false;
   if (p.phase != BlePhase::ReadyForProfile && p.phase != BlePhase::Read &&
-      p.phase != BlePhase::Write)
+      p.phase != BlePhase::Write && p.phase != BlePhase::WriteWithoutResponse)
     return true;
   for (uint8_t n = 0; n < p.spec.endpoint_count; ++n)
     if (p.spec.endpoints[n].subscribe && p.endpoints[n].value == e.handle) {
@@ -508,7 +529,8 @@ bool BleCentral::eventComplete(const BleEvent &e) {
   if (e.kind != BleEventKind::Complete)
     return false;
   if ((p.phase == BlePhase::Subscribe || p.phase == BlePhase::VerifySubscription ||
-       p.phase == BlePhase::Read || p.phase == BlePhase::Write) &&
+       p.phase == BlePhase::Read || p.phase == BlePhase::Write ||
+       p.phase == BlePhase::WriteWithoutResponse) &&
       e.status == 0 && e.handle != p.procedure.expected_handle) {
     retire(e.peer, BleFault::Malformed);
     return true;
@@ -522,7 +544,8 @@ bool BleCentral::eventComplete(const BleEvent &e) {
     retire(e.peer, BleFault::MissingCccd);
     return true;
   }
-  if (p.phase == BlePhase::Read || p.phase == BlePhase::Write)
+  if (p.phase == BlePhase::Read || p.phase == BlePhase::Write ||
+      p.phase == BlePhase::WriteWithoutResponse)
     emit(e.peer,
          p.phase == BlePhase::Read ? BleResultKind::ReadComplete : BleResultKind::WriteComplete, e);
   p.complete = true;
@@ -644,6 +667,7 @@ void BleCentral::advance(uint8_t i, uint32_t now) {
       break;
     case BlePhase::Read:
     case BlePhase::Write:
+    case BlePhase::WriteWithoutResponse:
       p.phase = BlePhase::ReadyForProfile;
       return;
     default:

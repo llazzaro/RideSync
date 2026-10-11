@@ -211,7 +211,7 @@ void secure(FakeHost &h, BleCentral &owner, uint8_t peer, uint32_t now = 1) {
   owner.service(now);
 }
 void discover(FakeHost &h, BleCentral &owner, uint8_t peer, uint8_t properties = 16,
-              bool cccd = true, uint32_t now = 10) {
+              bool cccd = true, uint32_t now = 10, uint8_t write_properties = 8 | 2) {
   size_t current = command(h, peer, BlePhase::Services);
   BleEvent e;
   e.kind = BleEventKind::Service;
@@ -227,7 +227,7 @@ void discover(FakeHost &h, BleCentral &owner, uint8_t peer, uint8_t properties =
   e.uuid = BleUuid::shortUuid(0x72);
   e.start = 2;
   e.handle = 3;
-  e.properties = 8 | 2;
+  e.properties = write_properties;
   h.deliver(*h.contexts[current], e, false);
   e.uuid = BleUuid::shortUuid(0x73);
   e.start = 4;
@@ -867,10 +867,72 @@ void maintenance_reservation_defers_att_without_retiring_live_peer() {
   TEST_ASSERT_EQUAL(0, retired);
   TEST_ASSERT_TRUE(still_ready);
 }
+void protocol_authentication_and_write_commands_are_explicit_transport_options() {
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  auto spec = profile();
+  spec.require_bonded = false;
+  spec.require_authenticated = true;
+  const bool contradictory = owner.connect(0, 1, identity(), spec);
+  spec.require_authenticated = false;
+  spec.endpoints[0].properties = 4;
+  TEST_ASSERT_TRUE(owner.connect(0, 1, identity(), spec));
+  owner.service(0);
+  BleEvent connected;
+  connected.kind = BleEventKind::Connected;
+  connected.connection = 10;
+  h.deliver(*h.contexts[0], connected, false);
+  owner.service(1);
+  const bool without_smp = owner.phase(0) == BlePhase::Services;
+  if (!without_smp) {
+    owner.stop();
+    closed(h, owner, 0);
+    TEST_ASSERT_TRUE_MESSAGE(without_smp, "protocol pairing must not request an SMP bond");
+    return;
+  }
+  discover(h, owner, 0, 16, true, 10, 4);
+  const uint8_t value[] = {0xAA, 0x01};
+  const bool att_refused = !owner.write(0, 0, value, sizeof value, 30);
+  const bool accepted = owner.writeWithoutResponse(0, 0, value, sizeof value, 30);
+  if (!accepted) {
+    owner.stop();
+    closed(h, owner, 0);
+    TEST_ASSERT_TRUE_MESSAGE(accepted, "write command must use the declared property");
+    return;
+  }
+  const size_t write = command(h, 0, BlePhase::WriteWithoutResponse);
+  BleEvent notification;
+  notification.kind = BleEventKind::Notification;
+  notification.connection = 10;
+  notification.handle = 5;
+  notification.size = 1;
+  h.deliver(*h.contexts[0], notification, false);
+  owner.service(31);
+  const bool serial = !owner.writeWithoutResponse(0, 0, value, sizeof value, 31);
+  h.done(write);
+  h.quiet.erase(std::remove(h.quiet.begin(), h.quiet.end(), h.contexts[write]), h.quiet.end());
+  owner.service(32);
+  const bool retained = !owner.admissionOpen(0);
+  h.quiet.push_back(h.contexts[write]);
+  owner.service(33);
+  const bool ready_again = owner.admissionOpen(0);
+  owner.stop();
+  closed(h, owner, 0);
+  TEST_ASSERT_FALSE(contradictory);
+  TEST_ASSERT_TRUE(att_refused);
+  TEST_ASSERT_TRUE(serial);
+  TEST_ASSERT_TRUE(retained);
+  TEST_ASSERT_TRUE(ready_again);
+  TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::Notification));
+  TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::WriteComplete));
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(protocol_authentication_and_write_commands_are_explicit_transport_options);
   RUN_TEST(maintenance_reservation_defers_att_without_retiring_live_peer);
   RUN_TEST(disabled_and_unqualified_do_not_initialize_or_publish_health);
   RUN_TEST(one_global_connect_and_immediate_callback_are_safe);

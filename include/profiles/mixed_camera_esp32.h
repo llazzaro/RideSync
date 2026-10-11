@@ -7,6 +7,8 @@ struct MixedCameraRuntime {
   CameraManager &manager;
   RecordingManager &group;
 };
+// Call before peripheral IO; one checked internal-RAM owner for this boot.
+bool ensureMixedCameraRuntime();
 MixedCameraRuntime mixedCameraRuntime();
 } // namespace ridesync
 extern "C" ridesync::MixedCameraRuntime ridesync_mixed_camera_runtime();
