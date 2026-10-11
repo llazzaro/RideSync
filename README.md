@@ -41,8 +41,9 @@ bounded gyro attitude and gravity-free body acceleration in both offline replay
 and opt-in live MotionV5 diagnostics. Its numeric outputs remain Unreliable,
 require external stationary initialization and declared timing, and expire after
 the bounded horizon. MotionV4 trusted dynamic results remain invalid.
-Dynamic linear acceleration/lean and Insta360 GPS forwarding still need
-their required protocol or reference evidence. X5 recording and opt-in wake/recovery
+Dynamic linear acceleration/lean still needs independent reference validation;
+Insta360 GPS forwarding still needs stored-footage metadata confirmation.
+X5 recording and opt-in wake/recovery
 software are implemented; composed hardware qualification remains pending.
 Opt-in HERO12 recovery now has a
 bounded discovery/connect/query/conditional-REC software path, with physical
@@ -118,6 +119,12 @@ These statuses refer to RideSync, not claims made by upstream projects.
 See [protocol research](docs/insta360_protocol.md) and
 [limitations](docs/known_limitations.md).
 
+DJI Osmo Action 4, Action 5 Pro, Action 6 and Osmo 360 integration is in progress.
+The initial scope is pairing authorization, explicit Start/Stop, observed status
+and shared group/logging integration. Software acceptance and physical camera
+qualification are pending; DJI wake and GPS forwarding are outside this initial
+adapter scope.
+
 ## Build, flash, and monitor
 
 Use Python 3.11 for the same host environment as CI. PlatformIO Core and the
@@ -143,6 +150,32 @@ pio device monitor --port /dev/your-port --baud 115200
 Confirm the exact board variant before flashing; see [hardware](docs/hardware.md).
 The default firmware does not enable the modem or drive external control pins.
 
+### Composed camera and telemetry bench
+
+For the complete experimental workflow, follow the
+[bench commissioning guide](docs/bench_test_version.md) and create the ignored
+`include/bench_commissioning.local.h` with actual camera, board and SD namespace
+qualifications. X5 also needs its private identity/store provider. Without the
+bench provider, this image refuses startup and starts no board peripherals.
+Retain the full-flash backup and existing SD session ledger before uploading.
+
+```sh
+pio run -e bench_application
+pio run -e bench_application -t upload --upload-port /dev/your-port
+pio device monitor --port /dev/your-port --baud 115200
+```
+
+Send one uppercase command per line and wait for its report: `STATUS`, `CONNECT`,
+`REC`, `STOP`, `QUERY`, `WAKE` or `SHUTDOWN`. Boot and reconnect send no recording
+intent. `SHUTDOWN` drains local logging but does not stop camera recording; use
+`STOP` first when needed. Status separates command delivery from observed
+recording, and unsupported per-model capabilities remain explicit.
+
+Optional IMU/button/LED and live MotionV5 diagnostics require their own declared
+qualification. `STATIONARY` initializes one bounded experimental motion window
+from a stationary fixture; its numerical results remain Unreliable. Complete the
+camera and local logging bench observations before motorcycle installation.
+
 ## Configuration and controls
 
 [examples/cameras.example.json](examples/cameras.example.json) records the planned
@@ -167,6 +200,18 @@ wake/reconnect and state resynchronization respectively. The tested status
 renderer provides green ready, red recording, blinking amber partial availability,
 blue recovery and fast red error. Physical GPIO qualification and complete
 button-to-camera wiring remain open.
+
+## Motorcycle mount and enclosure
+
+The [2018 Yamaha Tracer 900 design](mechanical/tracer900_2018/README.md) provides
+three separate printable parts: a GPS bracket, the RideSync electronics enclosure
+and a removable lid. The enclosure bolts to the bracket and includes a rear
+USB-C cable opening. The mechanical directory contains the parameterized
+generator, STL bundle, assembly preview and digital geometry verification.
+
+This is a design draft. Motorcycle fit, cable alignment, fasteners, print material,
+sealing and vibration/load performance still require measurement and physical
+qualification; digital clearance checks do not establish installation readiness.
 
 ## Implementation plan
 
