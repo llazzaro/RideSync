@@ -69,13 +69,15 @@ checks are consolidated in
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
 passing synthetic tests does not promote a camera to Confirmed.
 
-| Feature | X5 | GO 3S | ONE RS | HERO12 Black |
-|---|---|---|---|---|
-| BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested |
-| Start recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested |
-| Stop recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested |
-| Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested |
-| GPS telemetry | Not tested | Not tested | Not tested | Outside scope |
+| Feature | X5 | GO 3S | ONE RS | HERO12 Black | DJI Osmo |
+|---|---|---|---|---|---|
+| BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested | Not tested |
+| Start recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested | Not tested |
+| Stop recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested | Not tested |
+| Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested | Outside scope |
+| GPS telemetry | Not tested | Not tested | Not tested | Outside scope | Outside scope |
+
+The DJI column covers [Osmo Action 4, Action 5 Pro, Action 6 and Osmo 360](docs/dji_camera_profile.md).
 
 Optional [BE80 GPS forwarding](docs/gps_forwarding.md) is implemented as a
 default-off experimental ONE RS source-profile component using the real encoder,
