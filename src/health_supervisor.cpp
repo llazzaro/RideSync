@@ -30,7 +30,7 @@ bool HealthSupervisor::begin(const std::array<WorkerPolicy, 4> &policy, uint32_t
   valid_ = true;
   return true;
 }
-void HealthSupervisor::observeWorker(size_t i, uint32_t now) {
+void HealthSupervisor::observeWorker(std::size_t i, uint32_t now) {
   const uint32_t generation = progress_[i].generation();
   // Accept forward movement across wrap, reject repeats and backward generations.
   const uint32_t delta = generation - seen_[i];
@@ -40,7 +40,7 @@ void HealthSupervisor::observeWorker(size_t i, uint32_t now) {
     started_[i] = true;
   }
 }
-void HealthSupervisor::evaluateWorker(size_t i, uint32_t now, HealthDecision &d, bool &fresh,
+void HealthSupervisor::evaluateWorker(std::size_t i, uint32_t now, HealthDecision &d, bool &fresh,
                                       bool &all_started) {
   const auto &p = policy_[i];
   if (!p.enabled)
@@ -75,10 +75,10 @@ HealthDecision HealthSupervisor::evaluate(uint32_t now) {
   if (!valid_)
     return d;
   bool fresh = true, all_started = true;
-  for (size_t i = 0; i < policy_.size(); ++i)
+  for (std::size_t i = 0; i < policy_.size(); ++i)
     evaluateWorker(i, now, d, fresh, all_started);
   uint8_t required_mask = 0;
-  for (size_t i = 0; i < policy_.size(); ++i)
+  for (std::size_t i = 0; i < policy_.size(); ++i)
     if (policy_[i].required)
       required_mask |= static_cast<uint8_t>(1U << i);
   d.execution_healthy = ((d.stalled | d.refused) & required_mask) == 0;

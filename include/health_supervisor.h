@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 namespace ridesync {
 enum class Worker : uint8_t { At, Ble, Sd, Imu, Count };
@@ -52,8 +53,8 @@ public:
 private:
   std::array<WorkerPolicy, 4> policy_{};
   std::array<HealthProgress, 4> progress_;
-  void observeWorker(size_t, uint32_t);
-  void evaluateWorker(size_t, uint32_t, HealthDecision &, bool &, bool &);
+  void observeWorker(std::size_t, uint32_t);
+  void evaluateWorker(std::size_t, uint32_t, HealthDecision &, bool &, bool &);
   std::array<uint32_t, 4> seen_{}, fed_{}, last_{};
   std::array<bool, 4> started_{};
   uint32_t boot_ = 0;
