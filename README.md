@@ -212,18 +212,6 @@ renderer provides green ready, red recording, blinking amber partial availabilit
 blue recovery and fast red error. Physical GPIO qualification and complete
 button-to-camera wiring remain open.
 
-## Motorcycle mount and enclosure
-
-The [2018 Yamaha Tracer 900 design](mechanical/tracer900_2018/README.md) provides
-three separate printable parts: a GPS bracket, the RideSync electronics enclosure
-and a removable lid. The enclosure bolts to the bracket and includes a rear
-USB-C cable opening. The mechanical directory contains the parameterized
-generator, STL bundle, assembly preview and digital geometry verification.
-
-This is a design draft. Motorcycle fit, cable alignment, fasteners, print material,
-sealing and vibration/load performance still require measurement and physical
-qualification; digital clearance checks do not establish installation readiness.
-
 ## Implementation plan
 
 The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
