@@ -69,14 +69,21 @@ checks are consolidated in
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
 passing synthetic tests does not promote a camera to Confirmed.
 
-| Feature | X5 | GO 3S | ONE RS | GoPro | DJI Osmo |
-|---|---|---|---|---|---|
-| BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested | Not tested |
-| Start recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested | Not tested |
-| Stop recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested | Not tested |
-| Wake | Observed once (isolated probe) | Not tested | Not tested | Not tested | Outside scope |
-| GPS telemetry | Not tested | Not tested | Not tested | Outside scope | Outside scope |
+| Feature | Insta360 | GoPro | DJI Osmo |
+|---|---|---|---|
+| BLE connect | X5: Observed (isolated CE80 probe); GO 3S / ONE RS: Not tested | Not tested | Not tested |
+| Start recording | X5: Observed in three cycles (isolated probe, 1.11.10); GO 3S / ONE RS: Not tested | Not tested | Not tested |
+| Stop recording | X5: Observed in three cycles (isolated probe, 1.11.10); GO 3S / ONE RS: Not tested | Not tested | Not tested |
+| Wake | X5: Observed once (isolated probe); GO 3S / ONE RS: Not tested | Not tested | Outside scope |
+| GPS telemetry | Not tested | Outside scope | Outside scope |
 
+Tested cameras (isolated probes):
+
+- **Insta360 X5**: BLE pairing/subscription, three remote Start/Stop cycles and
+  reconnect on firmware **1.11.10**, plus one observed wake. Final composed
+  hardware qualification remains pending.
+
+The Insta360 column covers X5, GO 3S and ONE RS; the GoPro column covers HERO12 Black.
 The DJI column covers [Osmo Action 4, Action 5 Pro, Action 6 and Osmo 360](docs/dji_camera_profile.md).
 
 Optional [BE80 GPS forwarding](docs/gps_forwarding.md) is implemented as a
