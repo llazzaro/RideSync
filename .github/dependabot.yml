@@ -10,8 +10,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    exclude-paths:
-      - "mechanical/**"
     open-pull-requests-limit: 2
     ignore:
       # PlatformIO Core upgrades are deliberate; keep supported security updates eligible.
@@ -20,9 +18,3 @@ updates:
           - "version-update:semver-major"
           - "version-update:semver-minor"
           - "version-update:semver-patch"
-
-  - package-ecosystem: "pip"
-    directory: "/mechanical/tracer900_2018"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 2

@@ -25,7 +25,7 @@ fi
 export RIDESYNC_CLANG_FORMAT="$format_bin"
 
 "$python_bin" scripts/check_cpp_portability.py
-"$python_bin" -m ruff check scripts test tools mechanical
+"$python_bin" -m ruff check scripts test tools
 "$python_bin" -m unittest discover -s test -v
 "$python_bin" tools/bench/sd_logging/test_run.py -v
 "$python_bin" tools/bench/x5_peripheral/test_capture.py -v

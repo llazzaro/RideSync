@@ -14,3 +14,6 @@ include/bench_commissioning.local.h
 
 # Local Graphify indexes and reports (regenerate from source).
 graphify-out/
+
+# Keep motorcycle CAD sources and printable models local.
+mechanical/tracer900_2018/
