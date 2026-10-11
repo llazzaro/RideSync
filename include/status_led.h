@@ -18,7 +18,7 @@ struct LedHealth {
 // No calls to managers, transports or watchdog policy occur here.
 LedState selectLedState(const RecordingStatus *group,
                         const std::array<Lifecycle, kMaxCameras> &lifecycle,
-                        const LedHealth &health = {});
+                        const LedHealth &health = LedHealth{});
 struct LedFrame {
   bool red = false, green = false, blue = false;
   LedFrame(bool r = false, bool g = false, bool b = false) : red(r), green(g), blue(b) {}
@@ -61,7 +61,7 @@ struct LedWiring {
   uint64_t reserved_pins = 0; // ALL active board/button/SD/IMU/bus reservations.
 };
 bool validateLedWiring(const LedWiring &, bool acknowledge_qualification,
-                       const ButtonGpioConfig &button = {});
+                       const ButtonGpioConfig &button = ButtonGpioConfig{});
 class LedGpioPort {
 public:
   virtual ~LedGpioPort() = default;
@@ -75,7 +75,7 @@ public:
   // Startup only, before output service. A repeated begin returns the latched state without IO.
   // Enabled saved button pin is checked separately, never grants qualification.
   LedBackendState begin(const LedWiring &, bool acknowledge_qualification,
-                        const ButtonGpioConfig &button = {});
+                        const ButtonGpioConfig &button = ButtonGpioConfig{});
   int write(LedFrame) override;
   LedBackendState state() const { return state_; }
   int error() const { return error_; }

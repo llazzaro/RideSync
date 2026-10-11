@@ -7,7 +7,7 @@ namespace ridesync {
 class WakePreparation final : public RecordingPreparation {
 public:
   WakePreparation(WakeManager &, Clock &, const std::array<WakePeerConfig, kWakePeers> &,
-                  uint32_t generation, WakePolicy = {});
+                  uint32_t generation, WakePolicy policy = WakePolicy{});
   CameraError prepare(size_t) override;
   RecordingPreparationResult prepared(size_t) override;
   void retire(size_t) override;
@@ -30,6 +30,7 @@ private:
   uint32_t generation_;
   WakePolicy policy_;
   std::array<Peer, kWakePeers> peers_{};
+  bool priorOperationReleased(size_t) const;
   bool matches(size_t) const;
 };
 } // namespace ridesync

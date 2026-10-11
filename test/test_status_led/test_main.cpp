@@ -69,61 +69,35 @@ LedWiring wiring(LedMode mode = LedMode::Mono) {
   return c;
 }
 static void invalidateWiring(int scenario, LedWiring &c, bool &ack, ButtonGpioConfig &button) {
-  switch (scenario) {
-  case 0:
-    c.mode = LedMode::Disabled;
-    break;
-  case 1:
-    c.board_qualified = false;
-    break;
-  case 2:
-    ack = false;
-    break;
-  case 3:
-    c.reservations_complete = false;
-    break;
-  case 4:
-    c.pins[1] = 18;
-    break;
-  case 5:
-    c.polarity[1] = LedPolarity::Unspecified;
-    break;
-  case 6:
-    c.reserved_pins = uint64_t(1) << 19;
-    break;
-  case 7:
-    button.enabled = true;
-    button.pin = 19;
-    break;
-  case 8:
-    c.pins[0] = -1;
-    break;
-  case 9:
-    c.pins[0] = 34;
-    break;
-  case 10:
-    c.pins[0] = 6;
-    break;
-  case 11:
-    c.pins[0] = 16;
-    break;
-  case 12:
-    c.pins[0] = 26;
-    break;
-  case 13:
-    c.mode = static_cast<LedMode>(99);
-    break;
-  case 14:
-    c.polarity[0] = static_cast<LedPolarity>(99);
-    break;
-  case 15:
-    c.mode = LedMode::Mono; // Accidental remaining RGB pins cannot be ignored.
-    break;
-  case 16:
-    button.enabled = true;
-    button.pin = -1;
-    break;
-  }
+  void (*const mutations[])(LedWiring &, bool &, ButtonGpioConfig &) = {
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.mode = LedMode::Disabled; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.board_qualified = false; },
+      [](LedWiring &, bool &ack, ButtonGpioConfig &) { ack = false; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.reservations_complete = false; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.pins[1] = 18; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.polarity[1] = LedPolarity::Unspecified; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.reserved_pins = uint64_t(1) << 19; },
+      [](LedWiring &, bool &, ButtonGpioConfig &button) {
+        button.enabled = true;
+        button.pin = 19;
+      },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.pins[0] = -1; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.pins[0] = 34; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.pins[0] = 6; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.pins[0] = 16; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.pins[0] = 26; },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) { c.mode = static_cast<LedMode>(99); },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) {
+        c.polarity[0] = static_cast<LedPolarity>(99);
+      },
+      [](LedWiring &c, bool &, ButtonGpioConfig &) {
+        c.mode = LedMode::Mono; // Accidental remaining RGB pins cannot be ignored.
+      },
+      [](LedWiring &, bool &, ButtonGpioConfig &button) {
+        button.enabled = true;
+        button.pin = -1;
+      }};
+  mutations[scenario](c, ack, button);
 }
 
 void backend_refuses_without_any_gpio() {

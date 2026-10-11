@@ -1,3 +1,4 @@
+#include "../fixtures/telemetry/csv_rows.h"
 #include "camera_event_logger.h"
 #include "telemetry_admission.h"
 #include <sstream>
@@ -30,22 +31,7 @@ static void drain(Storage &storage) {
   for (unsigned i = 0; i < 500; ++i)
     storage.workerStep();
 }
-static std::vector<std::vector<std::string>> cameraRows(const std::string &text) {
-  std::vector<std::vector<std::string>> rows;
-  std::istringstream lines(text);
-  std::string line;
-  while (std::getline(lines, line)) {
-    if (line.compare(0, 7, "camera,") != 0)
-      continue;
-    std::vector<std::string> row;
-    std::istringstream fields(line);
-    std::string field;
-    while (std::getline(fields, field, ','))
-      row.push_back(field);
-    rows.push_back(row);
-  }
-  return rows;
-}
+using telemetry_fixture::cameraRows;
 struct IntentAuditEvidence {
   bool queued = false, start_attempt = false, start_ack = false, stop_attempt = false,
        refused = false;

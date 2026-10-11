@@ -87,6 +87,8 @@ private:
   bool scanSlot(unsigned, bool &, bool &);
   bool mergeSlot(unsigned, SourceConfig &, uint64_t, PersistResult);
   PersistResult failedWrite();
+  bool blockFailedScan();
+  bool saveDue(uint32_t now) const;
   bool unchangedPayload() const;
   bool verifyWrite(unsigned, const ConfigRecord &, StoreResult);
   ConfigStore &store_;

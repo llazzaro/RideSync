@@ -40,12 +40,20 @@ constexpr uint8_t kName[] = {0x14, 0x09, 'I', 'n', 's', 't', 'a', '3', '6', '0',
                              'G',  'P',  'S', ' ', 'R', 'e', 'm', 'o', 't', 'e'};
 } // namespace
 uint32_t Esp32X5Peripheral::now() { return uint32_t(esp_timer_get_time() / 1000); }
+namespace {
+bool securityEvent(int type) {
+  return type == BLE_GAP_EVENT_PASSKEY_ACTION || type == BLE_GAP_EVENT_ENC_CHANGE;
+}
+bool qualifiedPeripheral(const X5Qualification &q) {
+  return q.enabled && q.identity.verified && q.firmware_size &&
+         q.firmware_size < q.firmware.size() && q.store.qualification_record &&
+         q.display.profile == insta360::Ce80DisplayProfile::X5CapturedDisplayV1 &&
+         (q.identity.type == IdentityType::Public || q.identity.type == IdentityType::RandomStatic);
+}
+} // namespace
 bool Esp32X5Peripheral::configure(const X5Qualification &q) {
   Guard lock(*this);
-  if (worker_created_ || !q.enabled || !q.identity.verified || !q.firmware_size ||
-      q.firmware_size >= q.firmware.size() || !q.store.qualification_record ||
-      q.display.profile != insta360::Ce80DisplayProfile::X5CapturedDisplayV1 ||
-      (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic))
+  if (worker_created_ || !qualifiedPeripheral(q))
     return false;
   auto &host = Esp32BleHost::instance();
   if (!host.configureRestore(q.store) || !host.configurePeripheral(this, registration))
@@ -209,6 +217,11 @@ int Esp32X5Peripheral::registerServices() {
     rc = ble_gatts_add_svcs(services_.data());
   return rc;
 }
+int Esp32X5Peripheral::readAttribute(ble_gatt_access_ctxt *ctx, const Attribute &attribute) {
+  return os_mbuf_append(ctx->om, attribute.read.data(), attribute.read_size) == 0
+             ? 0
+             : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
 int Esp32X5Peripheral::access(uint16_t connection, uint16_t handle, ble_gatt_access_ctxt *ctx,
                               void *arg) {
   auto &attribute = *static_cast<Attribute *>(arg);
@@ -218,9 +231,7 @@ int Esp32X5Peripheral::access(uint16_t connection, uint16_t handle, ble_gatt_acc
   if (!p.policy_.alive() || connection != p.cleanup_handle_ || handle != attribute.handle)
     return BLE_ATT_ERR_UNLIKELY;
   if (ctx->op == BLE_GATT_ACCESS_OP_READ_CHR)
-    return os_mbuf_append(ctx->om, attribute.read.data(), attribute.read_size) == 0
-               ? 0
-               : BLE_ATT_ERR_INSUFFICIENT_RES;
+    return readAttribute(ctx, attribute);
   if (ctx->op != BLE_GATT_ACCESS_OP_WRITE_CHR)
     return BLE_ATT_ERR_UNLIKELY;
   if (attribute.uuid.value != 0xce81)
@@ -272,6 +283,15 @@ void Esp32X5Peripheral::connected(ble_gap_event *event, const ble_gap_conn_desc 
   emit(X5InputKind::Connected);
   return;
 }
+void Esp32X5Peripheral::subscribed(const ble_gap_event *event) {
+  if (event->subscribe.conn_handle == cleanup_handle_ &&
+      event->subscribe.attr_handle == attributes_[1].handle) {
+    policy_.subscription(event->subscribe.cur_notify != 0);
+    if (policy_.subscribed())
+      connecting_ = false;
+    emit(policy_.subscribed() ? X5InputKind::Subscribed : X5InputKind::Unsubscribed);
+  }
+}
 int Esp32X5Peripheral::gap(ble_gap_event *event, void *arg) {
   auto &p = *static_cast<Esp32X5Peripheral *>(arg);
   CallbackGuard callback(p);
@@ -281,18 +301,18 @@ int Esp32X5Peripheral::gap(ble_gap_event *event, void *arg) {
   if (event->type == BLE_GAP_EVENT_CONNECT && !event->connect.status)
     lookup = ble_gap_conn_find(event->connect.conn_handle, &desc);
   Guard lock(p);
+  if (securityEvent(event->type)) {
+    p.policy_.seal();
+    p.stop_pending_ = true;
+    p.emit(X5InputKind::Fault, BLE_HS_EDISABLED);
+    return 0;
+  }
   switch (event->type) {
   case BLE_GAP_EVENT_CONNECT:
     p.connected(event, desc, lookup);
     break;
   case BLE_GAP_EVENT_SUBSCRIBE:
-    if (event->subscribe.conn_handle == p.cleanup_handle_ &&
-        event->subscribe.attr_handle == p.attributes_[1].handle) {
-      p.policy_.subscription(event->subscribe.cur_notify != 0);
-      if (p.policy_.subscribed())
-        p.connecting_ = false;
-      p.emit(p.policy_.subscribed() ? X5InputKind::Subscribed : X5InputKind::Unsubscribed);
-    }
+    p.subscribed(event);
     break;
   case BLE_GAP_EVENT_DISCONNECT:
     if (event->disconnect.conn.conn_handle == p.cleanup_handle_) {
@@ -311,12 +331,6 @@ int Esp32X5Peripheral::gap(ble_gap_event *event, void *arg) {
     p.stop_pending_ = true;
     p.emit(X5InputKind::Fault, BLE_HS_EDISABLED);
     return BLE_GAP_REPEAT_PAIRING_IGNORE;
-  case BLE_GAP_EVENT_PASSKEY_ACTION:
-  case BLE_GAP_EVENT_ENC_CHANGE:
-    p.policy_.seal();
-    p.stop_pending_ = true;
-    p.emit(X5InputKind::Fault, BLE_HS_EDISABLED);
-    break;
   default:
     break;
   }
@@ -391,6 +405,16 @@ void Esp32X5Peripheral::cleanup() {
   const int rc = stop ? ble_gap_adv_stop() : ble_gap_terminate(handle, BLE_ERR_REM_USER_CONN_TERM);
   cleanupReturned(stop, rc);
 }
+bool Esp32X5Peripheral::sendAdmission(const X5ShutterRequest &request) {
+  return request.observation_sequence != 0 && sequence_ == request.observation_sequence &&
+         now() - request.observation_ms <= 5000 && !loss_revocation_ && !stop_pending_ &&
+         Esp32BleHost::instance().fault() == BleFault::None &&
+         nvsBootStatus().persistenceAllowed() && policy_.admit(now());
+}
+bool Esp32X5Peripheral::advertisingAdmission(int rc) const {
+  return !rc && connecting_ && !stop_pending_ && !due(now(), deadline_) &&
+         Esp32BleHost::instance().fault() == BleFault::None && nvsBootStatus().persistenceAllowed();
+}
 void Esp32X5Peripheral::send() {
   X5ShutterRequest request;
   {
@@ -405,11 +429,7 @@ void Esp32X5Peripheral::send() {
   bool admitted;
   {
     Guard lock(*this);
-    admitted = mbuf && request.observation_sequence != 0 &&
-               sequence_ == request.observation_sequence &&
-               now() - request.observation_ms <= 5000 && !loss_revocation_ && !stop_pending_ &&
-               Esp32BleHost::instance().fault() == BleFault::None &&
-               nvsBootStatus().persistenceAllowed() && policy_.admit(now());
+    admitted = mbuf && sendAdmission(request);
     cutoff = sequence_;
     if (!admitted)
       policy_.cancel(request.token);
@@ -457,8 +477,7 @@ void Esp32X5Peripheral::submitAdvertising() {
   uint32_t remaining = 0;
   {
     Guard lock(*this);
-    admit = !rc && connecting_ && !stop_pending_ && !due(now(), deadline_) &&
-            host.fault() == BleFault::None && nvsBootStatus().persistenceAllowed();
+    admit = advertisingAdmission(rc);
     if (admit) {
       remaining = deadline_ - now();
       gap_entered_ = advertising_ = true;

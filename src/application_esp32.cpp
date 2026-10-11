@@ -32,6 +32,11 @@ bool qualifiedResetIdentity(const Hero12Qualification &q) {
          q.identity.verified &&
          (q.identity.type == IdentityType::Public || q.identity.type == IdentityType::RandomStatic);
 }
+StartupState configurationState(const SettingsSnapshot &settings) {
+  return !settings.completed  ? StartupState::ConfigTimedOut
+         : settings.effective ? StartupState::ConfigReady
+                              : StartupState::ConfigUnavailable;
+}
 DeviceHealth modemHealth(const ModemSnapshot &gps) {
   if (gps.validity == FixValidity::Valid)
     return DeviceHealth::Ok;
@@ -98,9 +103,7 @@ std::array<WorkerPolicy, 4> SupervisedEsp32Application::prepare(const SettingsSn
     return policy_;
   prepared_ = true;
   supervisor_ = &supervisor;
-  configuration_ = !settings.completed  ? StartupState::ConfigTimedOut
-                   : settings.effective ? StartupState::ConfigReady
-                                        : StartupState::ConfigUnavailable;
+  configuration_ = configurationState(settings);
   epoch_ = settings.epoch;
   generation_ = settings.generation;
   auto &q = qualification_;
@@ -128,14 +131,7 @@ std::array<WorkerPolicy, 4> SupervisedEsp32Application::prepare(const SettingsSn
   configureWorkerPolicies(local, safe);
   return policy_;
 }
-void SupervisedEsp32Application::launch() {
-  if (!prepared_ || launched_)
-    return;
-  launched_ = true;
-  telemetry_ = new (&telemetry_memory_)
-      Esp32LocalTelemetry(uart_, spi_, wire_, qualification_, motion_source_, &cameras_runtime_);
-  telemetry_->owner().configurationStartup(configuration_);
-  telemetry_->owner().currentAdmission(camera_allowed_, qualification_.runtime.safe_mode);
+void SupervisedEsp32Application::launchControl() {
   if (button_allowed_) {
     control_ =
         new (&control_memory_) Esp32HandlebarControl(*telemetry_, handlebar_, &cameras_runtime_);
@@ -144,6 +140,16 @@ void SupervisedEsp32Application::launch() {
       telemetry_->owner().currentAdmission(false, qualification_.runtime.safe_mode);
     }
   }
+}
+void SupervisedEsp32Application::launch() {
+  if (!prepared_ || launched_)
+    return;
+  launched_ = true;
+  telemetry_ = new (&telemetry_memory_)
+      Esp32LocalTelemetry(uart_, spi_, wire_, qualification_, motion_source_, &cameras_runtime_);
+  telemetry_->owner().configurationStartup(configuration_);
+  telemetry_->owner().currentAdmission(camera_allowed_, qualification_.runtime.safe_mode);
+  launchControl();
   const bool local = telemetry_->start();
   if (local && camera_allowed_)
     ble_started_ = cameras_runtime_.adapter.start(true, true);
@@ -295,10 +301,7 @@ bool SupervisedEsp32Application::serviceResetProof() {
   return true;
 }
 
-bool SupervisedEsp32Application::serviceResetHost(uint32_t now) {
-  if (!host_pending_)
-    return true;
-  const auto result = Esp32BleHost::instance().bondResetResult(reset_host_operation_, now);
+void SupervisedEsp32Application::observeHostReset(const BleBondResetResult &result) {
   reset_.mutation = reset_.mutation || result.mutation;
   reset_.requalification_required =
       reset_.requalification_required || result.requalification_required;
@@ -308,6 +311,12 @@ bool SupervisedEsp32Application::serviceResetHost(uint32_t now) {
   // Merge that evidence before either held or final host-resource release.
   if (reset_.finished && reset_.mutation)
     reset_.outcome = BondOutcome::Indeterminate;
+}
+bool SupervisedEsp32Application::serviceResetHost(uint32_t now) {
+  if (!host_pending_)
+    return true;
+  const auto result = Esp32BleHost::instance().bondResetResult(reset_host_operation_, now);
+  observeHostReset(result);
   if (!result.releasable)
     return false;
   host_pending_ = false;
@@ -414,18 +423,7 @@ void SupervisedEsp32Application::publish(Worker w, uint32_t n, DeviceHealth outc
   if (done)
     p.finished();
 }
-void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool fault) {
-  if (!telemetry_)
-    return;
-  telemetry_->owner().supervision(stalls, refused, fault);
-  if (stalls || refused || fault) {
-    telemetry_->owner().currentAdmission(false, safe_mode_);
-    reset_current_ = false;
-    revokeReset();
-  }
-  serviceReset();
-  telemetry_->service(); // Exactly one bound application/camera/admission pass.
-  const auto s = telemetry_->status();
+void SupervisedEsp32Application::publishWorkers(const LocalTelemetryStatus &s) {
   const bool no_session =
       s.phase == TelemetryPhase::Stopping || s.phase == TelemetryPhase::Finished;
   publish(Worker::At, s.at_completed, modemHealth(s.gps),
@@ -440,6 +438,20 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
     const auto &p = cameras_runtime_.adapter.progress();
     publish(Worker::Ble, p.generation(), p.outcome(), p.isFinished());
   }
+}
+void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool fault) {
+  if (!telemetry_)
+    return;
+  telemetry_->owner().supervision(stalls, refused, fault);
+  if (stalls || refused || fault) {
+    telemetry_->owner().currentAdmission(false, safe_mode_);
+    reset_current_ = false;
+    revokeReset();
+  }
+  serviceReset();
+  telemetry_->service(); // Exactly one bound application/camera/admission pass.
+  const auto s = telemetry_->status();
+  publishWorkers(s);
 }
 } // namespace ridesync
 extern "C" ridesync::SupervisedEsp32Application &ridesync_supervised_application(

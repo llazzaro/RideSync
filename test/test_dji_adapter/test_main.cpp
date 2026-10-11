@@ -124,6 +124,42 @@ struct Host : BleHost {
     adapter_fixture::notify(*this, peer, p, from, size);
   }
 };
+struct DjiReplyFixture {
+  Host &host;
+  explicit DjiReplyFixture(Host &h) : host(h) {}
+  void replyConnection(uint8_t peer, uint16_t seq) {
+    if (!host.drop)
+      host.notify(peer, host.response(host.wrong_seq ? seq + 1 : seq, 0, 0x19));
+    if (host.grant_enabled) {
+      auto g = host.grant(host.model, host.denied);
+      if (host.fragment) {
+        host.notify(peer, g, 0, 7);
+        host.notify(peer, g, 7);
+      } else
+        host.notify(peer, g);
+    }
+  }
+  void reply(const BleCommand &c, BleContext &x) {
+    const uint16_t seq = c.bytes[8] | (c.bytes[9] << 8);
+    if (c.bytes[3] == 0x20)
+      return;
+    if (c.bytes[12] == 0 && c.bytes[13] == 0x19) {
+      replyConnection(x.peer, seq);
+    } else if (c.bytes[12] == 0x1d && c.bytes[13] == 5) {
+      if (host.status_enabled)
+        host.notify(x.peer, host.status(++host.next_status));
+    } else if (!host.drop)
+      host.notify(x.peer, host.response(seq, c.bytes[12], c.bytes[13]));
+  }
+  void writeResponse(size_t n, const BleCommand &c, BleContext &x, BleEvent &) {
+    if (host.ack_first)
+      reply(c, x);
+    host.complete(n);
+    if (!host.ack_first)
+      reply(c, x);
+  }
+};
+
 struct Rig {
   Host host;
   Time clock;
@@ -196,36 +232,9 @@ struct Rig {
     if (c.phase == BlePhase::VerifySubscription)
       subscribed[x.peer] = true;
   }
-  void replyConnection(uint8_t peer, uint16_t seq) {
-    if (!host.drop)
-      host.notify(peer, host.response(host.wrong_seq ? seq + 1 : seq, 0, 0x19));
-    if (host.grant_enabled) {
-      auto g = host.grant(host.model, host.denied);
-      if (host.fragment) {
-        host.notify(peer, g, 0, 7);
-        host.notify(peer, g, 7);
-      } else
-        host.notify(peer, g);
-    }
-  }
-  void reply(const BleCommand &c, BleContext &x) {
-    const uint16_t seq = c.bytes[8] | (c.bytes[9] << 8);
-    if (c.bytes[3] == 0x20)
-      return;
-    if (c.bytes[12] == 0 && c.bytes[13] == 0x19) {
-      replyConnection(x.peer, seq);
-    } else if (c.bytes[12] == 0x1d && c.bytes[13] == 5) {
-      if (host.status_enabled)
-        host.notify(x.peer, host.status(++host.next_status));
-    } else if (!host.drop)
-      host.notify(x.peer, host.response(seq, c.bytes[12], c.bytes[13]));
-  }
-  void writeResponse(size_t n, const BleCommand &c, BleContext &x, BleEvent &) {
-    if (host.ack_first)
-      reply(c, x);
-    host.complete(n);
-    if (!host.ack_first)
-      reply(c, x);
+
+  void writeResponse(size_t n, const BleCommand &c, BleContext &x, BleEvent &e) {
+    DjiReplyFixture(host).writeResponse(n, c, x, e);
   }
   void handle(size_t n) { adapter_fixture::handle(*this, n, BlePhase::WriteWithoutResponse); }
   void pump() { adapter_fixture::pump(*this); }

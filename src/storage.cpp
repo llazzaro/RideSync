@@ -752,6 +752,22 @@ bool Storage::formatHeader() {
   offset_ = 0;
   return c.ok;
 }
+void Storage::mountLog() {
+  ++mounts_;
+  if (sink_.mount())
+    stage_ = Stage::Open;
+  else if (mounts_ >= max_mounts_)
+    fail();
+}
+void Storage::drainTerminalRows() {
+  if (terminal_.load()) {
+    // Drain only published slots; a racing producer publication is picked up on
+    // the next step. No queue slot or producer mutex is held across sink calls.
+    uint32_t r = read_.load(), w = write_.load(std::memory_order_acquire);
+    add(lost_, w - r);
+    read_.store(w, std::memory_order_release);
+  }
+}
 void Storage::workerStep() {
   if (!valid_) {
     terminal_.store(true);
@@ -761,11 +777,7 @@ void Storage::workerStep() {
   }
   switch (stage_) {
   case Stage::Mount:
-    ++mounts_;
-    if (sink_.mount())
-      stage_ = Stage::Open;
-    else if (mounts_ >= max_mounts_)
-      fail();
+    mountLog();
     break;
   case Stage::Open:
     openLog();
@@ -787,13 +799,7 @@ void Storage::workerStep() {
   case Stage::Done:
     break;
   }
-  if (terminal_.load()) {
-    // Drain only published slots; a racing producer publication is picked up on
-    // the next step. No queue slot or producer mutex is held across sink calls.
-    uint32_t r = read_.load(), w = write_.load(std::memory_order_acquire);
-    add(lost_, w - r);
-    read_.store(w, std::memory_order_release);
-  }
+  drainTerminalRows();
   add(progress_);
 }
 } // namespace ridesync

@@ -64,6 +64,11 @@ public:
       reserved_ = false;
       return result;
     }
+    return submitStartup(op, now, result);
+  }
+
+private:
+  WakeRadioResult submitStartup(const WakeOperation &op, uint32_t now, WakeRadioResult result) {
     const auto submit = insta360WakeRadio().begin(op, bytes_, advertising_deadline_, now);
     if (submit == WakeSubmit::Accepted) {
       delegated_ = true;
@@ -76,8 +81,6 @@ public:
     }
     return result;
   }
-
-private:
   WakeRadioResult pollDelegated(const WakeOperation &op, uint32_t now) {
     auto result = insta360WakeRadio().poll(op, now);
     if (sameWakeOperation(result.operation, op) && result.terminal && result.released)

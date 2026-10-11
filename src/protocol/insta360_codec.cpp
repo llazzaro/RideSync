@@ -13,6 +13,11 @@ Ce80DisplayResult displayError(Ce80DisplayError error) {
   return result;
 }
 bool digit(uint8_t value) { return value >= '0' && value <= '9'; }
+size_t digitsEnd(const uint8_t *text, size_t size, size_t at) {
+  while (at < size && digit(text[at]))
+    ++at;
+  return at;
+}
 // No numeric conversion/overflow: remaining runtime/count never proves state.
 bool remainingText(const uint8_t *text, size_t size) {
   size_t at = 0;
@@ -20,8 +25,7 @@ bool remainingText(const uint8_t *text, size_t size) {
     ++at;
   const bool padded = at != 0;
   const size_t begin = at;
-  while (at < size && digit(text[at]))
-    ++at;
+  at = digitsEnd(text, size, at);
   if (at == begin)
     return false;
   if (at == size)
@@ -29,8 +33,7 @@ bool remainingText(const uint8_t *text, size_t size) {
   if (text[at++] != 'h')
     return false;
   const size_t minutes = at;
-  while (at < size && digit(text[at]))
-    ++at;
+  at = digitsEnd(text, size, at);
   return at > minutes && at + 1 == size && text[at] == 'm';
 }
 Ce80DisplayResult decodeSettings(const uint8_t *text, size_t text_size) {
@@ -71,6 +74,13 @@ Ce80DisplayResult decodeElapsed(const uint8_t *text) {
   result.elapsed_seconds = hours * 3600 + minutes * 60 + seconds;
   return result;
 }
+Ce80DisplayError validateDisplayHeader(const uint8_t *data, size_t size) {
+  if (data[0] != 0xfe || data[1] != 0xef || data[2] != 0xfe)
+    return Ce80DisplayError::UnsupportedHeader;
+  if (size != size_t(data[5]) + 6)
+    return Ce80DisplayError::LengthMismatch;
+  return Ce80DisplayError::None;
+}
 Ce80DisplayError validateDisplayEnvelope(const Ce80DisplayConfig &config, Ce80Direction direction,
                                          const uint8_t *data, size_t size) {
   if (config.profile == Ce80DisplayProfile::Disabled)
@@ -83,24 +93,18 @@ Ce80DisplayError validateDisplayEnvelope(const Ce80DisplayConfig &config, Ce80Di
     return Ce80DisplayError::InvalidSize;
   if (!data)
     return Ce80DisplayError::InvalidBuffer;
-  if (data[0] != 0xfe || data[1] != 0xef || data[2] != 0xfe)
-    return Ce80DisplayError::UnsupportedHeader;
-  if (size != size_t(data[5]) + 6)
-    return Ce80DisplayError::LengthMismatch;
-  return Ce80DisplayError::None;
+  return validateDisplayHeader(data, size);
 }
-} // namespace
-Ce80DisplayResult decodeCe80Display(const Ce80DisplayConfig &config, Ce80Direction direction,
-                                    const uint8_t *data, size_t size) {
-  const auto error = validateDisplayEnvelope(config, direction, data, size);
-  if (error != Ce80DisplayError::None)
-    return displayError(error);
+bool validDisplaySchema(const uint8_t *data, size_t size) {
+  return size >= 10 && (data[4] == 0x80 || data[4] == 0x81) && data[6] == 1;
+}
+Ce80DisplayResult decodeDisplayBody(const uint8_t *data, size_t size) {
   Ce80DisplayResult result;
   result.error = Ce80DisplayError::None;
   // Opaque status/handshake/other bodies are neither ACK nor state evidence.
   if (data[3] != 0x10)
     return result;
-  if (size < 10 || (data[4] != 0x80 && data[4] != 0x81) || data[6] != 1)
+  if (!validDisplaySchema(data, size))
     return displayError(Ce80DisplayError::UnsupportedDisplay);
   // Byte7 is display layout, not a state/sequence/ACK field.
   const uint8_t *text = data + 10;
@@ -116,6 +120,14 @@ Ce80DisplayResult decodeCe80Display(const Ce80DisplayConfig &config, Ce80Directi
     return result;
   }
   return displayError(Ce80DisplayError::UnsupportedDisplay);
+}
+} // namespace
+Ce80DisplayResult decodeCe80Display(const Ce80DisplayConfig &config, Ce80Direction direction,
+                                    const uint8_t *data, size_t size) {
+  const auto error = validateDisplayEnvelope(config, direction, data, size);
+  if (error != Ce80DisplayError::None)
+    return displayError(error);
+  return decodeDisplayBody(data, size);
 }
 } // namespace insta360
 } // namespace ridesync

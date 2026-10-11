@@ -6,13 +6,44 @@
 
 namespace sd_bench {
 enum class Mode { Normal, PowerCut };
-// Single control context only. Owner, Clock, and this object have boot lifetime.
-// After start, this object is never destroyed, including on cancellation or a
-// blocked SDK call. Only the owner worker touches the SD/filesystem.
-template <typename Owner> class Run {
+// Status published by the control-context lifecycle, independent of worker ownership.
+class RunStatus {
 public:
   static constexpr uint32_t kRows = 4, kRowPeriodMs = 1000;
   static constexpr uint32_t kStartupMs = 15000, kOverallMs = 30000;
+  bool used() const { return used_; }
+  bool workerStarted() const { return started_; }
+  bool done() const { return done_; }
+  bool failed() const { return failed_; }
+  bool stopping() const { return stopping_; }
+  uint32_t rows() const { return rows_; }
+  uint64_t lastRowMs() const { return last_row_ms_; }
+  const char *reason() const { return reason_; }
+  Mode mode() const { return mode_; }
+  uint32_t rowLimit() const { return mode_ == Mode::PowerCut ? 60 : kRows; }
+  uint32_t rowPeriodMs() const { return kRowPeriodMs; }
+  uint32_t startupMs() const { return kStartupMs; }
+  uint32_t overallMs() const { return mode_ == Mode::PowerCut ? 75000 : kOverallMs; }
+
+protected:
+  uint32_t rows_ = 0;
+  uint64_t last_row_ms_ = 0;
+  bool used_ = false, started_ = false, stopping_ = false, failed_ = false, done_ = false;
+  const char *reason_ = "none";
+  Mode mode_ = Mode::Normal;
+};
+// Final snapshots are checked only after the worker's acquire completion barrier.
+inline bool completedRows(const ridesync::StorageHealth &h, uint32_t expected) {
+  return h.accepted == expected && h.written == expected && h.flushed == expected;
+}
+template <typename Owner> inline bool cleanFinish(const ridesync::StorageHealth &h, Owner &owner) {
+  return !h.terminal && !h.dropped && !h.rejected && !h.lost && !owner.ioError();
+}
+// Single control context only. Owner, Clock, and this object have boot lifetime.
+// After start, this object is never destroyed, including on cancellation or a
+// blocked SDK call. Only the owner worker touches the SD/filesystem.
+template <typename Owner> class Run : public RunStatus {
+public:
   Run(Owner &owner, ridesync::Clock &clock) : owner_(owner), clock_(clock) {}
   bool start(uint32_t now, Mode mode = Mode::Normal) {
     if (used_)
@@ -51,19 +82,6 @@ public:
   ridesync::StorageHealth health() const {
     return storage_ ? storage_->health() : ridesync::StorageHealth{};
   }
-  bool used() const { return used_; }
-  bool workerStarted() const { return started_; }
-  bool done() const { return done_; }
-  bool failed() const { return failed_; }
-  bool stopping() const { return stopping_; }
-  uint32_t rows() const { return rows_; }
-  uint64_t lastRowMs() const { return last_row_ms_; }
-  const char *reason() const { return reason_; }
-  Mode mode() const { return mode_; }
-  uint32_t rowLimit() const { return mode_ == Mode::PowerCut ? 60 : kRows; }
-  uint32_t rowPeriodMs() const { return kRowPeriodMs; }
-  uint32_t startupMs() const { return kStartupMs; }
-  uint32_t overallMs() const { return mode_ == Mode::PowerCut ? 75000 : kOverallMs; }
 
 private:
   bool withinDeadline(uint32_t now, const ridesync::StorageHealth &h) {
@@ -104,17 +122,11 @@ private:
     // Recopy AFTER the acquire lifetime barrier, including the final close
     // error: a pre-barrier snapshot can miss writes/flush/close publication.
     const auto final = health();
-    if (rows_ == rowLimit() && stopping_ && final.stopped && completedRows(final) &&
-        cleanFinish(final))
+    if (rows_ == rowLimit() && stopping_ && final.stopped && completedRows(final, rowLimit()) &&
+        cleanFinish(final, owner_))
       done_ = true;
     else
       fail("final_verification_failed");
-  }
-  bool completedRows(const ridesync::StorageHealth &h) const {
-    return h.accepted == rowLimit() && h.written == rowLimit() && h.flushed == rowLimit();
-  }
-  bool cleanFinish(const ridesync::StorageHealth &h) const {
-    return !h.terminal && !h.dropped && !h.rejected && !h.lost && !owner_.ioError();
   }
   void enqueueRow(uint32_t now) {
     if (!stopping_ && uint32_t(now - next_row_) >= kRowPeriodMs) {
@@ -148,10 +160,6 @@ private:
   alignas(ridesync::Storage) unsigned char storage_memory_[sizeof(ridesync::Storage)];
   ridesync::SessionClock *session_clock_ = nullptr;
   ridesync::Storage *storage_ = nullptr;
-  uint32_t began_ = 0, next_row_ = 0, rows_ = 0;
-  uint64_t last_row_ms_ = 0;
-  bool used_ = false, started_ = false, stopping_ = false, failed_ = false, done_ = false;
-  const char *reason_ = "none";
-  Mode mode_ = Mode::Normal;
+  uint32_t began_ = 0, next_row_ = 0;
 };
 } // namespace sd_bench

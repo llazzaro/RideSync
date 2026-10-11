@@ -47,8 +47,7 @@ ConfigResult CameraManager::configure(const SourceConfig &c) {
     peers_[i].state.lifecycle = config_.cameras[i].enabled ? Lifecycle::Idle : Lifecycle::Disabled;
   return result;
 }
-CameraError CameraManager::operationAdmission(size_t i, Operation op) const {
-  const auto &p = peers_[i];
+CameraError CameraManager::connectionAdmission(const Peer &p, Operation op) const {
   if (op == Operation::Connect) {
     if (p.active || connected(p.state.lifecycle))
       return CameraError::Busy;
@@ -58,6 +57,14 @@ CameraError CameraManager::operationAdmission(size_t i, Operation op) const {
     if (capability(p.state.capabilities, op) != CapabilityState::Supported)
       return CameraError::Unsupported;
   }
+
+  return CameraError::None;
+}
+CameraError CameraManager::operationAdmission(size_t i, Operation op) const {
+  const auto &p = peers_[i];
+  const auto connection = connectionAdmission(p, op);
+  if (connection != CameraError::None)
+    return connection;
   if (p.active && p.queued == kQueueDepth)
     return CameraError::QueueFull;
   if (!p.state.token.hasRoom() || p.next_intent_id == UINT32_MAX)
@@ -167,6 +174,10 @@ void CameraManager::next(size_t i) {
   --p.queued;
   start(i, queued.operation, queued.intent_id);
 }
+bool CameraManager::cancellationKeepsLink(const Peer &p) const {
+  return p.state.lifecycle == Lifecycle::Ready ||
+         (connected(p.state.lifecycle) && p.current != Operation::Connect);
+}
 CameraError CameraManager::cancel(size_t i) {
   if (i >= size())
     return CameraError::InvalidPeer;
@@ -177,8 +188,7 @@ CameraError CameraManager::cancel(size_t i) {
     transport_.cancel(i, p.state.token);
   if (audit_ && p.active)
     audit_->cancelled(i, p.current, p.state.token, p.active_intent_id);
-  const bool link = p.state.lifecycle == Lifecycle::Ready ||
-                    (connected(p.state.lifecycle) && p.current != Operation::Connect);
+  const bool link = cancellationKeepsLink(p);
   if (p.active && !link)
     transport_.close(i, p.state.token);
   Token::advance(p.state.token.operation);
@@ -243,6 +253,16 @@ void CameraManager::tick() {
       fail(i, CameraError::Timeout);
   }
 }
+bool CameraManager::eventLifecycle(const Peer &p, bool connectionEvent) const {
+  const auto l = p.state.lifecycle;
+  const bool backoffConnectionEvent =
+      l == Lifecycle::Backoff && connectionEvent && p.current != Operation::Connect;
+  if (l != Lifecycle::Connecting && l != Lifecycle::Ready && l != Lifecycle::Operating &&
+      !backoffConnectionEvent)
+    return false;
+
+  return true;
+}
 bool CameraManager::eventEnvelope(const Event &e, Peer *&peer, bool &connectionEvent) {
   if (e.peer >= size() || sealed(e.peer))
     return false;
@@ -254,12 +274,13 @@ bool CameraManager::eventEnvelope(const Event &e, Peer *&peer, bool &connectionE
   if (e.token.connection != p.state.token.connection ||
       (!connectionEvent && e.token.operation != p.state.token.operation))
     return false;
-  const auto l = p.state.lifecycle;
-  const bool backoffConnectionEvent =
-      l == Lifecycle::Backoff && connectionEvent && p.current != Operation::Connect;
-  if (l != Lifecycle::Connecting && l != Lifecycle::Ready && l != Lifecycle::Operating &&
-      !backoffConnectionEvent)
+  return eventLifecycle(p, connectionEvent);
+}
+bool CameraManager::commandObservationCurrent(const Event &e, const Peer &p) const {
+  if (e.kind == EventKind::CommandRecordingObserved && !p.active &&
+      (!p.completed_observation_open || reached(clock_.now(), p.completed_observation_deadline_ms)))
     return false;
+
   return true;
 }
 bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionEvent,
@@ -271,8 +292,7 @@ bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionE
     fail(e.peer, CameraError::Timeout);
     return false;
   }
-  if (e.kind == EventKind::CommandRecordingObserved && !p.active &&
-      (!p.completed_observation_open || reached(clock_.now(), p.completed_observation_deadline_ms)))
+  if (!commandObservationCurrent(e, p))
     return false;
   // A command observation may legitimately arrive during the group's Confirm
   // phase after Completed retired the active operation. Its unchanged token
@@ -354,17 +374,26 @@ bool CameraManager::event(const Event &e) {
     audit_->accepted(e, operation, intent_id);
   return true;
 }
+namespace {
+bool validAck(CameraAckDomain domain, CameraAckAction action) {
+  return domain != CameraAckDomain::None &&
+         static_cast<unsigned>(domain) <= static_cast<unsigned>(CameraAckDomain::Protobuf) &&
+         action != CameraAckAction::None &&
+         static_cast<unsigned>(action) <= static_cast<unsigned>(CameraAckAction::QueryEncoding);
+}
+} // namespace
+bool CameraManager::ackCurrent(const Peer &p, Token token) const {
+  return p.active && p.state.token.valid() && p.state.token.connection == token.connection &&
+         p.state.token.operation == token.operation &&
+         (p.state.lifecycle == Lifecycle::Connecting ||
+          p.state.lifecycle == Lifecycle::Operating) &&
+         !reached(clock_.now(), p.state.deadline_ms);
+}
 bool CameraManager::wireAck(size_t i, Token token, CameraAckDomain domain, CameraAckAction action) {
-  if (i >= size() || domain == CameraAckDomain::None ||
-      static_cast<unsigned>(domain) > static_cast<unsigned>(CameraAckDomain::Protobuf) ||
-      action == CameraAckAction::None ||
-      static_cast<unsigned>(action) > static_cast<unsigned>(CameraAckAction::QueryEncoding))
+  if (i >= size() || !validAck(domain, action))
     return false;
   auto &p = peers_[i];
-  if (!p.active || !p.state.token.valid() || p.state.token.connection != token.connection ||
-      p.state.token.operation != token.operation ||
-      (p.state.lifecycle != Lifecycle::Connecting && p.state.lifecycle != Lifecycle::Operating) ||
-      reached(clock_.now(), p.state.deadline_ms))
+  if (!ackCurrent(p, token))
     return false;
   const uint32_t bit = uint32_t(1) << static_cast<unsigned>(action);
   if (p.ack_mask & bit)

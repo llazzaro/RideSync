@@ -1,17 +1,18 @@
 #include "bench_application.h"
 namespace ridesync {
-bool validateBenchMotionMetadata(const MotionAdmissionConfig &motion, const ImuConfig &metadata) {
-  if (!motion.requested)
-    return true;
-  const auto &m = motion.estimator;
-  if (!motionAdmissionQualified(motion) || metadata.mount_state != Qualification::Qualified ||
-      metadata.calibration_state != Qualification::Qualified || metadata.mount_id != m.mount_id ||
-      metadata.calibration_id != m.calibration_id || !metadata.calibration_offsets_known ||
-      !metadata.calibration_gains_known ||
-      metadata.accel_offset_compensation != m.accel_compensation ||
-      metadata.gyro_offset_compensation != m.gyro_compensation || m.accel_compensation != 1 ||
-      m.gyro_compensation != 1)
-    return false;
+namespace {
+bool metadataIdentityQualified(const MotionEstimatorConfig &m, const ImuConfig &metadata) {
+  return metadata.mount_state == Qualification::Qualified &&
+         metadata.calibration_state == Qualification::Qualified &&
+         metadata.mount_id == m.mount_id && metadata.calibration_id == m.calibration_id &&
+         metadata.calibration_offsets_known && metadata.calibration_gains_known;
+}
+bool metadataCompensationQualified(const MotionEstimatorConfig &m, const ImuConfig &metadata) {
+  return metadata.accel_offset_compensation == m.accel_compensation &&
+         metadata.gyro_offset_compensation == m.gyro_compensation && m.accel_compensation == 1 &&
+         m.gyro_compensation == 1;
+}
+bool metadataGainsQualified(const ImuConfig &metadata) {
   // The selected BMI270 raw route reads back both device compensations disabled.
   // Mount/calibration facts and residual count gains must match that delivered profile.
   for (unsigned i = 0; i < 3; ++i)
@@ -19,6 +20,15 @@ bool validateBenchMotionMetadata(const MotionAdmissionConfig &motion, const ImuC
         !metadata.gyro_gain_numerator[i] || !metadata.gyro_gain_denominator[i])
       return false;
   return true;
+}
+} // namespace
+bool validateBenchMotionMetadata(const MotionAdmissionConfig &motion, const ImuConfig &metadata) {
+  if (!motion.requested)
+    return true;
+  return motionAdmissionQualified(motion) &&
+         metadataIdentityQualified(motion.estimator, metadata) &&
+         metadataCompensationQualified(motion.estimator, metadata) &&
+         metadataGainsQualified(metadata);
 }
 bool BenchDynamicReference::arm(uint32_t now_ms) {
   const auto elapsed = now_ms - receipt_cutoff_ms_;
@@ -61,33 +71,54 @@ DynamicMotionReference BenchDynamicReference::referenceFor(const ImuEvidence &e)
 }
 namespace {
 bool pinValid(int pin, bool output) {
-  return pin >= 0 && pin <= (output ? 33 : 39) && pin != 0 && pin != 1 && pin != 3 &&
-         !(pin >= 6 && pin <= 11) && pin != 16 && pin != 17 && pin != 20 && pin != 24 &&
-         !(pin >= 28 && pin <= 31);
+  if (pin < 0 || pin > (output ? 33 : 39))
+    return false;
+  const int unavailable[] = {0, 1, 3, 6, 7, 8, 9, 10, 11, 16, 17, 20, 24, 28, 29, 30, 31};
+  for (int blocked : unavailable)
+    if (pin == blocked)
+      return false;
+  return true;
 }
-} // namespace
-bool validateBenchBusPins(const BenchBusPins &p) {
+struct PinReservations {
   uint64_t used = 0;
-  const auto add = [&used](int pin, bool output) {
+  bool add(int pin, bool output) {
     if (!pinValid(pin, output) || (used & (uint64_t(1) << pin)))
       return false;
     used |= uint64_t(1) << pin;
     return true;
+  }
+};
+bool requiredBusPins(const BenchBusPins &p, PinReservations &pins) {
+  struct PinUse {
+    int pin;
+    bool output;
   };
-  if (!add(p.power_enable, true) || !add(p.spi_sck, true) || !add(p.spi_miso, false) ||
-      !add(p.spi_mosi, true) || !add(p.spi_cs, true) || !add(p.modem_tx, true) ||
-      !add(p.modem_rx, false))
-    return false;
-  if (p.imu_enabled && (!add(p.i2c_sda, true) || !add(p.i2c_scl, true)))
-    return false;
-  if (p.modem_key != -1 && !add(p.modem_key, true))
-    return false;
-  if (p.button != -1 && !add(p.button, false))
-    return false;
-  for (int pin : p.led)
-    if (pin != -1 && !add(pin, true))
+  const PinUse required[] = {{p.power_enable, true}, {p.spi_sck, true}, {p.spi_miso, false},
+                             {p.spi_mosi, true},     {p.spi_cs, true},  {p.modem_tx, true},
+                             {p.modem_rx, false}};
+  for (const auto &use : required)
+    if (!pins.add(use.pin, use.output))
       return false;
   return true;
+}
+bool optionalBusPins(const BenchBusPins &p, PinReservations &pins) {
+  if (p.modem_key != -1 && !pins.add(p.modem_key, true))
+    return false;
+  if (p.button != -1 && !pins.add(p.button, false))
+    return false;
+  for (int pin : p.led)
+    if (pin != -1 && !pins.add(pin, true))
+      return false;
+  return true;
+}
+} // namespace
+bool validateBenchBusPins(const BenchBusPins &p) {
+  PinReservations pins;
+  if (!requiredBusPins(p, pins))
+    return false;
+  if (p.imu_enabled && (!pins.add(p.i2c_sda, true) || !pins.add(p.i2c_scl, true)))
+    return false;
+  return optionalBusPins(p, pins);
 }
 } // namespace ridesync
 #if defined(ARDUINO_ARCH_ESP32) && defined(RIDESYNC_BENCH_APPLICATION)
@@ -116,80 +147,150 @@ HardwareSerial modem(2);
 SPIClass storage_spi(HSPI);
 TwoWire imu_wire(0);
 BenchDynamicReference stationary_reference;
-bool validConfig() {
-  const auto &q = config.telemetry;
-  Settings fixed;
-  if (!config.enabled || !config.board_routing_reviewed || !copySettings(config.source, fixed) ||
-      !q.runtime.opt_in || !q.runtime.gps_qualified || !q.runtime.firmware ||
-      !q.runtime.provenance || !q.runtime.modem.documentary_profile_opt_in ||
-      !q.runtime.modem.terminal_retires_transaction ||
-      (!q.modem_already_powered && !q.modem_power_sequence) || !q.runtime.power_timing.qualified ||
-      !q.modem.pins_qualified || !q.modem.documentary_profile_opt_in || !q.modem.baud ||
-      !q.sd.opt_in || !q.sd.wiring_card_qualified || !q.sd.exclusive_volume ||
-      !q.sd.namespace_commissioned || !q.sd.commissioned_namespace || !q.sd.frequency_hz ||
-      q.sd.chip_select != config.pins.spi_cs || q.modem.tx != config.pins.modem_tx ||
-      q.modem.rx != config.pins.modem_rx || q.runtime.imu_enabled != config.pins.imu_enabled)
+bool runtimeDeclared(const QualifiedLocalTelemetry &q) {
+  return q.runtime.opt_in && q.runtime.gps_qualified && q.runtime.firmware &&
+         q.runtime.provenance && q.runtime.modem.documentary_profile_opt_in &&
+         q.runtime.modem.terminal_retires_transaction &&
+         (q.modem_already_powered || q.modem_power_sequence) && q.runtime.power_timing.qualified;
+}
+bool modemQualified(const QualifiedLocalTelemetry &q) {
+  return q.modem.pins_qualified && q.modem.documentary_profile_opt_in && q.modem.baud;
+}
+bool storageQualified(const QualifiedLocalTelemetry &q) {
+  return q.sd.opt_in && q.sd.wiring_card_qualified && q.sd.exclusive_volume &&
+         q.sd.namespace_commissioned && q.sd.commissioned_namespace && q.sd.frequency_hz;
+}
+bool transportRoutingMatches(const BenchApplicationConfig &c) {
+  const auto &q = c.telemetry;
+  return q.sd.chip_select == c.pins.spi_cs && q.modem.tx == c.pins.modem_tx &&
+         q.modem.rx == c.pins.modem_rx && q.runtime.imu_enabled == c.pins.imu_enabled;
+}
+bool powerTimingQualified(const QualifiedLocalTelemetry &q) {
+  return q.runtime.power_timing.key_active_ms && q.runtime.power_timing.settle_ms &&
+         q.runtime.power_timing.key_active_ms <= 60000 &&
+         q.runtime.power_timing.settle_ms <= 60000 && q.runtime.power_timing.pre_key_ms <= 60000;
+}
+bool powerRoutingQualified(const BenchApplicationConfig &c) {
+  const auto &q = c.telemetry;
+  if (!q.modem_power_sequence)
+    return c.pins.modem_key == -1;
+  return !q.modem_already_powered && q.modem.key == c.pins.modem_key && c.pins.modem_key != -1 &&
+         q.modem.supply == c.pins.power_enable &&
+         q.modem.supply_active_high == c.power_enable_active_high && powerTimingQualified(q);
+}
+bool imuQualified(const BenchApplicationConfig &c) {
+  const auto &q = c.telemetry;
+  if (!q.runtime.imu_enabled)
+    return true;
+  return q.runtime.imu_qualified && q.imu.enabled && q.imu.dedicated_bus &&
+         q.imu.electrically_qualified && q.imu.sensor_id &&
+         (q.imu.address == 0x68 || q.imu.address == 0x69) && c.i2c_hz && c.i2c_timeout_ms;
+}
+bool telemetryQualified(const BenchApplicationConfig &c) {
+  return runtimeDeclared(c.telemetry) && modemQualified(c.telemetry) &&
+         storageQualified(c.telemetry) && transportRoutingMatches(c) && powerRoutingQualified(c) &&
+         imuQualified(c);
+}
+bool buttonQualified(const BenchApplicationConfig &c) {
+  const auto &h = c.handlebar;
+  if (h.opt_in != c.source.button_gpio.enabled)
     return false;
-  if (q.modem_power_sequence &&
-      (q.modem_already_powered || q.modem.key != config.pins.modem_key ||
-       config.pins.modem_key == -1 || q.modem.supply != config.pins.power_enable ||
-       q.modem.supply_active_high != config.power_enable_active_high ||
-       !q.runtime.power_timing.key_active_ms || !q.runtime.power_timing.settle_ms ||
-       q.runtime.power_timing.key_active_ms > 60000 || q.runtime.power_timing.settle_ms > 60000 ||
-       q.runtime.power_timing.pre_key_ms > 60000))
-    return false;
-  if (!q.modem_power_sequence && config.pins.modem_key != -1)
-    return false;
-  if (q.runtime.imu_enabled &&
-      (!q.runtime.imu_qualified || !q.imu.enabled || !q.imu.dedicated_bus ||
-       !q.imu.electrically_qualified || !q.imu.sensor_id ||
-       (q.imu.address != 0x68 && q.imu.address != 0x69) || !config.i2c_hz ||
-       !config.i2c_timeout_ms))
-    return false;
-  const auto &h = config.handlebar;
-  if (h.opt_in != config.source.button_gpio.enabled ||
-      (h.opt_in && (!h.acknowledge_qualification || !validateButtonGpioConfig(h.button) ||
-                    !validateButtonConfig(h.actions) || h.button.pin != config.pins.button ||
-                    h.button.pin != config.source.button_gpio.pin ||
-                    h.button.pull != config.source.button_gpio.pull ||
-                    h.button.active_low != config.source.button_gpio.active_low)))
-    return false;
-  if (!h.opt_in && config.pins.button != -1)
-    return false;
-  const unsigned leds = h.led.mode == LedMode::Rgb ? 3 : h.led.mode == LedMode::Mono ? 1 : 0;
+  if (!h.opt_in)
+    return c.pins.button == -1;
+  return h.acknowledge_qualification && validateButtonGpioConfig(h.button) &&
+         validateButtonConfig(h.actions) && h.button.pin == c.pins.button &&
+         h.button.pin == c.source.button_gpio.pin && h.button.pull == c.source.button_gpio.pull &&
+         h.button.active_low == c.source.button_gpio.active_low;
+}
+unsigned ledCount(LedMode mode) { return mode == LedMode::Rgb ? 3 : mode == LedMode::Mono ? 1 : 0; }
+bool ledRoutingMatches(const BenchApplicationConfig &c, unsigned leds) {
   for (unsigned i = 0; i < 3; ++i)
-    if (config.pins.led[i] != (i < leds ? h.led.pins[i] : -1))
+    if (c.pins.led[i] != (i < leds ? c.handlebar.led.pins[i] : -1))
       return false;
+  return true;
+}
+bool ledPolicyQualified(const QualifiedHandlebar &h, unsigned leds) {
   if (leds && (!h.opt_in || !h.led.board_qualified || !h.led.reservations_complete))
     return false;
   if (h.led.mode != LedMode::Disabled && h.led.mode != LedMode::Mono && h.led.mode != LedMode::Rgb)
     return false;
-  if (leds && !validateLedWiring(h.led, h.acknowledge_qualification, h.button))
-    return false;
-  if (!leds)
-    for (unsigned i = 0; i < 3; ++i)
-      if (h.led.pins[i] != -1 || h.led.polarity[i] != LedPolarity::Unspecified)
-        return false;
-  if (q.runtime.motion_enabled || q.runtime.dynamic_motion.enabled) {
-    MotionAdmissionConfig motion;
-    motion.requested = true;
-    motion.imu_qualified = q.runtime.imu_enabled && q.runtime.imu_qualified;
-    motion.estimator = q.runtime.motion_config;
-    motion.snapshot_max_age_ms = q.runtime.motion_snapshot_max_age_ms;
-    motion.dynamic = q.runtime.dynamic_motion;
-    motion.dynamic_cadence_us = q.runtime.dynamic_cadence_us;
-    motion.dynamic_reference = q.runtime.dynamic_reference;
-    if (!validateBenchMotionMetadata(motion, q.metadata))
+  return !leds || validateLedWiring(h.led, h.acknowledge_qualification, h.button);
+}
+bool disabledLedPinsCleared(const QualifiedHandlebar &h, unsigned leds) {
+  if (leds)
+    return true;
+  for (unsigned i = 0; i < 3; ++i)
+    if (h.led.pins[i] != -1 || h.led.polarity[i] != LedPolarity::Unspecified)
       return false;
-  }
-  if (q.runtime.cameras_qualified != (config.source.count != 0) ||
-      q.runtime.peers.count != config.source.count)
+  return true;
+}
+bool handlebarQualified(const BenchApplicationConfig &c) {
+  if (!buttonQualified(c))
     return false;
-  for (size_t i = 0; i < config.source.count; ++i)
-    if (!config.source.cameras[i].enabled || q.runtime.peers.entries[i].slot != i ||
+  const unsigned leds = ledCount(c.handlebar.led.mode);
+  return ledRoutingMatches(c, leds) && ledPolicyQualified(c.handlebar, leds) &&
+         disabledLedPinsCleared(c.handlebar, leds);
+}
+bool motionQualified(const BenchApplicationConfig &c) {
+  const auto &q = c.telemetry;
+  if (!q.runtime.motion_enabled && !q.runtime.dynamic_motion.enabled)
+    return true;
+  MotionAdmissionConfig motion;
+  motion.requested = true;
+  motion.imu_qualified = q.runtime.imu_enabled && q.runtime.imu_qualified;
+  motion.estimator = q.runtime.motion_config;
+  motion.snapshot_max_age_ms = q.runtime.motion_snapshot_max_age_ms;
+  motion.dynamic = q.runtime.dynamic_motion;
+  motion.dynamic_cadence_us = q.runtime.dynamic_cadence_us;
+  motion.dynamic_reference = q.runtime.dynamic_reference;
+  return validateBenchMotionMetadata(motion, q.metadata);
+}
+bool peersQualified(const BenchApplicationConfig &c) {
+  const auto &q = c.telemetry;
+  if (q.runtime.cameras_qualified != (c.source.count != 0) ||
+      q.runtime.peers.count != c.source.count)
+    return false;
+  for (size_t i = 0; i < c.source.count; ++i)
+    if (!c.source.cameras[i].enabled || q.runtime.peers.entries[i].slot != i ||
         !q.runtime.peers.entries[i].id ||
-        q.runtime.peers.entries[i].model != config.source.cameras[i].model)
+        q.runtime.peers.entries[i].model != c.source.cameras[i].model)
       return false;
+  return true;
+}
+bool validConfig() {
+  Settings fixed;
+  return config.enabled && config.board_routing_reviewed && copySettings(config.source, fixed) &&
+         telemetryQualified(config) && handlebarQualified(config) && motionQualified(config) &&
+         peersQualified(config);
+}
+bool stationaryReferenceConfigured() {
+  return owner && owner->telemetry() && config.telemetry.runtime.dynamic_motion.enabled &&
+         config.telemetry.runtime.dynamic_reference == &stationary_reference;
+}
+bool stationaryReferenceAdmitted(const LocalTelemetryStatus &s) {
+  return s.phase == TelemetryPhase::Running && s.imu == SensorAdmission::Admitted &&
+         s.motion_admission == MotionAdmission::Enabled && !s.safe_mode && !s.supervision_fault &&
+         !s.worker_stalls && !s.worker_refused;
+}
+bool initializeBuses() {
+  // Set the declared output level before enabling its driver; no modem reset/pulse.
+  digitalWrite(config.pins.power_enable, config.power_enable_active_high ? HIGH : LOW);
+  pinMode(config.pins.power_enable, OUTPUT);
+  storage_spi.begin(config.pins.spi_sck, config.pins.spi_miso, config.pins.spi_mosi,
+                    config.pins.spi_cs);
+  status.spi_initialized = true; // SPI begin is void; this is invocation, not card readiness.
+  if (config.pins.imu_enabled) {
+    if (imu_wire.setBufferSize(128) < 128) {
+      status.error = BenchProviderError::I2cBuffer;
+      return false;
+    }
+    imu_wire.setTimeOut(config.i2c_timeout_ms);
+    if (!imu_wire.begin(config.pins.i2c_sda, config.pins.i2c_scl, config.i2c_hz)) {
+      status.error = BenchProviderError::I2cStart;
+      return false;
+    }
+    status.i2c_initialized = true;
+  }
   return true;
 }
 } // namespace
@@ -199,13 +300,10 @@ const SourceConfig *benchApplicationDefaults() {
 SupervisedEsp32Application *benchApplicationOwner() { return owner; }
 BenchProviderStatus benchApplicationStatus() { return status; }
 bool benchArmStationaryReference() {
-  if (!owner || !owner->telemetry() || !config.telemetry.runtime.dynamic_motion.enabled ||
-      config.telemetry.runtime.dynamic_reference != &stationary_reference)
+  if (!stationaryReferenceConfigured())
     return false;
   const auto s = owner->telemetry()->status();
-  if (s.phase != TelemetryPhase::Running || s.imu != SensorAdmission::Admitted ||
-      s.motion_admission != MotionAdmission::Enabled || s.safe_mode || s.supervision_fault ||
-      s.worker_stalls || s.worker_refused)
+  if (!stationaryReferenceAdmitted(s))
     return false;
   return stationary_reference.arm(millis());
 }
@@ -247,24 +345,8 @@ ApplicationWorkers *commissionedApplication() {
     status.error = BenchProviderError::Allocation;
     return nullptr;
   }
-  // Set the declared output level before enabling its driver; no modem reset/pulse.
-  digitalWrite(config.pins.power_enable, config.power_enable_active_high ? HIGH : LOW);
-  pinMode(config.pins.power_enable, OUTPUT);
-  storage_spi.begin(config.pins.spi_sck, config.pins.spi_miso, config.pins.spi_mosi,
-                    config.pins.spi_cs);
-  status.spi_initialized = true; // SPI begin is void; this is invocation, not card readiness.
-  if (config.pins.imu_enabled) {
-    if (imu_wire.setBufferSize(128) < 128) {
-      status.error = BenchProviderError::I2cBuffer;
-      return nullptr;
-    }
-    imu_wire.setTimeOut(config.i2c_timeout_ms);
-    if (!imu_wire.begin(config.pins.i2c_sda, config.pins.i2c_scl, config.i2c_hz)) {
-      status.error = BenchProviderError::I2cStart;
-      return nullptr;
-    }
-    status.i2c_initialized = true;
-  }
+  if (!initializeBuses())
+    return nullptr;
   owner = new (application_memory)
       SupervisedEsp32Application(modem, storage_spi, imu_wire, config.telemetry, config.handlebar,
                                  config.cameras, config.motion_reference);

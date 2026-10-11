@@ -46,7 +46,7 @@ public:
   bool usesSink(const StorageSink &sink) const { return &sink_ == &sink; }
   bool enqueue(const RecordTimestamp &timestamp, const ModemSnapshot &sample);
   bool enqueueImu(const RecordTimestamp &timestamp, const ImuEvidence &evidence,
-                  bool reserve = false, const MotionEvidence &motion = {});
+                  bool reserve = false, const MotionEvidence &motion = MotionEvidence{});
   bool enqueueCamera(const RecordTimestamp &timestamp, const CameraEvidence &evidence,
                      bool reserve = true);
   KindHealth kindHealth(RecordKind kind) const;
@@ -90,6 +90,8 @@ private:
   size_t length_ = 0, offset_ = 0;
   bool format(const Record &record);
   void fail();
+  void mountLog();
+  void drainTerminalRows();
   void openLog();
   void flushCached();
   void serviceRows();

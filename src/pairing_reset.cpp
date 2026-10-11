@@ -11,13 +11,16 @@ bool resetIdentityValid(const BondIdentity &identity) {
     return false;
   return true;
 }
+bool quiesceAdmitted(BondResetPort &port) {
+  return port.admitted() && port.quiesce() && port.admitted();
+}
 } // namespace
 BondOutcome resetPairing(BondResetPort &port, const BondIdentity &identity) {
   if (!resetIdentityValid(identity) || !port.admitted())
     return BondOutcome::Refused;
   auto result = port.remove(identity);
   if (result == BondOutcome::Busy) {
-    if (!port.admitted() || !port.quiesce() || !port.admitted())
+    if (!quiesceAdmitted(port))
       return BondOutcome::Busy;
     result = port.remove(identity);
   }

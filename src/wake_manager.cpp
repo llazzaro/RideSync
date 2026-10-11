@@ -5,6 +5,14 @@ bool sameWakeOperation(const WakeOperation &a, const WakeOperation &b) {
   return a.peer == b.peer && a.id == b.id && a.generation == b.generation;
 }
 namespace {
+bool knownRecording(RecordingState state) {
+  return state == RecordingState::Stopped || state == RecordingState::Recording;
+}
+} // namespace
+namespace {
+bool freshRecovery(const WakeRecoveryResult &result) {
+  return result.fresh && knownRecording(result.observed);
+}
 bool intentTerminal(WakePhase phase) {
   return phase == WakePhase::Ready || phase == WakePhase::Unsupported ||
          phase == WakePhase::Failed || phase == WakePhase::Cancelled || phase == WakePhase::Timeout;
@@ -24,12 +32,15 @@ bool WakeManager::validRequest(const WakeOperation &op, const WakePolicy &policy
            op.generation == UINT32_MAX || (generation_ && generation_ != op.generation) ||
            !validPolicy(policy));
 }
+bool WakeManager::requestSlotAvailable(const Slot &slot) const {
+  return !slot.occupied || (intentTerminal(slot.status.phase) && slot.status.released);
+}
 CameraError WakeManager::request(const WakeOperation &op, const WakePeerConfig &config,
                                  const WakePolicy &policy, uint32_t now) {
   if (op.peer >= kWakePeers)
     return CameraError::InvalidPeer;
   auto &slot = slots_[op.peer];
-  if (slot.occupied && (!intentTerminal(slot.status.phase) || !slot.status.released))
+  if (!requestSlotAvailable(slot))
     return CameraError::Busy;
   if (!validRequest(op, policy))
     return CameraError::InvalidPolicy;
@@ -53,7 +64,7 @@ CameraError WakeManager::request(const WakeOperation &op, const WakePeerConfig &
   last_ids_[op.peer] = op.id;
   generation_ = op.generation;
   const auto observed = recovery_ ? recovery_->currentObserved(op.peer) : RecordingState::Unknown;
-  if (observed == RecordingState::Stopped || observed == RecordingState::Recording) {
+  if (knownRecording(observed)) {
     slot.status.phase = WakePhase::Ready;
     slot.status.observed = observed;
   }
@@ -146,8 +157,7 @@ void WakeManager::serviceRecovery(Slot &slot, uint32_t now) {
     seal(slot,
          result.error == CameraError::Unsupported ? WakePhase::Unsupported : WakePhase::Failed,
          result.error);
-  else if (!result.fresh || (result.observed != RecordingState::Stopped &&
-                             result.observed != RecordingState::Recording))
+  else if (!freshRecovery(result))
     seal(slot, WakePhase::Failed, CameraError::NotConnected);
   else if (result.released) {
     slot.status.phase = WakePhase::Ready;

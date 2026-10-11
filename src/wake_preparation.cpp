@@ -9,13 +9,26 @@ bool WakePreparation::matches(size_t peer) const {
   return peer < kWakePeers && peers_[peer].used &&
          sameWakeOperation(peers_[peer].operation, manager_.status(peer).operation);
 }
+bool WakePreparation::priorOperationReleased(size_t peer) const {
+  const auto &slot = peers_[peer];
+  if (!slot.used)
+    return true;
+  if (!matches(peer) || !manager_.status(peer).released)
+    return false;
+  return manager_.status(peer).phase == WakePhase::Ready || slot.sealed ||
+         manager_.status(peer).error != CameraError::None;
+}
+namespace {
+bool pendingPreparation(WakePhase phase) {
+  return phase == WakePhase::Queued || phase == WakePhase::Advertising ||
+         phase == WakePhase::Releasing || phase == WakePhase::Recovering;
+}
+} // namespace
 CameraError WakePreparation::prepare(size_t peer) {
   if (peer >= kWakePeers)
     return CameraError::InvalidPeer;
   auto &slot = peers_[peer];
-  if (slot.used && (!matches(peer) || !manager_.status(peer).released ||
-                    (manager_.status(peer).phase != WakePhase::Ready && !slot.sealed &&
-                     manager_.status(peer).error == CameraError::None)))
+  if (!priorOperationReleased(peer))
     return CameraError::Busy;
   if (!generation_ || generation_ == UINT32_MAX || slot.last_id >= UINT32_MAX - 1)
     return CameraError::InvalidPolicy;
@@ -49,8 +62,7 @@ RecordingPreparationResult WakePreparation::prepared(size_t peer) {
   }
   const auto status = manager_.status(peer);
   result.error = status.error;
-  result.pending = status.phase == WakePhase::Queued || status.phase == WakePhase::Advertising ||
-                   status.phase == WakePhase::Releasing || status.phase == WakePhase::Recovering;
+  result.pending = pendingPreparation(status.phase);
   if (!result.pending && result.error == CameraError::None && !commandReady(peer))
     result.error = CameraError::NotConnected;
   return result;

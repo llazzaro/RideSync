@@ -30,10 +30,7 @@ bool Esp32BleHost::configurePeripheral(void *owner, int (*registration)(void *))
 bool Esp32BleHost::reservePeripheral(void *owner, uint32_t generation) {
   PeripheralRoutingGate gate(routing_lock_);
   if (!gate.held() || owner != peripheral_owner_ || !generation || peripheralReserved() ||
-      wakeReserved() || reset_gate_.load(std::memory_order_acquire) || reset_.phase.load() == 1 ||
-      reset_.phase.load() == 2 || sdk_calls_.load() || state() != BleHostState::Ready ||
-      fault() != BleFault::None || !restore_verified_ || !refusal_installed_ ||
-      !nvsBootStatus().persistenceAllowed())
+      wakeReserved() || resetRoutingBusy(std::memory_order_seq_cst) || !leaseHostQualified())
     return false;
   if (gapSetupBusy(std::memory_order_acquire))
     return false; // Serialize GAP setup; established central links retain their contexts.

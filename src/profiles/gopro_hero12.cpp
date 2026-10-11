@@ -58,6 +58,27 @@ uint8_t channelEndpoint(gopro::Channel c, bool write) {
 
 Hero12Adapter::Hero12Adapter(BleHost &host, Clock &clock)
     : clock_(clock), central_(host, *this, &progress_) {}
+void Hero12Adapter::advanceManagers(bool advance_managers) {
+  if (advance_managers && group_)
+    group_->tick();
+  else if (advance_managers && manager_)
+    manager_->tick();
+}
+void Hero12Adapter::recordAdmissionFailure(size_t index) {
+  if (index < kBlePeers)
+    peers_[index].fault = enabled_ ? Hero12Fault::Qualification : Hero12Fault::Disabled;
+}
+void Hero12Adapter::cancelRecoveryOperation(uint8_t i) {
+  const auto &r = recovery_[i];
+  if ((r.state.phase == Hero12RecoveryPhase::Connecting ||
+       r.state.phase == Hero12RecoveryPhase::Observing ||
+       r.state.phase == Hero12RecoveryPhase::Starting) &&
+      r.operation && manager_->state(i)->token.connection == r.connection &&
+      manager_->state(i)->token.operation == r.operation &&
+      (manager_->state(i)->lifecycle == Lifecycle::Connecting ||
+       manager_->state(i)->lifecycle == Lifecycle::Operating))
+    manager_->cancel(i);
+}
 void Hero12Adapter::attach(CameraManager &manager) { manager_ = &manager; }
 RetryPolicy Hero12Adapter::managerPolicy() {
   RetryPolicy p;
@@ -65,6 +86,56 @@ RetryPolicy Hero12Adapter::managerPolicy() {
   p.backoff_ms = 200;
   p.max_attempts = 1; // Camera delivery is never replayed by manager retries.
   return p;
+}
+bool Hero12Adapter::transactionExpired(uint8_t i) const {
+  const auto &p = peers_[i];
+  return (p.fragment && reached(clock_.now(), p.fragment_started + 1000)) ||
+         (p.step != Step::None && reached(clock_.now(), p.deadline));
+}
+bool Hero12Adapter::validateIdentity(uint8_t i, const gopro::IdentityResponse &r) {
+  const auto &p = peers_[i];
+  if (p.step == Step::Hardware) {
+    const auto f = r.fields[3];
+    if (!r.model_known || r.model != 62 || f.size != p.qualification.firmware_size ||
+        std::memcmp(r.raw.bytes + f.offset, p.qualification.firmware.data(), f.size) != 0) {
+      retire(i, Hero12Fault::IdentityMismatch);
+      return false;
+    }
+  } else if (!r.api_known || r.api_major != p.qualification.api_major ||
+             r.api_minor != p.qualification.api_minor) {
+    retire(i, Hero12Fault::IdentityMismatch);
+    return false;
+  }
+
+  return true;
+}
+bool Hero12Adapter::notificationRoute(uint8_t endpoint, gopro::Channel &route) {
+  constexpr gopro::Channel routes[] = {gopro::Channel::Command, gopro::Channel::Settings,
+                                       gopro::Channel::Query, gopro::Channel::Management};
+  if (endpoint < 1 || endpoint > 7 || (endpoint & 1) == 0)
+    return false;
+  route = routes[endpoint / 2];
+  return true;
+}
+bool Hero12Adapter::admitPacket(uint8_t i, Step step, const OutgoingPacket &out) {
+  auto &p = peers_[i];
+  const uint8_t endpoint = channelEndpoint(out.route, true);
+  if (step == Step::Hardware && p.hardware_attempts >= kHardwarePolls)
+    return false;
+  if (!central_.write(i, endpoint, out.bytes, out.length, clock_.now()))
+    return false;
+  if (step == Step::Hardware)
+    ++p.hardware_attempts;
+  p.step = step;
+  p.route = out.route;
+  p.expected_id = out.id;
+  p.expected_status = out.status;
+  p.write_endpoint = endpoint;
+  p.deadline = clock_.now() + kCameraResponseMs;
+  p.att_done = p.camera_done = false;
+  p.waiting_write = true;
+  p.fragment = false;
+  return true;
 }
 bool Hero12Adapter::reached(uint32_t now, uint32_t deadline) {
   return now - deadline < 0x80000000UL;
@@ -157,8 +228,7 @@ bool Hero12Adapter::activeRecoveryPhase(Hero12RecoveryPhase phase) {
          phase == Hero12RecoveryPhase::Connecting || phase == Hero12RecoveryPhase::Observing ||
          phase == Hero12RecoveryPhase::Starting;
 }
-CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
-                                           Hero12PowerCondition condition) {
+CameraError Hero12Adapter::recoveryAdmission(uint8_t i) {
   if (i >= kBlePeers || !manager_ || i >= manager_->size())
     return CameraError::InvalidPeer;
   if (maintenance_[i])
@@ -167,6 +237,13 @@ CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
     return CameraError::Disabled;
   if (!peers_[i].qualified || !validQualification(peers_[i].qualification))
     return CameraError::Unsupported;
+  return CameraError::None;
+}
+CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
+                                           Hero12PowerCondition condition) {
+  const auto admission = recoveryAdmission(i);
+  if (admission != CameraError::None)
+    return admission;
   auto &r = recovery_[i];
   if (activeRecoveryPhase(r.state.phase))
     return CameraError::Busy;
@@ -195,14 +272,7 @@ CameraError Hero12Adapter::cancelRecovery(uint8_t i) {
     central_.cancelScan();
     scan_owner_ = kBlePeers;
   }
-  if ((r.state.phase == Hero12RecoveryPhase::Connecting ||
-       r.state.phase == Hero12RecoveryPhase::Observing ||
-       r.state.phase == Hero12RecoveryPhase::Starting) &&
-      r.operation && manager_->state(i)->token.connection == r.connection &&
-      manager_->state(i)->token.operation == r.operation &&
-      (manager_->state(i)->lifecycle == Lifecycle::Connecting ||
-       manager_->state(i)->lifecycle == Lifecycle::Operating))
-    manager_->cancel(i);
+  cancelRecoveryOperation(i);
   r.state.phase = Hero12RecoveryPhase::Cancelled;
   return CameraError::None;
 }
@@ -265,8 +335,7 @@ bool Hero12Adapter::beginCommand(uint8_t i, Operation op, Token token) {
 bool Hero12Adapter::begin(size_t index, const CameraConfig &camera, Operation op, Token token) {
   if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::GoPro ||
       camera.model != CameraModel::HERO12_BLACK) {
-    if (index < kBlePeers)
-      peers_[index].fault = enabled_ ? Hero12Fault::Qualification : Hero12Fault::Disabled;
+    recordAdmissionFailure(index);
     return false;
   }
   const auto i = static_cast<uint8_t>(index);
@@ -424,23 +493,7 @@ bool Hero12Adapter::send(uint8_t i, Step step) {
   OutgoingPacket out;
   if (!preparePacket(i, step, out))
     return false;
-  const uint8_t endpoint = channelEndpoint(out.route, true);
-  if (step == Step::Hardware && p.hardware_attempts >= kHardwarePolls)
-    return false;
-  if (!central_.write(i, endpoint, out.bytes, out.length, clock_.now()))
-    return false;
-  if (step == Step::Hardware)
-    ++p.hardware_attempts;
-  p.step = step;
-  p.route = out.route;
-  p.expected_id = out.id;
-  p.expected_status = out.status;
-  p.write_endpoint = endpoint;
-  p.deadline = clock_.now() + kCameraResponseMs;
-  p.att_done = p.camera_done = false;
-  p.waiting_write = true;
-  p.fragment = false;
-  return true;
+  return admitPacket(i, step, out);
 }
 void Hero12Adapter::observe(uint8_t i, bool value, bool command) {
   auto &p = peers_[i];
@@ -667,20 +720,7 @@ void Hero12Adapter::notification(uint8_t i, const BleResult &r) {
   auto &p = peers_[i];
 
   gopro::Channel route;
-  switch (r.endpoint) {
-  case 1:
-    route = gopro::Channel::Command;
-    break;
-  case 3:
-    route = gopro::Channel::Settings;
-    break;
-  case 5:
-    route = gopro::Channel::Query;
-    break;
-  case 7:
-    route = gopro::Channel::Management;
-    break;
-  default:
+  if (!notificationRoute(r.endpoint, route)) {
     retire(i, Hero12Fault::Protocol);
     return;
   }
@@ -747,20 +787,7 @@ bool Hero12Adapter::identityResponse(uint8_t i, gopro::Channel route,
     retire(i, Hero12Fault::CameraRejected);
     return false;
   }
-  if (p.step == Step::Hardware) {
-    const auto f = r.fields[3];
-    if (!r.model_known || r.model != 62 || f.size != p.qualification.firmware_size ||
-        std::memcmp(r.raw.bytes + f.offset, p.qualification.firmware.data(), f.size) != 0) {
-      retire(i, Hero12Fault::IdentityMismatch);
-      return false;
-    }
-  } else if (!r.api_known || r.api_major != p.qualification.api_major ||
-             r.api_minor != p.qualification.api_minor) {
-    retire(i, Hero12Fault::IdentityMismatch);
-    return false;
-  }
-
-  return true;
+  return validateIdentity(i, r);
 }
 void Hero12Adapter::publishWireAck(uint8_t i) {
   auto &p = peers_[i];
@@ -1048,8 +1075,7 @@ void Hero12Adapter::servicePeer(uint8_t i) {
   auto &p = peers_[i];
   if (p.sealed)
     return;
-  if ((p.fragment && reached(clock_.now(), p.fragment_started + 1000)) ||
-      (p.step != Step::None && reached(clock_.now(), p.deadline))) {
+  if (transactionExpired(i)) {
     retire(i, Hero12Fault::Timeout);
     return;
   }
@@ -1082,10 +1108,7 @@ void Hero12Adapter::service(CameraServiceAction *action, bool advance_managers) 
   drain(); // Connection-scoped Disconnected precedes every manager tick.
   if (action)
     action->beforeAdvance();
-  if (advance_managers && group_)
-    group_->tick();
-  else if (advance_managers && manager_)
-    manager_->tick();
+  advanceManagers(advance_managers);
   if (manager_ && enabled_)
     advanceRecovery();
   servicing_ = false;

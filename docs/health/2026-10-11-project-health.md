@@ -1,87 +1,91 @@
 # Project-health remediation, October 11, 2026
 
 The owner requested the latest project-health installation, a repository scan,
-and parallel remediation of its findings. The scan used project-health 0.16.0
-from upstream commit `6ae745c45fb98279706b4a775a0ea737e67cc660` and Graphify
-0.9.74. The starting RideSync commit was
-`cdf4e839595f2afda5de6cfe3f76a9181223dcf6`.
+and parallel remediation of every finding. The initial scan used project-health
+0.16.0 and Graphify 0.9.74 against RideSync commit
+`cdf4e839595f2afda5de6cfe3f76a9181223dcf6`, reporting 426 findings.
 
-Every original finding has a disposition in
-[the machine-readable record](2026-10-11-project-health.json). Of 426 original
-candidates, 330 no longer appear after responsibility-based refactoring and
-96 remain individually reviewed. The final snapshot has 133 visible warnings:
-118 cyclomatic complexity, nine cognitive complexity and six god-node
-candidates. This includes 37 reviewed helper candidates introduced by the
-extractions. All seven original duplication groups are removed, and the final
-scan reports no duplication groups.
+The final default-threshold scan reports zero findings. All 426 original
+dispositions and the 37 first-pass helper candidates are now fixed in
+[the machine-readable record](2026-10-11-project-health.json). The first pass
+removed 330 candidates and reviewed 96; the subsequent pass also refactored
+those retained candidates and newly exposed functions. No reviewed warning,
+policy acceptance, threshold increase or source exclusion remains.
 
-These are independently checked source dispositions, not an automated
-baseline-resolution claim. Both scans have the same 18 C++ syntax-analysis
-failures, and the comparison therefore remains incomplete. The snapshot exits
-2 with `insufficient evidence`. Native compilation and the pinned ESP32 builds
-validate the affected source separately. No coverage or mutation artifact was
-provided, so those capabilities remain unknown.
+## Analysis coverage
 
-## Changes and retained candidates
+The standard CLI still exits 2 with `insufficient evidence`: its C++ parser
+does not support `__has_include` in the benchmark and X5 commissioning files,
+or `RTC_NOINIT_ATTR` declarations in `src/main.cpp`. These three valid constructs
+remain intact. Equivalent typed default arguments, a conventional weak-attribute
+position and an equivalent explicit count assignment removed the other 15
+syntax failures.
 
-BLE connection/discovery, security and resource retirement now have separate
-phases. Configuration decoding, persistence, application/reset admission and
-wake/control progression have named validation and lifecycle helpers. Camera
-adapters separate transaction, response, timeout and recovery responsibilities;
-qualification, BE80 profile declarations and central service progression are
-shared where the contracts are identical. Storage, telemetry admission,
-GNSS/IMU and estimator processing have coherent validation and worker phases.
+The remaining parse failures initially hid additional complex startup,
+commissioning, qualification and BLE-store/reset functions. Those functions
+were inspected and refactored too. A separate diagnostic pass substitutes only
+the unsupported macro syntax in memory, retaining both conditional branches.
+It reports zero function, duplication or class candidates and zero parser
+errors across all 235 C++ source/header files at the same thresholds. Source
+digests and diagnostic limitations are recorded in the JSON; this diagnostic
+does not replace the standard CLI report or establish API/ABI compatibility.
 
-Replay preparation, strict CSV validation, CAD generation and diagnostic benches
-also have smaller responsibilities. Test helpers share transport scheduling and
-GATT mechanics while retaining independent model packets, CRCs and numerical
-expected values. Independent scenarios and fault matrices retain all assertions.
+These are source dispositions, not an automated baseline-resolution claim.
+No coverage or mutation artifact was supplied; those capabilities remain
+unknown. Compilation and focused behavior tests verify affected source and
+configurations separately.
 
-One behavioral defect was reproduced and corrected: the X5 probe summary passed
-a character buffer as a pointer, so `sizeof(line)` supplied pointer capacity to
-`snprintf`. An array-reference parameter now preserves its 768-byte capacity.
-The regression test failed on the previous signature and passes on the change,
-checking the complete summary and kind counters.
+## Changes
 
-Retained warnings are explicit finite protocol/state dispatch, fail-closed
-admission predicates, independent test case matrices, and classes that own one
-bounded resource lifetime. Their reasons are recorded per finding. Warnings
-remain visible: there is no policy acceptance file, threshold increase, source
-exclusion or altered hardware-support claim.
+BLE connection/discovery, security, store inspection, inventory conservation
+and resource retirement now have separate phases. Configuration decoding,
+persistence, application/reset admission, startup/watchdog and wake/control
+progression have named validation and lifecycle helpers. Camera adapters
+separate transaction, response, timeout and recovery responsibilities;
+qualification and identical transport mechanics are shared.
+
+Storage, telemetry, GNSS/IMU and estimator processing use coherent validation
+and worker phases. Benchmark observations and published run status are separate
+from transport/worker lifecycles. Test fixtures share transport scheduling and
+CSV mechanics while retaining independent packets, CRCs, numerical expected
+values, assertions and fault scenarios.
+
+The first pass reproduced and corrected an X5 summary-buffer defect: a pointer
+parameter made `sizeof(line)` supply pointer capacity to `snprintf`. An array
+reference preserves the 768-byte capacity. Its regression failed on the old
+signature and passes with complete summary and counter checks.
+
+The replay test harness also reproduced a bidirectional pipe stall on local
+Python 3.11 and 3.14. It now supplies the same encoded input through a temporary
+file; executable arguments, output handling and all numerical assertions remain
+unchanged. All six replay tests pass.
 
 ## Verification
 
-- All 80 repository Python tests using CI's Python 3.11, an initial 567-case
-  native run, 140 focused native tests after the final helper changes, and the
-  frozen pre-commit suite of 572 native cases. The increase comes from splitting
-  existing independent scenarios into separately registered tests.
-- SD, X5 and GNSS bench policy tests, including the new X5 summary regression.
-- Pinned clang-format 18 check, Ruff 0.15.0 and `git diff --check`.
-- All 13 repository ESP32 build environments and all four isolated diagnostic
-  builds; retained adapter/forwarding symbols and diagnostic link boundaries.
-- GPS encoder instruction/resource audit and corrected configuration stack
-  audit. The stack audit counts extracted nested frames and retains the fixed
-  1024-byte helper reserve and 4096-byte application budget.
-  The worst configuration path plus reserve uses 3088 bytes.
-- CAD geometry equivalence: both directional solid differences have volume
-  below `1e-9` for all six generated solids with the pinned CAD dependencies.
-- Independent review of production, tools, fixture sharing and final test
-  refactors; its stack-accounting finding was corrected and rechecked.
+The first integrated residual run passed 83 Python tests and 572 native cases.
+Focused final-tail tests cover commissioning, actual startup/watchdog deadlines,
+benchmark admission, BLE store/reset faults, foreign-membership conservation,
+callback lifetimes and SDK sequencing. Independent reviews checked production,
+tools and fixtures; a skipped failure-path SDK getter was corrected before
+delivery and its host suite rerun.
 
-The local Python 3.14 runtime stalled in a bidirectional subprocess pipe during
-the final replay suite. The complete suite was rerun using CI's Python 3.11.
-This does not change the replay executable or waive any test.
+The primary board build and compiled configuration stack audit pass. The audit
+includes the extracted service frames, retaining its fixed 1024-byte helper
+reserve, 4096-byte application budget and 8192-byte SDK/RTOS reserve. The worst
+configuration path plus helper reserve uses 3088 bytes.
 
-No firmware was flashed and no physical qualification was performed.
+Final integrated verification is in progress before delivery.
 
-## Reproduce the scan
+No firmware was flashed, and physical compatibility/support claims are unchanged.
+
+## Reproduce the standard scan
 
 ```sh
 project-health check . --format console --json-output /tmp/ridesync-health.json
 ```
 
-Use the same default complexity 10 and cognitive complexity 15 thresholds.
-For a baseline investigation, add the pinned starting commit with `--baseline`;
-retain the reported comparison limitations. Full local scan output, original
-IDs, domain reports, review evidence and build/test logs are stored outside the
-repository in the owner's Codex reports directory.
+Use the unchanged default complexity 10 and cognitive complexity 15 thresholds.
+For baseline investigation, add the pinned starting commit with `--baseline`
+and retain the reported comparison limitations. Full reports, diagnostic source
+digests, focused logs and review evidence are stored outside the source tree in
+`~/.codex/reports/RideSync/2026-10-11-project-health/`.

@@ -185,7 +185,7 @@ public:
 };
 class BleCentral final : public BleCallbacks {
 public:
-  explicit BleCentral(BleHost &, BleResultSink &, HealthProgress * = nullptr);
+  explicit BleCentral(BleHost &, BleResultSink &, HealthProgress *health = nullptr);
   ~BleCentral();
   BleCentral(const BleCentral &) = delete;
   BleCentral &operator=(const BleCentral &) = delete;
@@ -267,6 +267,23 @@ private:
   bool scanning_ = false, scan_reported_ = false, startup_confirmed_ = false;
   bool scan_cancel_attempted_ = false, scan_pending_ = false;
   int scan_cancel_error_ = 0;
+  bool slotAvailable(const Peer &, uint32_t) const;
+  bool scanAdmission(uint32_t) const;
+  bool profileContextsOpen(const Peer &) const;
+  void enqueue(BleContext &, const BleEvent &);
+  bool procedureAdmission(const Peer &) const;
+  bool securityMatches(const Peer &, const BleEvent &) const;
+  bool subscriptionMatches(const Peer &, const BleEvent &) const;
+  bool profileIo(BlePhase) const;
+  bool eventCurrent(const Peer &, const BleEvent &) const;
+  bool prepareCommand(uint8_t, BleCommand &);
+  void submitRetirement(uint8_t);
+  bool completeService(uint8_t);
+  void retireStartup(uint8_t);
+  void retireContextFault(uint8_t, BleFault, BleFault);
+  bool releasePeerContexts(Peer &);
+  bool queuedAdmission(const Peer &, bool) const;
+  void observePeerHealth(const Peer &, DeviceHealth &) const;
   void cancelScanOnce();
   void serviceStartup(uint32_t now);
   void serviceFaults(uint32_t now);

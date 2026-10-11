@@ -60,6 +60,8 @@ public:
   void result(const BleResult &) override;
 
 private:
+  bool acknowledged(uint8_t i) const;
+  bool videoMode(uint8_t i) const;
   void advanceAcknowledged(uint8_t i);
   bool beginCommand(uint8_t i, Operation op, Token t);
   bool transactionExpired(uint8_t i) const;
@@ -121,5 +123,6 @@ private:
   void complete(uint8_t);
   void observe(uint8_t, const dji::Decoded &);
   void drain();
+  bool transmitPacket(uint8_t i, Step step, uint16_t seq, const dji::Packet &packet);
 };
 } // namespace ridesync

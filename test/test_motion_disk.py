@@ -98,6 +98,13 @@ class MotionDiskTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
+    def assert_row_widths(self):
+        for line in self.data.splitlines():
+            if line.startswith(('imu,','config,','health,','control,')):
+                self.assertEqual(124,len(next(csv.reader([line]))))
+            elif line.startswith('gps,'):
+                self.assertEqual(36,len(next(csv.reader([line]))))
+
     def test_paired_rows_preserve_raw_prefix_and_exact_presence(self):
         rows = parse(self.data)
         self.assertEqual(8,len(rows))
@@ -116,11 +123,7 @@ class MotionDiskTest(unittest.TestCase):
                 self.assertEqual('',row['motion_force_z_mps2'])
                 self.assertEqual('',row['motion_roll_rad'])
                 self.assertEqual('',row['motion_mount_id'])
-        for line in self.data.splitlines():
-            if line.startswith(('imu,','config,','health,','control,')):
-                self.assertEqual(124,len(next(csv.reader([line]))))
-            elif line.startswith('gps,'):
-                self.assertEqual(36,len(next(csv.reader([line]))))
+        self.assert_row_widths()
         config = next(r for r in rows if r['kind']=='config')
         self.assertEqual('0',config['motion_reference_declaration'])
         self.assertEqual('',config['motion_force_z_mps2'])

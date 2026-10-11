@@ -3,11 +3,16 @@ namespace ridesync {
 bool WakeRadioPolicy::matches(const WakeOperation &op) const {
   return active_ && sameWakeOperation(result_.operation, op);
 }
+bool WakeRadioPolicy::validReservation(const WakeOperation &op, uint32_t duration) const {
+  return op.id && op.id != UINT32_MAX && op.generation && op.generation != UINT32_MAX &&
+         op.id > last_ids_[op.peer] && op.generation >= generations_[op.peer] && duration &&
+         duration < 0x80000000u;
+}
 bool WakeRadioPolicy::reserve(const WakeOperation &op, uint32_t deadline, uint32_t now) {
   const auto duration = deadline - now;
-  if ((active_ && !reusable()) || op.peer >= kWakePeers || !op.id || op.id == UINT32_MAX ||
-      !op.generation || op.generation == UINT32_MAX || op.id <= last_ids_[op.peer] ||
-      op.generation < generations_[op.peer] || !duration || duration >= 0x80000000u)
+  if ((active_ && !reusable()) || op.peer >= kWakePeers)
+    return false;
+  if (!validReservation(op, duration))
     return false;
   result_ = {};
   result_.operation = op;

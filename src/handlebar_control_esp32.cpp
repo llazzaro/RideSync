@@ -19,13 +19,18 @@ Esp32HandlebarControl::~Esp32HandlebarControl() {
   if (attached_)
     telemetry_.owner().detachControl(control_);
 }
+namespace {
+bool qualifiedControl(const QualifiedHandlebar &q) {
+  return q.opt_in && q.acknowledge_qualification && validateButtonConfig(q.actions) &&
+         validateButtonGpioConfig(q.button);
+}
+} // namespace
 bool Esp32HandlebarControl::begin() {
   if (attempted_)
     return false;
   attempted_ = true;
   const auto &q = qualification_;
-  if (!q.opt_in || !q.acknowledge_qualification || !validateButtonConfig(q.actions) ||
-      !validateButtonGpioConfig(q.button))
+  if (!qualifiedControl(q))
     return false;
   if (!telemetry_.owner().attachControl(control_))
     return false;

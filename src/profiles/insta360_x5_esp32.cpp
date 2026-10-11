@@ -113,13 +113,71 @@ WakeStatus previous_wake;
 #endif
 X5RuntimeStatus previous;
 bool have_previous = false;
-bool changed(const X5RuntimeStatus &a, const X5RuntimeStatus &b) {
+bool requestChanged(const X5RuntimeStatus &a, const X5RuntimeStatus &b) {
   return a.request_id != b.request_id || a.last_request_id != b.last_request_id ||
          a.last_request_error != b.last_request_error ||
-         a.last_request_refusal != b.last_request_refusal || a.connected != b.connected ||
-         a.subscribed != b.subscribed || a.active != b.active || a.observed != b.observed ||
-         a.age_known != b.age_known || a.lifecycle != b.lifecycle || a.error != b.error ||
-         a.failure != b.failure || a.revoked != b.revoked || a.configured != b.configured;
+         a.last_request_refusal != b.last_request_refusal;
+}
+bool observationChanged(const X5RuntimeStatus &a, const X5RuntimeStatus &b) {
+  return a.connected != b.connected || a.subscribed != b.subscribed || a.active != b.active ||
+         a.observed != b.observed || a.age_known != b.age_known;
+}
+bool changed(const X5RuntimeStatus &a, const X5RuntimeStatus &b) {
+  return requestChanged(a, b) || observationChanged(a, b) || a.lifecycle != b.lifecycle ||
+         a.error != b.error || a.failure != b.failure || a.revoked != b.revoked ||
+         a.configured != b.configured;
+}
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+bool wakeChanged(const WakeStatus &a, const WakeStatus &b) {
+  return a.operation.id != b.operation.id || a.phase != b.phase || a.error != b.error ||
+         a.released != b.released || a.observed != b.observed;
+}
+#endif
+
+void finalizeCommissioning(X5Runtime &runtime) {
+  if (finalized)
+    return;
+  // Bound handshake acceptance before reading a possibly late ready publication.
+  if (millis() - begun_ms >= 1000 || runtime.status().revoked) {
+    runtime.revoke();
+    finalized = true;
+    Serial.println("X5 commissioning refused: owner deadline/admission.");
+  } else if (proof_ready.load(std::memory_order_acquire)) {
+    finalized = true;
+    if (!runtime.configure(qualification, source))
+      Serial.println("X5 commissioning refused: qualification/profile mismatch.");
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+    if (!wake_provider_present || !wakeControl().configure(wake_config, wake_policy))
+      Serial.println("X5 wake commissioning refused: missing or unqualified wake provider.");
+#endif
+  }
+}
+void serviceSerial(X5Runtime &runtime) {
+  auto &serial = serialControl();
+  for (unsigned n = 0; n < 32 && Serial.available(); ++n)
+    serial.consume(static_cast<char>(Serial.read()));
+  const auto command = serial.service();
+  const auto snapshot = runtime.status();
+  bool wake_changed = false;
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+  const auto wake = wakeControl().status();
+  wake_changed = wakeChanged(wake, previous_wake);
+#endif
+  if (command != X5SerialCommand::None || !have_previous || changed(snapshot, previous) ||
+      wake_changed) {
+    const char *actions[] = {"event",  "CONNECT",    "REC",  "STOP",        "QUERY",
+                             "STATUS", "DISCONNECT", "WAKE", "invalid-line"};
+    report(snapshot, actions[static_cast<unsigned>(command)], serial.rejected());
+#if defined(RIDESYNC_X5_WAKE_MILESTONE)
+    previous_wake = wake;
+    Serial.printf("X5_WAKE id=%lu phase=%u error=%u released=%u observed=%s command_error=%u\n",
+                  static_cast<unsigned long>(wake.operation.id), unsigned(wake.phase),
+                  unsigned(wake.error), unsigned(wake.released), recordingName(wake.observed),
+                  unsigned(serial.error()));
+#endif
+    previous = snapshot;
+    have_previous = true;
+  }
 }
 } // namespace
 X5Runtime &x5Runtime() {
@@ -167,53 +225,12 @@ void x5MilestoneService(bool admission_allowed) {
   auto &runtime = x5Runtime();
   if (!admission_allowed || !nvsBootStatus().persistenceAllowed())
     runtime.revoke();
-  if (!finalized) {
-    // Bound handshake acceptance before reading a possibly late ready publication.
-    if (millis() - begun_ms >= 1000 || runtime.status().revoked) {
-      runtime.revoke();
-      finalized = true;
-      Serial.println("X5 commissioning refused: owner deadline/admission.");
-    } else if (proof_ready.load(std::memory_order_acquire)) {
-      finalized = true;
-      if (!runtime.configure(qualification, source))
-        Serial.println("X5 commissioning refused: qualification/profile mismatch.");
-#if defined(RIDESYNC_X5_WAKE_MILESTONE)
-      if (!wake_provider_present || !wakeControl().configure(wake_config, wake_policy))
-        Serial.println("X5 wake commissioning refused: missing or unqualified wake provider.");
-#endif
-    }
-  }
+  finalizeCommissioning(runtime);
   runtime.service(); // Deadline/receive progress precedes serial dispatch.
 #if defined(RIDESYNC_X5_WAKE_MILESTONE)
   wakeControl().service();
 #endif
-  auto &serial = serialControl();
-  for (unsigned n = 0; n < 32 && Serial.available(); ++n)
-    serial.consume(static_cast<char>(Serial.read()));
-  const auto command = serial.service();
-  const auto snapshot = runtime.status();
-  bool wake_changed = false;
-#if defined(RIDESYNC_X5_WAKE_MILESTONE)
-  const auto wake = wakeControl().status();
-  wake_changed = wake.operation.id != previous_wake.operation.id ||
-                 wake.phase != previous_wake.phase || wake.error != previous_wake.error ||
-                 wake.released != previous_wake.released || wake.observed != previous_wake.observed;
-#endif
-  if (command != X5SerialCommand::None || !have_previous || changed(snapshot, previous) ||
-      wake_changed) {
-    const char *actions[] = {"event",  "CONNECT",    "REC",  "STOP",        "QUERY",
-                             "STATUS", "DISCONNECT", "WAKE", "invalid-line"};
-    report(snapshot, actions[static_cast<unsigned>(command)], serial.rejected());
-#if defined(RIDESYNC_X5_WAKE_MILESTONE)
-    previous_wake = wake;
-    Serial.printf("X5_WAKE id=%lu phase=%u error=%u released=%u observed=%s command_error=%u\n",
-                  static_cast<unsigned long>(wake.operation.id), unsigned(wake.phase),
-                  unsigned(wake.error), unsigned(wake.released), recordingName(wake.observed),
-                  unsigned(serial.error()));
-#endif
-    previous = snapshot;
-    have_previous = true;
-  }
+  serviceSerial(runtime);
 }
 } // namespace ridesync
 extern "C" ridesync::X5Runtime *ridesync_x5_runtime() { return &ridesync::x5Runtime(); }

@@ -122,7 +122,7 @@ public:
 class CameraManager {
 public:
   static constexpr size_t kQueueDepth = 4;
-  CameraManager(Clock &clock, CameraTransport &transport, RetryPolicy policy = {});
+  CameraManager(Clock &clock, CameraTransport &transport, RetryPolicy policy = RetryPolicy{});
   ConfigResult configure(const SourceConfig &config);
   CameraError request(size_t peer, Operation operation);
   CameraError cancel(size_t peer);
@@ -167,6 +167,11 @@ private:
     uint32_t completed_observation_deadline_ms = 0;
     bool completed_observation_open = false;
   };
+  bool ackCurrent(const Peer &, Token) const;
+  bool cancellationKeepsLink(const Peer &) const;
+  bool commandObservationCurrent(const Event &, const Peer &) const;
+  bool eventLifecycle(const Peer &, bool) const;
+  CameraError connectionAdmission(const Peer &, Operation) const;
   Clock &clock_;
   CameraTransport &transport_;
   RetryPolicy policy_;

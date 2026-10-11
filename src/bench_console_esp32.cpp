@@ -79,6 +79,21 @@ void executePeers(BenchCommand command, const MixedCameraRuntime &runtime, unsig
       Serial.printf("BENCH admission peer=%u error=%u\n", unsigned(i), unsigned(error));
   }
 }
+void executeCameraCommand(BenchCommand command, const MixedCameraRuntime &runtime,
+                          unsigned &accepted, unsigned &refused) {
+  if (command == BenchCommand::Record || command == BenchCommand::Stop ||
+      command == BenchCommand::Query) {
+    const auto result =
+        command == BenchCommand::Query
+            ? runtime.group.resync()
+            : runtime.group.request(command == BenchCommand::Record ? RecordingState::Recording
+                                                                    : RecordingState::Stopped);
+    accepted = result == GroupError::None;
+    refused = !accepted;
+  } else {
+    executePeers(command, runtime, accepted, refused);
+  }
+}
 void execute(BenchCommand command) {
   auto *application = benchApplicationOwner();
   if (command == BenchCommand::Status) {
@@ -114,18 +129,7 @@ void execute(BenchCommand command) {
   }
   const auto runtime = mixedCameraRuntime();
   unsigned accepted = 0, refused = 0;
-  if (command == BenchCommand::Record || command == BenchCommand::Stop ||
-      command == BenchCommand::Query) {
-    const auto result =
-        command == BenchCommand::Query
-            ? runtime.group.resync()
-            : runtime.group.request(command == BenchCommand::Record ? RecordingState::Recording
-                                                                    : RecordingState::Stopped);
-    accepted = result == GroupError::None;
-    refused = !accepted;
-  } else {
-    executePeers(command, runtime, accepted, refused);
-  }
+  executeCameraCommand(command, runtime, accepted, refused);
   Serial.printf("BENCH command=%u accepted=%u refused=%u; acceptance is not recording proof.\n",
                 unsigned(command), accepted, refused);
   waiting = accepted != 0;

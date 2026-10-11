@@ -59,7 +59,45 @@ private:
   BenchPort &port_;
   bool active_ = false, suppressed_ = false;
 };
-class Bench {
+// Observations are retained after the transport closes, for control-loop reporting.
+class BenchObservations {
+public:
+  bool baseline() const { return baseline_; }
+  uint64_t heartbeats() const { return heartbeat_; }
+  uint64_t maxLoopGapUs() const { return max_gap_us_; }
+  uint32_t summaryDrops() const { return drops_; }
+  void reportDropped() {
+    if (drops_ != UINT32_MAX)
+      ++drops_;
+  }
+
+protected:
+  void observe(const ModemSnapshot &s, uint32_t now) {
+    if (s.gnss_power_enabled && power_ms_ < 0)
+      power_ms_ = now;
+    if (s.receiver_ready && ready_ms_ < 0)
+      ready_ms_ = now;
+    observeFix(s, now);
+  }
+  void observeFix(const ModemSnapshot &s, uint32_t now) {
+    if (s.health == UartHealth::Healthy &&
+        (s.validity == FixValidity::NoFix || s.validity == FixValidity::Valid) &&
+        (!baseline_ || s.fix.receipt_monotonic_ms != last_receipt_ms_)) {
+      if (!baseline_)
+        baseline_ms_ = now;
+      baseline_ = true;
+      last_receipt_ms_ = s.fix.receipt_monotonic_ms;
+      if (exchanges_ != UINT32_MAX)
+        ++exchanges_;
+    }
+  }
+  bool baseline_ = false;
+  uint32_t exchanges_ = 0, drops_ = 0;
+  int64_t power_ms_ = -1, ready_ms_ = -1, baseline_ms_ = -1;
+  uint64_t last_receipt_ms_ = 0, heartbeat_ = 0, last_entry_us_ = 0, last_exit_us_ = 0;
+  uint64_t max_gap_us_ = 0, max_idle_us_ = 0, max_tick_us_ = 0, max_work_us_ = 0;
+};
+class Bench : public BenchObservations {
 public:
   Bench(Clock &raw, MicroClock &micro, BenchPort &port)
       : raw_(raw), micro_(micro), gate_(port), clock_(raw, 1, 3000),
@@ -105,23 +143,17 @@ public:
       const uint64_t before = micro_.microsNow();
       gps_.tick();
       max_tick_us_ = std::max(max_tick_us_, micro_.microsNow() - before);
-      observe();
+      const auto observed = snapshot();
+      const auto now = elapsed();
+      observe(observed, now);
     }
     last_exit_us_ = micro_.microsNow();
     max_work_us_ = std::max(max_work_us_, last_exit_us_ - entry);
   }
   ModemSnapshot snapshot() { return gps_.snapshot(); }
   StopReason stopReason() const { return reason_; }
-  bool baseline() const { return baseline_; }
   bool suppressed() const { return suppressed_; }
   uint64_t discarded() const { return gate_.discarded; }
-  uint64_t heartbeats() const { return heartbeat_; }
-  uint64_t maxLoopGapUs() const { return max_gap_us_; }
-  uint32_t summaryDrops() const { return drops_; }
-  void reportDropped() {
-    if (drops_ != UINT32_MAX)
-      ++drops_;
-  }
   size_t report(char *out, size_t capacity) {
     const auto s = snapshot();
     const int size = std::snprintf(
@@ -174,40 +206,17 @@ private:
     gps_.cancel();
     gate_.close();
   }
-  void observe() {
-    const auto s = snapshot();
-    const auto now = elapsed();
-    if (s.gnss_power_enabled && power_ms_ < 0)
-      power_ms_ = now;
-    if (s.receiver_ready && ready_ms_ < 0)
-      ready_ms_ = now;
-    observeFix(s, now);
-  }
-  void observeFix(const ModemSnapshot &s, uint32_t now) {
-    if (s.health == UartHealth::Healthy &&
-        (s.validity == FixValidity::NoFix || s.validity == FixValidity::Valid) &&
-        (!baseline_ || s.fix.receipt_monotonic_ms != last_receipt_ms_)) {
-      if (!baseline_)
-        baseline_ms_ = now;
-      baseline_ = true;
-      last_receipt_ms_ = s.fix.receipt_monotonic_ms;
-      if (exchanges_ != UINT32_MAX)
-        ++exchanges_;
-    }
-  }
   Clock &raw_;
   MicroClock &micro_;
   Gate gate_;
   SessionClock clock_;
   ModemGnss modem_;
   GpsManager gps_;
-  bool attempted_ = false, active_ = false, baseline_ = false, suppressed_ = false;
+  bool attempted_ = false, active_ = false, suppressed_ = false;
   bool seen_loop_ = false;
   StopReason reason_ = StopReason::None;
-  uint32_t started_ms_ = 0, exchanges_ = 0, drops_ = 0;
+  uint32_t started_ms_ = 0;
   uint32_t start_rejected_ = 0, suppress_rejected_ = 0;
-  int64_t power_ms_ = -1, ready_ms_ = -1, baseline_ms_ = -1, suppression_ms_ = -1;
-  uint64_t last_receipt_ms_ = 0, heartbeat_ = 0, last_entry_us_ = 0, last_exit_us_ = 0;
-  uint64_t max_gap_us_ = 0, max_idle_us_ = 0, max_tick_us_ = 0, max_work_us_ = 0;
+  int64_t suppression_ms_ = -1;
 };
 } // namespace gnss_bench

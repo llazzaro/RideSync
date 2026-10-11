@@ -37,6 +37,23 @@ Be80CommandResult encodeRecordingCommand(const Be80ControlConfig &config,
   result.size = result.bytes.size();
   return result;
 }
+namespace {
+Be80EnvelopeError validateEnvelopeHeader(const uint8_t *data, size_t size) {
+  // onCharacteristicChanged documents the first two bytes as total length,
+  // little endian, and responseSig at bytes2..6. No further schema is inferred.
+  const size_t declared = static_cast<size_t>(data[0]) | (static_cast<size_t>(data[1]) << 8);
+  if (declared != size) {
+    return Be80EnvelopeError::LengthMismatch;
+  }
+  const uint8_t signature[5] = {0, 0, 4, 0, 0};
+  for (size_t i = 0; i < sizeof signature; ++i) {
+    if (data[i + 2] != signature[i]) {
+      return Be80EnvelopeError::UnsupportedHeader;
+    }
+  }
+  return Be80EnvelopeError::None;
+}
+} // namespace
 Be80EnvelopeResult decodeBe80Envelope(const Be80ControlConfig &config, Be80Direction direction,
                                       const uint8_t *data, size_t size) {
   Be80EnvelopeResult result;
@@ -58,20 +75,9 @@ Be80EnvelopeResult decodeBe80Envelope(const Be80ControlConfig &config, Be80Direc
     result.error = Be80EnvelopeError::InvalidBuffer;
     return result;
   }
-  // onCharacteristicChanged documents the first two bytes as total length,
-  // little endian, and responseSig at bytes2..6. No further schema is inferred.
-  const size_t declared = static_cast<size_t>(data[0]) | (static_cast<size_t>(data[1]) << 8);
-  if (declared != size) {
-    result.error = Be80EnvelopeError::LengthMismatch;
+  result.error = validateEnvelopeHeader(data, size);
+  if (result.error != Be80EnvelopeError::None)
     return result;
-  }
-  const uint8_t signature[5] = {0, 0, 4, 0, 0};
-  for (size_t i = 0; i < sizeof signature; ++i) {
-    if (data[i + 2] != signature[i]) {
-      result.error = Be80EnvelopeError::UnsupportedHeader;
-      return result;
-    }
-  }
   for (size_t i = 0; i < size; ++i)
     result.bytes[i] = data[i];
   result.size = size;

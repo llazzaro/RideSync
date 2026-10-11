@@ -52,6 +52,9 @@ public:
   void result(const BleResult &) override;
 
 private:
+  bool expectedResponse(uint8_t i, const go3s::Decoded &d) const;
+  bool acknowledged(uint8_t i) const;
+  bool heartbeatInterruptible(uint8_t i) const;
   void advanceAcknowledged(uint8_t i);
   bool beginCommand(uint8_t i, Operation op, Token t);
   bool transactionExpired(uint8_t i, bool allow_unprompted_sync) const;

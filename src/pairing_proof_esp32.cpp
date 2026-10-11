@@ -74,6 +74,10 @@ bool equalProof(const BleStoreProof &a, const BleStoreProof &b) {
   return a.qualification_record == b.qualification_record && a.digest == b.digest &&
          a.counts == b.counts;
 }
+bool proofDeadlineAllowed(uint32_t deadline, uint32_t now) {
+  return now - deadline >= 0x80000000UL && deadline - now <= 5000 &&
+         nvsBootStatus().persistenceAllowed();
+}
 } // namespace
 PairingProofMaintenance &pairingProofMaintenance() {
   static PairingProofMaintenance owner;
@@ -101,8 +105,7 @@ BondResetSubmission PairingProofMaintenance::request(uint32_t operation,
   BleStoreProof actual;
   if (boot_.load(std::memory_order_acquire) != Boot::Ready ||
       !Esp32BleHost::instance().admittedProof(actual) || !equalProof(actual, admitted) ||
-      actual.qualification_record == UINT32_MAX || now - deadline < 0x80000000UL ||
-      deadline - now > 5000 || !nvsBootStatus().persistenceAllowed())
+      actual.qualification_record == UINT32_MAX || !proofDeadlineAllowed(deadline, now))
     return BondResetSubmission::Refused;
   operation_ = last_operation_ = operation;
   proof_ = actual; // EXACT authoritative host-admitted proof, never caller higher evidence.
@@ -137,6 +140,19 @@ bool PairingProofMaintenance::active() const {
   return !cancelled_.load(std::memory_order_acquire) && nvsBootStatus().persistenceAllowed() &&
          uint32_t(esp_timer_get_time() / 1000) - deadline_ >= 0x80000000UL;
 }
+int PairingProofMaintenance::verifyFloor(uint32_t handle, const std::array<uint8_t, 16> &bytes,
+                                         int rc) {
+  if (rc == ESP_OK && active()) {
+    Marker observed{};
+    size_t size = observed.size();
+    rc = nvs_get_blob(handle, kKey, observed.data(), &size);
+    if (rc == ESP_OK && (size != observed.size() || observed != bytes))
+      rc = kInvalid;
+  } else if (rc == ESP_OK) {
+    rc = kRevoked;
+  }
+  return rc;
+}
 void PairingProofMaintenance::writeFloor(uint32_t next) {
   Handle h;
   auto rc = nvs_open(kNamespace, NVS_READWRITE, &h.value);
@@ -156,15 +172,7 @@ void PairingProofMaintenance::writeFloor(uint32_t next) {
     rc = nvs_commit(h.value);
   else if (rc == ESP_OK)
     rc = kRevoked;
-  if (rc == ESP_OK && active()) {
-    Marker observed{};
-    size_t size = observed.size();
-    rc = nvs_get_blob(h.value, kKey, observed.data(), &size);
-    if (rc == ESP_OK && (size != observed.size() || observed != bytes))
-      rc = kInvalid;
-  } else if (rc == ESP_OK) {
-    rc = kRevoked;
-  }
+  rc = verifyFloor(h.value, bytes, rc);
   result_.error = rc;
   if (rc) {
     // Never reuse matching uncertain/uncommitted bytes as a Durable ACK later

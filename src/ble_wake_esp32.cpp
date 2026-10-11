@@ -41,15 +41,26 @@ bool Esp32BleHost::gapSetupBusy(std::memory_order order) const {
     return true;
   return false;
 }
+bool Esp32BleHost::resetRoutingBusy(std::memory_order order) const {
+  return reset_gate_.load(std::memory_order_acquire) || reset_.phase.load(order) == 1 ||
+         reset_.phase.load() == 2 || sdk_calls_.load(order);
+}
+bool Esp32BleHost::leaseHostQualified() const {
+  return state() == BleHostState::Ready && fault() == BleFault::None && restore_verified_ &&
+         refusal_installed_ && nvsBootStatus().persistenceAllowed();
+}
+bool Esp32BleHost::foreignConnection(uint16_t handle) const {
+  for (const auto &entry : slots_)
+    if (entry.context && entry.context->connection.load() == handle)
+      return true;
+  return false;
+}
 WakeSubmit Esp32BleHost::reserveWake(const WakeOperation &op, uint32_t deadline, uint32_t now) {
   WakeGate routing(routing_lock_);
   if (!routing.held() || wakeReserved() || peripheralReserved() ||
-      reset_gate_.load(std::memory_order_acquire) ||
-      reset_.phase.load(std::memory_order_acquire) == 1 || reset_.phase.load() == 2 ||
-      sdk_calls_.load(std::memory_order_acquire))
+      resetRoutingBusy(std::memory_order_acquire))
     return WakeSubmit::Busy;
-  if (state() != BleHostState::Ready || fault() != BleFault::None || !restore_verified_ ||
-      !refusal_installed_ || !nvsBootStatus().persistenceAllowed())
+  if (!leaseHostQualified())
     return WakeSubmit::Unsupported;
   // Leases remain reserved until the original procedure's callback/barrier is
   // released, not merely until SDK GAP active() becomes false.
@@ -167,33 +178,7 @@ void Esp32BleHost::wakeBarrierReleased(const WakeOperation &op) {
 bool Esp32BleHost::wakeOwnsConnection(uint16_t handle) const {
   return wakeReserved() && handle != kBleNoHandle && wake_connection_.load() == handle;
 }
-bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle, bool reported_success) {
-  wake_identity_pending_.store(true, std::memory_order_release);
-  WakeGate routing(routing_lock_);
-  if (handle == kBleNoHandle && !reported_success)
-    return false;
-  if (!routing.held() || handle == kBleNoHandle) {
-    quarantineWake();
-    return false;
-  }
-  for (const auto &entry : slots_)
-    if (entry.context && entry.context->connection.load() == handle) {
-      quarantineWake();
-      return false; // Never terminate an established foreign handle.
-    }
-  ble_gap_conn_desc description{};
-  const int found = ble_gap_conn_find(handle, &description);
-  if (!reported_success && found == BLE_HS_ENOTCONN)
-    return false; // Pinned metadata proves absence; status alone does not.
-  if (!wakeIncoming(op, handle)) {
-    quarantineWake();
-    return false;
-  }
-  wake_connection_.store(handle, std::memory_order_release);
-  if (found) {
-    quarantineWake();
-    return true; // Actual new handle is owned; identity stays ambiguous.
-  }
+bool Esp32BleHost::identifyWakeAddress(const ble_gap_conn_desc &description) {
   WakeGate policy(wake_lock_);
   if (!policy.held()) {
     quarantineWake();
@@ -208,6 +193,34 @@ bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle, bool r
   wake_identity_known_ = true;
   wake_identity_pending_.store(false, std::memory_order_release);
   return true;
+}
+bool Esp32BleHost::wakeIdentify(const WakeOperation &op, uint16_t handle, bool reported_success) {
+  wake_identity_pending_.store(true, std::memory_order_release);
+  WakeGate routing(routing_lock_);
+  if (handle == kBleNoHandle && !reported_success)
+    return false;
+  if (!routing.held() || handle == kBleNoHandle) {
+    quarantineWake();
+    return false;
+  }
+  if (foreignConnection(handle)) {
+    quarantineWake();
+    return false; // Never terminate an established foreign handle.
+  }
+  ble_gap_conn_desc description{};
+  const int found = ble_gap_conn_find(handle, &description);
+  if (!reported_success && found == BLE_HS_ENOTCONN)
+    return false; // Pinned metadata proves absence; status alone does not.
+  if (!wakeIncoming(op, handle)) {
+    quarantineWake();
+    return false;
+  }
+  wake_connection_.store(handle, std::memory_order_release);
+  if (found) {
+    quarantineWake();
+    return true; // Actual new handle is owned; identity stays ambiguous.
+  }
+  return identifyWakeAddress(description);
 }
 // Caller holds routing_lock_ and wake_lock_; attribution cannot change mid-check.
 bool Esp32BleHost::wakeStoreAddressAllowed(const ble_addr_t &address) const {
@@ -246,32 +259,53 @@ bool Esp32BleHost::wakeStoreRecordAllowed(const void *value_pointer) const {
       return false;
   return true;
 }
-bool Esp32BleHost::wakeStoreObjectAllowed(int type, const void *key_pointer,
-                                          const void *value_pointer) {
-  const auto *key = static_cast<const ble_store_key *>(key_pointer);
-  const auto *value = static_cast<const ble_store_value *>(value_pointer);
-  if (!key && !value)
-    return false;
+bool Esp32BleHost::wakeStoreKeyAllowed(int type, const void *pointer) {
+  const auto &key = *static_cast<const ble_store_key *>(pointer);
   switch (type) {
   case BLE_STORE_OBJ_TYPE_OUR_SEC:
   case BLE_STORE_OBJ_TYPE_PEER_SEC:
-    return wakeStoreAddressAllowed(value ? value->sec.peer_addr : key->sec.peer_addr);
+    return wakeStoreAddressAllowed(key.sec.peer_addr);
   case BLE_STORE_OBJ_TYPE_CCCD:
-    return wakeStoreAddressAllowed(value ? value->cccd.peer_addr : key->cccd.peer_addr);
+    return wakeStoreAddressAllowed(key.cccd.peer_addr);
   case BLE_STORE_OBJ_TYPE_CSFC:
-    return wakeStoreAddressAllowed(value ? value->csfc.peer_addr : key->csfc.peer_addr);
+    return wakeStoreAddressAllowed(key.csfc.peer_addr);
   case BLE_STORE_OBJ_TYPE_LOCAL_IRK:
-    return wakeStoreAddressAllowed(value ? value->local_irk.addr : key->local_irk.addr);
+    return wakeStoreAddressAllowed(key.local_irk.addr);
   case BLE_STORE_OBJ_TYPE_PEER_ADDR:
-    return value ? wakeStoreAddressAllowed(value->rpa_rec.peer_rpa_addr) &&
-                       wakeStoreAddressAllowed(value->rpa_rec.peer_addr)
-                 : wakeStoreAddressAllowed(key->rpa_rec.peer_rpa_addr);
+    return wakeStoreAddressAllowed(key.rpa_rec.peer_rpa_addr);
   case BLE_STORE_OBJ_TYPE_PEER_DEV_REC:
-    return wakeStoreRecordAllowed(value_pointer);
+    return wakeStoreRecordAllowed(nullptr);
   default:
     quarantineWake();
     return false;
   }
+}
+bool Esp32BleHost::wakeStoreValueAllowed(int type, const void *pointer) {
+  const auto &value = *static_cast<const ble_store_value *>(pointer);
+  switch (type) {
+  case BLE_STORE_OBJ_TYPE_OUR_SEC:
+  case BLE_STORE_OBJ_TYPE_PEER_SEC:
+    return wakeStoreAddressAllowed(value.sec.peer_addr);
+  case BLE_STORE_OBJ_TYPE_CCCD:
+    return wakeStoreAddressAllowed(value.cccd.peer_addr);
+  case BLE_STORE_OBJ_TYPE_CSFC:
+    return wakeStoreAddressAllowed(value.csfc.peer_addr);
+  case BLE_STORE_OBJ_TYPE_LOCAL_IRK:
+    return wakeStoreAddressAllowed(value.local_irk.addr);
+  case BLE_STORE_OBJ_TYPE_PEER_ADDR:
+    return wakeStoreAddressAllowed(value.rpa_rec.peer_rpa_addr) &&
+           wakeStoreAddressAllowed(value.rpa_rec.peer_addr);
+  case BLE_STORE_OBJ_TYPE_PEER_DEV_REC:
+    return wakeStoreRecordAllowed(pointer);
+  default:
+    quarantineWake();
+    return false;
+  }
+}
+bool Esp32BleHost::wakeStoreObjectAllowed(int type, const void *key, const void *value) {
+  if (!key && !value)
+    return false;
+  return value ? wakeStoreValueAllowed(type, value) : wakeStoreKeyAllowed(type, key);
 }
 bool Esp32BleHost::wakeStoreAllowed(int type, const void *key_pointer, const void *value_pointer) {
   if (peripheralReserved())

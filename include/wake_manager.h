@@ -74,7 +74,7 @@ struct WakeStatus {
 // One serialized owner; fixed storage, no manager/group ticks or callbacks.
 class WakeManager {
 public:
-  WakeManager(WakeRadio &, WakeRecovery * = nullptr);
+  WakeManager(WakeRadio &, WakeRecovery *recovery = nullptr);
   ~WakeManager();
   WakeManager(const WakeManager &) = delete;
   WakeManager &operator=(const WakeManager &) = delete;
@@ -102,6 +102,7 @@ private:
   size_t owner_ = kWakePeers, cursor_ = 0;
   void seal(Slot &, WakePhase, CameraError);
   void recover(Slot &);
+  bool requestSlotAvailable(const Slot &) const;
   bool validRequest(const WakeOperation &, const WakePolicy &) const;
   void submitQueued(size_t, uint32_t);
   void serviceRadio(uint32_t);

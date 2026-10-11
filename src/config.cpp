@@ -29,30 +29,41 @@ bool validInsta360WakeSuffix(const std::string &s) {
   return true;
 }
 ConfigResult validateModel(const CameraConfig &p, size_t i) {
-  CameraFamily expected;
-  switch (p.model) {
-  case CameraModel::X5:
-  case CameraModel::GO3S:
-  case CameraModel::ONE_RS:
-    expected = CameraFamily::Insta360;
-    break;
-  case CameraModel::HERO12_BLACK:
-    expected = CameraFamily::GoPro;
-    break;
-  case CameraModel::DJI_ACTION4:
-  case CameraModel::DJI_ACTION5_PRO:
-  case CameraModel::DJI_ACTION6:
-  case CameraModel::DJI_OSMO360:
-    expected = CameraFamily::DJI;
-    break;
-  default:
+  struct ModelFamily {
+    CameraModel model;
+    CameraFamily family;
+  };
+  constexpr ModelFamily models[] = {{CameraModel::X5, CameraFamily::Insta360},
+                                    {CameraModel::GO3S, CameraFamily::Insta360},
+                                    {CameraModel::ONE_RS, CameraFamily::Insta360},
+                                    {CameraModel::HERO12_BLACK, CameraFamily::GoPro},
+                                    {CameraModel::DJI_ACTION4, CameraFamily::DJI},
+                                    {CameraModel::DJI_ACTION5_PRO, CameraFamily::DJI},
+                                    {CameraModel::DJI_ACTION6, CameraFamily::DJI},
+                                    {CameraModel::DJI_OSMO360, CameraFamily::DJI}};
+  CameraFamily expected = CameraFamily::Unknown;
+  for (const auto &model : models)
+    if (p.model == model.model) {
+      expected = model.family;
+      break;
+    }
+  if (expected == CameraFamily::Unknown)
     return {ConfigError::UnknownModel, i, "select a supported camera model"};
-  }
   if (p.family != expected)
     return {ConfigError::FamilyMismatch, i, "family does not match model"};
   if (expected == CameraFamily::DJI && (p.gps_telemetry || !p.wake_identifier.empty()))
     return {ConfigError::UnsupportedCapability, i, "DJI GPS and wake are unsupported"};
   return {ConfigError::None, 0, "valid"};
+}
+bool validAddressType(const CameraConfig &p) {
+  if (p.address_type != AddressType::Unknown && p.address_type != AddressType::Public &&
+      p.address_type != AddressType::Random)
+    return false;
+  return !(p.enabled || !p.identifier.empty()) || p.address_type != AddressType::Unknown;
+}
+bool validWakeIdentifier(const CameraConfig &p) {
+  return p.wake_identifier.empty() || validMac(p.wake_identifier) ||
+         (p.family == CameraFamily::Insta360 && validInsta360WakeSuffix(p.wake_identifier));
 }
 ConfigResult validateCameraIdentity(const CameraConfig &p, size_t i) {
   if (p.enabled && p.identifier.empty())
@@ -60,12 +71,9 @@ ConfigResult validateCameraIdentity(const CameraConfig &p, size_t i) {
   if (!p.identifier.empty() && !validMac(p.identifier))
     return {ConfigError::InvalidIdentifier, i,
             "identifier must be six hexadecimal octets separated by colons"};
-  if ((p.address_type != AddressType::Unknown && p.address_type != AddressType::Public &&
-       p.address_type != AddressType::Random) ||
-      ((p.enabled || !p.identifier.empty()) && p.address_type == AddressType::Unknown))
+  if (!validAddressType(p))
     return {ConfigError::InvalidAddressType, i, "set public or random BLE address type"};
-  if (!p.wake_identifier.empty() && !validMac(p.wake_identifier) &&
-      !(p.family == CameraFamily::Insta360 && validInsta360WakeSuffix(p.wake_identifier)))
+  if (!validWakeIdentifier(p))
     return {ConfigError::InvalidWakeIdentifier, i,
             "wake identifier must be empty, legacy MAC syntax, or six printable ASCII bytes for "
             "Insta360"};

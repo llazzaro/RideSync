@@ -696,6 +696,23 @@ static void alterSecurity(BleEvent &security, unsigned failure) {
     security.bonded = false;
 }
 
+static void verifySecurityLoss(unsigned failure, bool still_open, BlePhase phase, unsigned retired,
+                               unsigned calls, size_t before, size_t after, int status,
+                               unsigned reads) {
+  if (failure == 6 || failure == 8) {
+    TEST_ASSERT_EQUAL(failure == 6, still_open);
+    TEST_ASSERT_EQUAL((int)(failure == 6 ? BlePhase::ReadyForProfile : BlePhase::Read), (int)phase);
+    TEST_ASSERT_EQUAL(failure == 8 ? 1 : 0, reads);
+    TEST_ASSERT_EQUAL(before, after);
+    TEST_ASSERT_EQUAL(0, retired);
+  } else {
+    TEST_ASSERT_FALSE(still_open);
+    TEST_ASSERT_EQUAL(1, retired);
+    TEST_ASSERT_EQUAL(1, calls);
+    TEST_ASSERT_EQUAL(failure == 0 ? 71 : 0, status);
+  }
+}
+
 static void securityLossScenario(unsigned failure) {
   FakeHost h;
   Sink sink;
@@ -734,18 +751,7 @@ static void securityLossScenario(unsigned failure) {
   const auto reads = sink.count(BleResultKind::ReadComplete);
   owner.stop();
   closed(h, owner, 0);
-  if (failure == 6 || failure == 8) {
-    TEST_ASSERT_EQUAL(failure == 6, still_open);
-    TEST_ASSERT_EQUAL((int)(failure == 6 ? BlePhase::ReadyForProfile : BlePhase::Read), (int)phase);
-    TEST_ASSERT_EQUAL(failure == 8 ? 1 : 0, reads);
-    TEST_ASSERT_EQUAL(before, after);
-    TEST_ASSERT_EQUAL(0, retired);
-  } else {
-    TEST_ASSERT_FALSE(still_open);
-    TEST_ASSERT_EQUAL(1, retired);
-    TEST_ASSERT_EQUAL(1, calls);
-    TEST_ASSERT_EQUAL(failure == 0 ? 71 : 0, status);
-  }
+  verifySecurityLoss(failure, still_open, phase, retired, calls, before, after, status, reads);
 }
 
 void later_security_loss_retires_ready_and_active_links_without_restarting_discovery() {

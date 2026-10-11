@@ -35,6 +35,7 @@ private:
   ProofRevocationResult result_;
   bool active() const;
   void perform();
+  int verifyFloor(uint32_t, const std::array<uint8_t, 16> &, int);
   void writeFloor(uint32_t);
 };
 PairingProofMaintenance &pairingProofMaintenance();

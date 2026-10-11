@@ -55,6 +55,12 @@ public:
   const HealthProgress &progress() const { return progress_; }
 
 private:
+  bool configurePeripheral(size_t i, const CameraConfig &camera, const X5Qualification &q);
+  void serviceGps();
+  bool startCentrals(bool one, bool go, bool hero, bool dji);
+  bool configureTelemetry(size_t i, const CameraConfig &camera, const GpsForwardingConfig &gps);
+  bool configureDji(size_t i, const CameraConfig &camera, const DjiQualification &q);
+  bool invalidWakePolicy() const;
   CameraError requestX5Wake();
   bool configureModel(size_t, const CameraConfig &, const MixedCameraQualifications &);
   bool invalidWakeConfig(const SourceConfig &) const;
@@ -72,6 +78,7 @@ private:
     WakeRecoveryResult result_;
     uint32_t deadline_ = 0;
     bool used_ = false;
+    bool released() const;
     void pollActive(uint32_t now);
     void fail(CameraError);
   };

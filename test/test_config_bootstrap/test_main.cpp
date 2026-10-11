@@ -51,7 +51,7 @@ struct Rig {
   SettingsRequests requests;
   ConfigBootstrap owner;
   SettingsSnapshot snapshot;
-  explicit Rig(const CameraPeers &p = {}, const SourceConfig *defaults = nullptr)
+  explicit Rig(const CameraPeers &p = CameraPeers{}, const SourceConfig *defaults = nullptr)
       : owner(persistence, publication, requests, 7, p, defaults) {}
   void start() {
     owner.start(false, true);
@@ -200,24 +200,26 @@ void refusal_is_explicit_read_only_and_local_eligibility_independent() {
   TEST_ASSERT_TRUE(failed.publication.take(failed.snapshot));
   TEST_ASSERT_EQUAL(-1, failed.snapshot.outcome.code);
 }
+template <typename Record> void refreshFixtureCrc(Record &record) {
+  uint32_t crc = 0xffffffffu;
+  for (size_t i = 0; i < record.size; ++i) {
+    if (i >= 20 && i < 24)
+      continue;
+    crc ^= record.bytes[i];
+    for (unsigned bit = 0; bit != 8; ++bit)
+      crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320u : 0);
+  }
+  crc = ~crc;
+  for (unsigned i = 0; i != 4; ++i)
+    record.bytes[20 + i] = uint8_t(crc >> (8 * i));
+}
 void corrupt_and_future_do_not_publish_camera_settings() {
   for (unsigned future = 0; future != 2; ++future) {
     Rig r;
     encodeConfig(camera(), 1, r.store.slots[0]);
     r.store.slots[0].bytes[future ? 6 : 0] = future ? 99 : 0;
     if (future) {
-      auto &record = r.store.slots[0];
-      uint32_t crc = 0xffffffffu;
-      for (size_t i = 0; i < record.size; ++i) {
-        if (i >= 20 && i < 24)
-          continue;
-        crc ^= record.bytes[i];
-        for (unsigned bit = 0; bit != 8; ++bit)
-          crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320u : 0);
-      }
-      crc = ~crc;
-      for (unsigned i = 0; i != 4; ++i)
-        record.bytes[20 + i] = uint8_t(crc >> (8 * i));
+      refreshFixtureCrc(r.store.slots[0]);
     }
     r.start();
     TEST_ASSERT_FALSE(r.snapshot.effective);

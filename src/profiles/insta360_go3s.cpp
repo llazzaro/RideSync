@@ -7,6 +7,19 @@
 namespace ridesync {
 Go3sAdapter::Go3sAdapter(BleHost &host, Clock &clock)
     : host_(host), clock_(clock), central_(host, *this, &progress_) {}
+bool Go3sAdapter::expectedResponse(uint8_t i, const go3s::Decoded &d) const {
+  const auto &p = peers_[i];
+  return p.step != Step::None && p.step != Step::AwaitSync && p.step != Step::Nudge &&
+         p.step != Step::Sync && d.sequence == p.expected_sequence;
+}
+bool Go3sAdapter::acknowledged(uint8_t i) const {
+  const auto &p = peers_[i];
+  return p.step != Step::None && p.step != Step::AwaitSync && p.att_done && p.camera_done;
+}
+bool Go3sAdapter::heartbeatInterruptible(uint8_t i) const {
+  const auto &p = peers_[i];
+  return p.ready && !p.sealed && p.step == Step::Heartbeat && p.resume == Step::None;
+}
 bool Go3sAdapter::reached(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL; }
 bool Go3sAdapter::valid(const Go3sQualification &q) {
   const char fw[] = "8.0.4.11";
@@ -66,10 +79,9 @@ bool Go3sAdapter::beginConnection(uint8_t i, Token t) {
 }
 bool Go3sAdapter::beginCommand(uint8_t i, Operation op, Token t) {
   auto &p = peers_[i];
-  const bool heartbeat =
-      p.ready && !p.sealed && p.step == Step::Heartbeat && p.resume == Step::None;
+  const bool heartbeat = heartbeatInterruptible(i);
   if ((!commandReady(i) && !heartbeat) || p.token.connection != t.connection ||
-      (op != Operation::Start && op != Operation::Stop))
+      (!qualification::recordingOperation(op)))
     return false;
   p.token = t;
   p.operation = op;
@@ -82,7 +94,7 @@ bool Go3sAdapter::beginCommand(uint8_t i, Operation op, Token t) {
 }
 bool Go3sAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
   if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::Insta360 ||
-      camera.model != CameraModel::GO3S || !t.valid() || !t.hasRoom())
+      camera.model != CameraModel::GO3S || !qualification::usableToken(t))
     return false;
   const auto i = static_cast<uint8_t>(index);
   auto &p = peers_[i];
@@ -237,7 +249,7 @@ void Go3sAdapter::advance(uint8_t i) {
   if (p.step == Step::AwaitSync && p.sync_seen) {
     p.step = Step::None;
     send(i, Step::Sync);
-  } else if (p.step != Step::None && p.step != Step::AwaitSync && p.att_done && p.camera_done) {
+  } else if (acknowledged(i)) {
     advanceAcknowledged(i);
   } else if (p.ready && p.step == Step::None && reached(clock_.now(), p.keepalive_due))
     send(i, Step::Heartbeat);
@@ -255,8 +267,7 @@ bool Go3sAdapter::cameraResponse(uint8_t i, const go3s::Decoded &d) {
     }
     p.sync_seen = true;
   }
-  if (d.kind == go3s::Kind::Response && p.step != Step::None && p.step != Step::AwaitSync &&
-      p.step != Step::Nudge && p.step != Step::Sync && d.sequence == p.expected_sequence) {
+  if (d.kind == go3s::Kind::Response && expectedResponse(i, d)) {
     if (d.status != 200) {
       retire(i, Go3sFault::Rejected);
       return false;

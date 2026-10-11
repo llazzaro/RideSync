@@ -125,6 +125,18 @@ void HandlebarControl::admission(const LocalTelemetryStatus &s) {
   }
   status_.local = s;
 }
+namespace {
+DeviceHealth storageHealth(const LocalTelemetryStatus &s) {
+  if (s.storage.terminal || s.storage_error)
+    return DeviceHealth::IoError;
+  return s.storage.dropped || s.storage.rejected || s.storage.lost ? DeviceHealth::Missing
+                                                                   : DeviceHealth::Ok;
+}
+bool pendingRecovery(Hero12RecoveryPhase phase) {
+  return phase == Hero12RecoveryPhase::Pending || phase == Hero12RecoveryPhase::Scanning ||
+         phase == Hero12RecoveryPhase::Connecting || phase == Hero12RecoveryPhase::Observing;
+}
+} // namespace
 void HandlebarControl::observeDevices(const LocalTelemetryStatus &s) {
   auto &gps = status_.health.devices[0];
   gps.enabled = gps.qualified = gps.current = s.phase == TelemetryPhase::Running;
@@ -140,10 +152,7 @@ void HandlebarControl::observeDevices(const LocalTelemetryStatus &s) {
   storage.enabled = storage.qualified = storage.current = s.phase != TelemetryPhase::Inactive;
   storage.severity =
       s.storage.terminal || s.storage_error ? LedSeverity::Error : LedSeverity::Partial;
-  storage.outcome = s.storage.terminal || s.storage_error ? DeviceHealth::IoError
-                    : s.storage.dropped || s.storage.rejected || s.storage.lost
-                        ? DeviceHealth::Missing
-                        : DeviceHealth::Ok;
+  storage.outcome = storageHealth(s);
 }
 void HandlebarControl::observe(const LocalTelemetryStatus &s) {
   admission(s);
@@ -160,9 +169,7 @@ void HandlebarControl::observe(const LocalTelemetryStatus &s) {
     status_.adapter_fault[i] = adapter_.fault(i);
     status_.health.adapter_recovery |= status_.group.peers[i].pending && retiring(i);
     const auto phase = status_.recovery[i].phase;
-    status_.health.adapter_recovery |=
-        phase == Hero12RecoveryPhase::Pending || phase == Hero12RecoveryPhase::Scanning ||
-        phase == Hero12RecoveryPhase::Connecting || phase == Hero12RecoveryPhase::Observing;
+    status_.health.adapter_recovery |= pendingRecovery(phase);
   }
   observeDevices(s);
   status_.led = selectLedState(s.camera == CameraAdmission::Admitted ? &status_.group : nullptr,

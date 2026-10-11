@@ -3,6 +3,18 @@
 static_assert(ATOMIC_INT_LOCK_FREE == 2 && ATOMIC_CHAR_LOCK_FREE == 2,
               "Health publication requires lock-free word/byte atomics");
 namespace ridesync {
+namespace {
+bool validWorkerPolicy(const WorkerPolicy &policy) {
+  if (policy.required && !policy.enabled)
+    return false;
+  if (!policy.enabled)
+    return true;
+  return policy.qualified && policy.deadline_ms >= 2 * HealthSupervisor::kCadenceMs &&
+         policy.deadline_ms <= HealthSupervisor::kMaxDeadlineMs &&
+         policy.startup_grace_ms >= HealthSupervisor::kCadenceMs &&
+         policy.startup_grace_ms <= HealthSupervisor::kMaxGraceMs;
+}
+} // namespace
 void HealthProgress::completed(DeviceHealth outcome) {
   const uint32_t old = generation_.load(std::memory_order_relaxed);
   outcome_.store(outcome, std::memory_order_relaxed);
@@ -18,11 +30,7 @@ bool HealthSupervisor::begin(const std::array<WorkerPolicy, 4> &policy, uint32_t
   if (valid_)
     return false; // No in-place rebasing of liveness while subscribed.
   for (const auto &p : policy) {
-    if (p.required && !p.enabled)
-      return false;
-    if (p.enabled &&
-        (!p.qualified || p.deadline_ms < 2 * kCadenceMs || p.deadline_ms > kMaxDeadlineMs ||
-         p.startup_grace_ms < kCadenceMs || p.startup_grace_ms > kMaxGraceMs))
+    if (!validWorkerPolicy(p))
       return false;
   }
   policy_ = policy;
@@ -58,6 +66,11 @@ void HealthSupervisor::evaluateWorker(std::size_t i, uint32_t now, HealthDecisio
       all_started = false;
     return;
   }
+  evaluateActiveWorker(i, now, d, fresh, all_started);
+}
+void HealthSupervisor::evaluateActiveWorker(std::size_t i, uint32_t now, HealthDecision &d,
+                                            bool &fresh, bool &all_started) {
+  const auto &p = policy_[i];
   observeWorker(i, now);
   const bool live = started_[i] ? now - last_[i] < p.deadline_ms : now - boot_ < p.startup_grace_ms;
   if (!live)

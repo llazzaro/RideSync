@@ -52,6 +52,8 @@ private:
   std::array<ble_gatt_svc_def, 3> services_{};
   static int registration(void *);
   int registerServices();
+  static int readAttribute(ble_gatt_access_ctxt *, const Attribute &);
+  void subscribed(const ble_gap_event *);
   static int access(uint16_t, uint16_t, ble_gatt_access_ctxt *, void *);
   static int gap(ble_gap_event *, void *);
   static void barrier(ble_npl_event *);
@@ -67,6 +69,8 @@ private:
   void queueBarrier();
   void cleanup();
   void cleanupReturned(bool, int);
+  bool sendAdmission(const X5ShutterRequest &);
+  bool advertisingAdmission(int) const;
   void send();
   static uint32_t now();
 };

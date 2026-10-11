@@ -1,3 +1,5 @@
+#include "../fixtures/ble/adapter_host.h"
+#include "../fixtures/telemetry/csv_rows.h"
 #include "camera_event_logger.h"
 #include "camera_event_session.h"
 #include "handlebar_control.h"
@@ -20,22 +22,7 @@ struct CameraLogSink : StorageSink {
   bool flush() override { return true; }
   void close() override {}
 };
-static std::vector<std::vector<std::string>> cameraRows(const std::string &text) {
-  std::vector<std::vector<std::string>> rows;
-  std::istringstream lines(text);
-  std::string line;
-  while (std::getline(lines, line)) {
-    if (line.compare(0, 7, "camera,") != 0)
-      continue;
-    std::vector<std::string> row;
-    std::istringstream fields(line);
-    std::string field;
-    while (std::getline(fields, field, ','))
-      row.push_back(field);
-    rows.push_back(row);
-  }
-  return rows;
-}
+using telemetry_fixture::cameraRows;
 
 struct TestClock : Clock {
   uint32_t value = 0;
@@ -145,17 +132,7 @@ struct ScriptHost : SilentHost {
     }
     ctx.receiver->copied(ctx, e);
   }
-  void complete(size_t n) {
-    BleEvent e;
-    e.kind = BleEventKind::Complete;
-    e.connection = commands[n].connection;
-    e.handle = commands[n].handle;
-    if (commands[n].phase == BlePhase::VerifySubscription) {
-      e.size = 2;
-      e.bytes[0] = 1;
-    }
-    deliver(*contexts[n], e, true);
-  }
+  void complete(size_t n) { adapter_fixture::complete(*this, n); }
   void notification(BleContext &link, uint16_t handle, const std::vector<uint8_t> &body) {
     BleEvent e;
     e.kind = BleEventKind::Notification;
@@ -167,6 +144,214 @@ struct ScriptHost : SilentHost {
     deliver(link, e);
   }
 };
+namespace hero_fixture {
+template <typename Rig> bool applyShutter(Rig &rig, const uint8_t *payload, BleContext &ctx) {
+
+  if (!rig.host.ignore_shutter_effect) {
+    if (rig.host.independent_encoding)
+      rig.host.encodings[ctx.peer] = payload[2] == 1;
+    else
+      rig.host.encoding = payload[2] == 1;
+  }
+  return !rig.host.drop_shutter_ack;
+}
+template <typename Rig> void hardwareReply(Rig &rig, std::vector<uint8_t> &reply) {
+  if (rig.host.hardware_not_ready) {
+    --rig.host.hardware_not_ready;
+    reply = {0x3c, 1};
+    return;
+  }
+  reply = {0x3c, 0, 1, rig.host.hardware_model, 1, 'x', 0, 12};
+  const char fw[] = "H23.01.10.00";
+  reply.insert(reply.end(), fw, fw + 12);
+  reply.insert(reply.end(), {0, 0, 0});
+}
+template <typename Rig>
+bool commandReply(Rig &rig, const uint8_t *payload, BleContext &ctx, std::vector<uint8_t> &reply) {
+  switch (payload[0]) {
+  case 0xf1:
+    reply = {0xf1, 0xe9, 8, static_cast<uint8_t>(rig.host.reject_claim ? 6 : 1)};
+    break;
+  case 0x3c:
+    hardwareReply(rig, reply);
+    break;
+  case 0x51:
+    reply = {0x51, 0, 1, rig.host.api_major, 1, 0};
+    break;
+  default:
+    reply = {payload[0], 0};
+    if (payload[0] == 1 && !applyShutter(rig, payload, ctx))
+      return false;
+    break;
+  }
+  return true;
+}
+template <typename Rig> std::vector<uint8_t> registerReply(Rig &rig, uint8_t target) {
+  if (rig.host.empty_register_target == target)
+    return {0x53, 0};
+  const uint8_t observed =
+      rig.host.wrong_register_target == target ? (target == 8 ? 10 : 8) : target;
+  return {0x53, 0, observed, 1, 1};
+}
+template <typename Rig> uint8_t queryValue(Rig &rig, uint8_t target, uint8_t peer) {
+  if (target == 10)
+    return rig.host.independent_encoding ? rig.host.encodings[peer] : rig.host.encoding;
+  return target == 82 ? rig.host.ready : rig.host.busy;
+}
+template <typename Rig>
+void queryReply(Rig &rig, const uint8_t *payload, BleContext &ctx, std::vector<uint8_t> &reply) {
+  if (payload[0] == 0x53) {
+    reply = registerReply(rig, payload[1]);
+    return;
+  }
+  reply = {0x13, 0, static_cast<uint8_t>(rig.host.wrong_query_status ? 82 : payload[1]), 1,
+           queryValue(rig, payload[1], ctx.peer)};
+}
+template <typename Rig>
+bool fragmentReply(Rig &rig, const BleCommand &c, const uint8_t *payload, BleContext &ctx,
+                   uint16_t notify_handle, const std::vector<uint8_t> &reply) {
+  if (!(rig.host.fragment_hardware && c.handle == 3 && payload[0] == 0x3c && reply.size() > 8))
+    return false;
+
+  BleEvent part;
+  part.kind = BleEventKind::Notification;
+  part.connection = 10 + ctx.peer;
+  part.handle = notify_handle;
+  part.size = 9;
+  part.bytes[0] = static_cast<uint8_t>(reply.size());
+  std::copy(reply.begin(), reply.begin() + 8, part.bytes.begin() + 1);
+  rig.host.deliver(*rig.links[ctx.peer], part);
+  part.size = static_cast<uint8_t>(reply.size() - 8 + 1);
+  part.bytes[0] = 0x80;
+  std::copy(reply.begin() + 8, reply.end(), part.bytes.begin() + 1);
+  rig.host.deliver(*rig.links[ctx.peer], part);
+  return true;
+}
+template <typename Rig>
+void connect(Rig &rig, size_t, const BleCommand &, BleContext &ctx, BleEvent e) {
+
+  rig.links[ctx.peer] = &ctx;
+  if (ctx.peer == 0)
+    rig.link = &ctx;
+  e.kind = BleEventKind::Connected;
+  e.connection = 10 + ctx.peer;
+  ctx.connection.store(e.connection);
+  rig.host.deliver(ctx, e);
+}
+template <typename Rig>
+void security(Rig &rig, size_t, const BleCommand &, BleContext &ctx, BleEvent e) {
+
+  e.kind = BleEventKind::Security;
+  e.encrypted = e.bonded = true;
+  e.authenticated = false; // Just Works bonding does not assert MITM.
+  e.identity.verified = true;
+  e.identity.type = IdentityType::Public;
+  e.identity.address[0] = ctx.peer + 1;
+  rig.host.deliver(ctx, e);
+}
+template <typename Rig>
+void services(Rig &rig, size_t n, const BleCommand &c, BleContext &ctx, BleEvent e) {
+
+  if (!(rig.omit_management && c.uuid == Hero12Adapter::profileSpec().services[1])) {
+    e.kind = BleEventKind::Service;
+    e.uuid = c.uuid;
+    e.start = c.uuid == Hero12Adapter::profileSpec().services[0] ? 1 : 41;
+    e.end = c.uuid == Hero12Adapter::profileSpec().services[0] ? 40 : 60;
+    rig.host.deliver(ctx, e);
+  }
+  rig.host.complete(n);
+}
+template <typename Rig>
+void characteristics(Rig &rig, size_t n, const BleCommand &c, BleContext &ctx, BleEvent e) {
+
+  const auto spec = Hero12Adapter::profileSpec();
+  const bool management = c.start == 41;
+  for (unsigned j = management ? 6 : 0; j < (management ? 8u : 6u); ++j) {
+    e.kind = BleEventKind::Characteristic;
+    e.uuid = spec.endpoints[j].uuid;
+    e.start = (management ? 42 : 2) + (j - (management ? 6 : 0)) * 3;
+    e.handle = e.start + 1;
+    e.properties = spec.endpoints[j].properties;
+    rig.host.deliver(ctx, e);
+  }
+  rig.host.complete(n);
+}
+template <typename Rig>
+void descriptors(Rig &rig, size_t n, const BleCommand &c, BleContext &ctx, BleEvent e) {
+
+  if (!rig.omit_cccd) {
+    e.kind = BleEventKind::Descriptor;
+    e.uuid = BleUuid::shortUuid(0x2902);
+    e.handle = c.start + 1;
+    rig.host.deliver(ctx, e);
+  }
+  rig.host.complete(n);
+}
+template <typename Rig> void write(Rig &rig, size_t n, const BleCommand &c, BleContext &ctx) {
+  rig.host.complete(n);
+  if (!rig.auto_camera)
+    return;
+  const uint8_t *payload = c.bytes.data() + 2;
+  std::vector<uint8_t> reply;
+  uint16_t notify_handle = 0;
+  switch (c.handle) {
+  case 43:
+    reply = {3, 0x81, 8, static_cast<uint8_t>(rig.host.reject_pair ? 3 : 1)};
+    notify_handle = rig.host.wrong_pair_route ? 6 : 46;
+    break;
+  case 3:
+    notify_handle = 6;
+    if (!commandReply(rig, payload, ctx, reply))
+      return;
+    break;
+  case 9:
+    reply = {0x5b, 0};
+    notify_handle = 12;
+    break;
+  case 15:
+    notify_handle = 18;
+    queryReply(rig, payload, ctx, reply);
+    break;
+  default:
+    break;
+  }
+  TEST_ASSERT_TRUE(reply.size() < 63);
+  if (!fragmentReply(rig, c, payload, ctx, notify_handle, reply))
+    rig.host.notification(*rig.links[ctx.peer], notify_handle, reply);
+}
+template <typename Rig> void process(Rig &rig, size_t n) {
+  const auto &c = rig.host.commands[n];
+  auto &ctx = *rig.host.contexts[n];
+  BleEvent e;
+  e.connection = c.connection;
+  switch (c.phase) {
+  case BlePhase::Connect:
+    connect(rig, n, c, ctx, e);
+    break;
+  case BlePhase::Security:
+    security(rig, n, c, ctx, e);
+    break;
+  case BlePhase::Services:
+    services(rig, n, c, ctx, e);
+    break;
+  case BlePhase::Characteristics:
+    characteristics(rig, n, c, ctx, e);
+    break;
+  case BlePhase::Descriptors:
+    descriptors(rig, n, c, ctx, e);
+    break;
+  case BlePhase::Subscribe:
+  case BlePhase::VerifySubscription:
+    rig.host.complete(n);
+    break;
+  case BlePhase::Write:
+    write(rig, n, c, ctx);
+    break;
+  default:
+    break;
+  }
+}
+} // namespace hero_fixture
 struct Rig {
   ScriptHost host;
   TestClock clock;
@@ -220,136 +405,7 @@ struct Rig {
     manager.detachAudit(&logger);
     adapter.detachGroup(&group);
   }
-  void process(size_t n) {
-    const auto &c = host.commands[n];
-    auto &ctx = *host.contexts[n];
-    BleEvent e;
-    e.connection = c.connection;
-    if (c.phase == BlePhase::Connect) {
-      links[ctx.peer] = &ctx;
-      if (ctx.peer == 0)
-        link = &ctx;
-      e.kind = BleEventKind::Connected;
-      e.connection = 10 + ctx.peer;
-      ctx.connection.store(e.connection);
-      host.deliver(ctx, e);
-    } else if (c.phase == BlePhase::Security) {
-      e.kind = BleEventKind::Security;
-      e.encrypted = e.bonded = true;
-      e.authenticated = false; // Just Works bonding does not assert MITM.
-      e.identity.verified = true;
-      e.identity.type = IdentityType::Public;
-      e.identity.address[0] = ctx.peer + 1;
-      host.deliver(ctx, e);
-    } else if (c.phase == BlePhase::Services) {
-      if (!(omit_management && c.uuid == Hero12Adapter::profileSpec().services[1])) {
-        e.kind = BleEventKind::Service;
-        e.uuid = c.uuid;
-        e.start = c.uuid == Hero12Adapter::profileSpec().services[0] ? 1 : 41;
-        e.end = c.uuid == Hero12Adapter::profileSpec().services[0] ? 40 : 60;
-        host.deliver(ctx, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Characteristics) {
-      const auto spec = Hero12Adapter::profileSpec();
-      const bool management = c.start == 41;
-      for (unsigned j = management ? 6 : 0; j < (management ? 8u : 6u); ++j) {
-        e.kind = BleEventKind::Characteristic;
-        e.uuid = spec.endpoints[j].uuid;
-        e.start = (management ? 42 : 2) + (j - (management ? 6 : 0)) * 3;
-        e.handle = e.start + 1;
-        e.properties = spec.endpoints[j].properties;
-        host.deliver(ctx, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Descriptors) {
-      if (!omit_cccd) {
-        e.kind = BleEventKind::Descriptor;
-        e.uuid = BleUuid::shortUuid(0x2902);
-        e.handle = c.start + 1;
-        host.deliver(ctx, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Subscribe || c.phase == BlePhase::VerifySubscription) {
-      host.complete(n);
-    } else if (c.phase == BlePhase::Write) {
-      host.complete(n);
-      if (!auto_camera)
-        return;
-      const uint8_t *payload = c.bytes.data() + 2;
-      std::vector<uint8_t> reply;
-      uint16_t notify_handle = 0;
-      if (c.handle == 43) {
-        reply = {3, 0x81, 8, static_cast<uint8_t>(host.reject_pair ? 3 : 1)};
-        notify_handle = host.wrong_pair_route ? 6 : 46;
-      } else if (c.handle == 3) {
-        notify_handle = 6;
-        if (payload[0] == 0xf1)
-          reply = {0xf1, 0xe9, 8, static_cast<uint8_t>(host.reject_claim ? 6 : 1)};
-        else if (payload[0] == 0x3c && host.hardware_not_ready) {
-          --host.hardware_not_ready;
-          reply = {0x3c, 1};
-        } else if (payload[0] == 0x3c) {
-          reply = {0x3c, 0, 1, host.hardware_model, 1, 'x', 0, 12};
-          const char fw[] = "H23.01.10.00";
-          reply.insert(reply.end(), fw, fw + 12);
-          reply.insert(reply.end(), {0, 0, 0});
-        } else if (payload[0] == 0x51)
-          reply = {0x51, 0, 1, host.api_major, 1, 0};
-        else {
-          reply = {payload[0], 0};
-          if (payload[0] == 1) {
-            if (!host.ignore_shutter_effect) {
-              if (host.independent_encoding)
-                host.encodings[ctx.peer] = payload[2] == 1;
-              else
-                host.encoding = payload[2] == 1;
-            }
-            if (host.drop_shutter_ack)
-              return;
-          }
-        }
-      } else if (c.handle == 9) {
-        reply = {0x5b, 0};
-        notify_handle = 12;
-      } else if (c.handle == 15) {
-        notify_handle = 18;
-        if (payload[0] == 0x53)
-          reply = host.empty_register_target == payload[1]
-                      ? std::vector<uint8_t>{0x53, 0}
-                      : std::vector<uint8_t>{
-                            0x53, 0,
-                            static_cast<uint8_t>(host.wrong_register_target == payload[1]
-                                                     ? (payload[1] == 8 ? 10 : 8)
-                                                     : payload[1]),
-                            1, 1};
-        else
-          reply = {0x13, 0, static_cast<uint8_t>(host.wrong_query_status ? 82 : payload[1]), 1,
-                   static_cast<uint8_t>(
-                       payload[1] == 10
-                           ? (host.independent_encoding ? host.encodings[ctx.peer] : host.encoding)
-                       : payload[1] == 82 ? host.ready
-                                          : host.busy)};
-      }
-      TEST_ASSERT_TRUE(reply.size() < 63);
-      if (host.fragment_hardware && c.handle == 3 && payload[0] == 0x3c && reply.size() > 8) {
-        BleEvent part;
-        part.kind = BleEventKind::Notification;
-        part.connection = 10 + ctx.peer;
-        part.handle = notify_handle;
-        part.size = 9;
-        part.bytes[0] = static_cast<uint8_t>(reply.size());
-        std::copy(reply.begin(), reply.begin() + 8, part.bytes.begin() + 1);
-        host.deliver(*links[ctx.peer], part);
-        part.size = static_cast<uint8_t>(reply.size() - 8 + 1);
-        part.bytes[0] = 0x80;
-        std::copy(reply.begin() + 8, reply.end(), part.bytes.begin() + 1);
-        host.deliver(*links[ctx.peer], part);
-        return;
-      }
-      host.notification(*links[ctx.peer], notify_handle, reply);
-    }
-  }
+  void process(size_t n) { hero_fixture::process(*this, n); }
   void pump(unsigned max = 200) {
     for (unsigned n = 0; n < max; ++n) {
       adapter.service();
@@ -414,40 +470,43 @@ void duplicate_matching_response_records_one_wire_ack() {
   TEST_ASSERT_EQUAL_UINT(1, query_ack);
   r.finishBound(group, logger);
 }
+static void profileReplyDeadline(uint32_t start, uint32_t delay) {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  CameraInbox camera;
+  CameraEventLogger logger(camera, r.clock, 42, group);
+  TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  TEST_ASSERT_TRUE(r.manager.attachAudit(logger));
+  CameraLogSink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+  SessionClock clock(r.clock, 42, 1000);
+  ImuInbox imu;
+  TelemetryAdmission admission(clock, storage, imu, &camera);
+  r.clock.value = start;
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Query));
+  r.pump(1);
+  r.clock.value = start + delay;
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 0});
+  r.adapter.service();
+  for (unsigned i = 0; i < 500; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  unsigned acknowledgements = 0;
+  for (const auto &row : cameraRows(sink.bytes))
+    if (row[20] == "4" && row[25] == "15")
+      ++acknowledgements;
+  TEST_ASSERT_EQUAL_UINT(delay < 2000 ? 1 : 0, acknowledgements);
+  r.finishBound(group, logger);
+}
 void profile_reply_at_or_after_deadline_cannot_publish_ack() {
   for (uint32_t start : {uint32_t(100), uint32_t(UINT32_MAX - 100)}) {
     for (uint32_t delay : {uint32_t(1999), uint32_t(2000), uint32_t(2001)}) {
-      Rig r;
-      TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
-      r.pump();
-      RecordingManager group(r.manager, r.clock);
-      r.adapter.attachGroup(group);
-      CameraInbox camera;
-      CameraEventLogger logger(camera, r.clock, 42, group);
-      TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
-      TEST_ASSERT_TRUE(r.manager.attachAudit(logger));
-      CameraLogSink sink;
-      Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
-      SessionClock clock(r.clock, 42, 1000);
-      ImuInbox imu;
-      TelemetryAdmission admission(clock, storage, imu, &camera);
-      r.clock.value = start;
-      r.auto_camera = false;
-      TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Query));
-      r.pump(1);
-      r.clock.value = start + delay;
-      r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 0});
-      r.adapter.service();
-      for (unsigned i = 0; i < 500; ++i) {
-        admission.tick();
-        storage.workerStep();
-      }
-      unsigned acknowledgements = 0;
-      for (const auto &row : cameraRows(sink.bytes))
-        if (row[20] == "4" && row[25] == "15")
-          ++acknowledgements;
-      TEST_ASSERT_EQUAL_UINT(delay < 2000 ? 1 : 0, acknowledgements);
-      r.finishBound(group, logger);
+      profileReplyDeadline(start, delay);
     }
   }
 }
@@ -1287,7 +1346,7 @@ struct ControlRig {
   CameraEventSession session;
   LocalTelemetryStatus local;
   int absent = -1;
-  explicit ControlRig(unsigned peers = 1, const ButtonConfig &buttons = {})
+  explicit ControlRig(unsigned peers = 1, const ButtonConfig &buttons = ButtonConfig{})
       : radio(Hero12Adapter::managerPolicy(), peers), group(radio.manager, radio.clock),
         control(radio.clock, radio.adapter, radio.manager, group, input, sink),
         session(radio.clock, storage, radio.adapter, radio.manager, group, 42, "fw", "synthetic") {
@@ -1301,6 +1360,27 @@ struct ControlRig {
     control.observe(local);
   }
   ~ControlRig() { control.reset(); }
+  void respondRecoveryScan(size_t n) {
+    auto &ctx = *radio.host.contexts[n];
+    // The scan is global; synthesize only the selected recovery candidate.
+    unsigned peer = 0;
+    for (; peer < radio.peer_count; ++peer)
+      if (radio.adapter.recoveryState(peer).phase == Hero12RecoveryPhase::Scanning)
+        break;
+    BleEvent e;
+    if (int(peer) == absent) {
+      e.kind = BleEventKind::ScanComplete;
+      radio.host.deliver(ctx, e, true);
+    } else {
+      e.kind = BleEventKind::Advertisement;
+      e.advertisement_type = BleAdvertisementType::ConnectableUndirected;
+      e.identity.type = IdentityType::Public;
+      e.identity.address[0] = peer + 1;
+      e.size = 4;
+      e.bytes = {{3, 3, 0xa6, 0xfe}};
+      radio.host.deliver(ctx, e);
+    }
+  }
   void pass(bool responses = true) {
     const auto ticks = radio.manager.ticks(), advances = group.advancements();
     session.service(&control);
@@ -1311,25 +1391,7 @@ struct ControlRig {
       while (radio.handled < radio.host.commands.size()) {
         const size_t n = radio.handled++;
         if (radio.host.commands[n].phase == BlePhase::Scan) {
-          auto &ctx = *radio.host.contexts[n];
-          // The scan is global; synthesize only the selected recovery candidate.
-          unsigned peer = 0;
-          for (; peer < radio.peer_count; ++peer)
-            if (radio.adapter.recoveryState(peer).phase == Hero12RecoveryPhase::Scanning)
-              break;
-          BleEvent e;
-          if (int(peer) == absent) {
-            e.kind = BleEventKind::ScanComplete;
-            radio.host.deliver(ctx, e, true);
-          } else {
-            e.kind = BleEventKind::Advertisement;
-            e.advertisement_type = BleAdvertisementType::ConnectableUndirected;
-            e.identity.type = IdentityType::Public;
-            e.identity.address[0] = peer + 1;
-            e.size = 4;
-            e.bytes = {{3, 3, 0xa6, 0xfe}};
-            radio.host.deliver(ctx, e);
-          }
+          respondRecoveryScan(n);
         } else {
           radio.process(n);
         }

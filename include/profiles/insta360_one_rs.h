@@ -56,6 +56,8 @@ public:
   void result(const BleResult &) override;
 
 private:
+  void dispatchResult(uint8_t i, const BleResult &r);
+  bool commandCapacity(uint8_t i);
   bool expired(uint8_t i) const;
   void writeComplete(uint8_t i, const BleResult &r);
   void transportReady(uint8_t i, const BleResult &r);

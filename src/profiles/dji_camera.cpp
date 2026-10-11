@@ -6,6 +6,35 @@ namespace ridesync {
 
 DjiAdapter::DjiAdapter(BleHost &host, Clock &clock)
     : host_(host), clock_(clock), central_(host, *this, &progress_) {}
+bool DjiAdapter::acknowledged(uint8_t i) const {
+  const auto &p = peers_[i];
+  return p.step != Step::None && p.att_done && p.camera_done && central_.admissionOpen(i) &&
+         (p.step != Step::Pair || p.grant);
+}
+bool DjiAdapter::transmitPacket(uint8_t i, Step step, uint16_t seq, const dji::Packet &packet) {
+  auto &p = peers_[i];
+  const auto mtu = host_.mtu(p.handle);
+  if (mtu == kBleMtuReserved) {
+    p.deferred = step;
+    return true;
+  }
+  p.deferred = Step::None;
+  if (!packet.size || mtu < packet.size + 3) {
+    retire(i, DjiFault::Mtu);
+    return false;
+  }
+  if (!central_.writeWithoutResponse(i, 0, packet.bytes.data(), packet.size, clock_.now())) {
+    retire(i, DjiFault::Transport);
+    return false;
+  }
+  admitPacket(i, step, seq);
+  return true;
+}
+bool DjiAdapter::videoMode(uint8_t i) const {
+  const auto &p = peers_[i];
+  return (p.mode == 1 || (p.qualification.model == CameraModel::DJI_OSMO360 &&
+                          (p.mode == 0x38 || p.mode == 0x41)));
+}
 bool DjiAdapter::reached(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL; }
 uint32_t DjiAdapter::deviceId(CameraModel m) {
   switch (m) {
@@ -24,7 +53,7 @@ uint32_t DjiAdapter::deviceId(CameraModel m) {
 bool DjiAdapter::valid(const DjiQualification &q) {
   if (!q.source_qualified || !deviceId(q.model) || !q.controller_mac_verified ||
       !q.unencrypted_protocol_reviewed || !q.controller_id || q.connection_challenge > 9999 ||
-      !q.firmware_size || q.firmware_size > q.firmware.size())
+      !qualification::firmwareBounds(q.firmware, q.firmware_size))
     return false;
   return qualification::resolvedIdentity(q.identity) &&
          qualification::addressBytes(q.controller_mac) &&
@@ -76,9 +105,7 @@ bool DjiAdapter::videoReady(uint8_t i) const {
   const auto &p = peers_[i];
   return p.has_status && p.observed != RecordingState::Unknown &&
          !reached(clock_.now(), p.status_seen + kStatusMs) && p.power == 0 &&
-         (p.camera_status == 0 || p.camera_status == 1 || p.camera_status == 3) &&
-         (p.mode == 1 || (p.qualification.model == CameraModel::DJI_OSMO360 &&
-                          (p.mode == 0x38 || p.mode == 0x41)));
+         (p.camera_status == 0 || p.camera_status == 1 || p.camera_status == 3) && videoMode(i);
 }
 DjiFault DjiAdapter::fault(uint8_t i) const {
   return i < kBlePeers ? peers_[i].fault : DjiFault::Qualification;
@@ -102,9 +129,8 @@ bool DjiAdapter::beginCommand(uint8_t i, Operation op, Token t) {
   auto &p = peers_[i];
   // Polls are finite background work. Admission waits for their local write completion;
   // their responses never acquire a subsequently admitted manager token.
-  if (!commandReady(i) || p.token.connection != t.connection ||
-      (op != Operation::Start && op != Operation::Stop && op != Operation::Query) ||
-      ((op == Operation::Start || op == Operation::Stop) && !videoReady(i)))
+  if (!commandReady(i) || p.token.connection != t.connection || !qualification::cameraCommand(op) ||
+      (qualification::recordingOperation(op) && !videoReady(i)))
     return false;
   p.token = t;
   p.operation = op;
@@ -115,7 +141,7 @@ bool DjiAdapter::beginCommand(uint8_t i, Operation op, Token t) {
 }
 bool DjiAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
   if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::DJI ||
-      !t.valid() || !t.hasRoom())
+      !qualification::usableToken(t))
     return false;
   const auto i = static_cast<uint8_t>(index);
   auto &p = peers_[i];
@@ -206,22 +232,7 @@ bool DjiAdapter::send(uint8_t i, Step step) {
   auto seq =
       step == Step::Authorize ? p.grant_sequence : static_cast<uint16_t>(p.next_sequence + 1);
   const auto packet = packetForStep(i, step, seq);
-  const auto mtu = host_.mtu(p.handle);
-  if (mtu == kBleMtuReserved) {
-    p.deferred = step;
-    return true;
-  }
-  p.deferred = Step::None;
-  if (!packet.size || mtu < packet.size + 3) {
-    retire(i, DjiFault::Mtu);
-    return false;
-  }
-  if (!central_.writeWithoutResponse(i, 0, packet.bytes.data(), packet.size, clock_.now())) {
-    retire(i, DjiFault::Transport);
-    return false;
-  }
-  admitPacket(i, step, seq);
-  return true;
+  return transmitPacket(i, step, seq, packet);
 }
 void DjiAdapter::complete(uint8_t i) {
   auto &p = peers_[i];
@@ -279,8 +290,7 @@ void DjiAdapter::advance(uint8_t i) {
     send(i, p.deferred);
     return;
   }
-  if (p.step != Step::None && p.att_done && p.camera_done && central_.admissionOpen(i) &&
-      (p.step != Step::Pair || p.grant)) {
+  if (acknowledged(i)) {
     advanceAcknowledged(i);
   } else if (p.ready && p.step == Step::None && reached(clock_.now(), p.poll_due))
     send(i, Step::Poll);

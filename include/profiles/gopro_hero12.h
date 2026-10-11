@@ -62,6 +62,13 @@ public:
   void result(const BleResult &) override;
 
 private:
+  void advanceManagers(bool advance_managers);
+  bool transactionExpired(uint8_t i) const;
+  bool validateIdentity(uint8_t i, const gopro::IdentityResponse &r);
+  bool notificationRoute(uint8_t endpoint, gopro::Channel &route);
+  void recordAdmissionFailure(size_t index);
+  void cancelRecoveryOperation(uint8_t i);
+  CameraError recoveryAdmission(uint8_t i);
   static bool activeRecoveryPhase(Hero12RecoveryPhase);
   void beginRecoveryScan();
   bool hardwareRetryReady(uint8_t i) const;
@@ -189,5 +196,6 @@ private:
   void observe(uint8_t, bool, bool);
   void cameraMessage(uint8_t, gopro::Channel, const gopro::Message &);
   static bool reached(uint32_t now, uint32_t deadline);
+  bool admitPacket(uint8_t i, Step step, const OutgoingPacket &out);
 };
 } // namespace ridesync

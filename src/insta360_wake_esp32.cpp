@@ -50,6 +50,10 @@ WakeSubmit Esp32Insta360Wake::begin(const WakeOperation &op, const insta360::Wak
   return result;
 }
 void Esp32Insta360Wake::cancel(const WakeOperation &op) { Esp32BleHost::instance().sealWake(op); }
+bool Esp32Insta360Wake::leaseQuiescent() const {
+  return !lease_.queued.load() && !lease_.barrier_running.load() && !lease_.callbacks.load() &&
+         lease_.connection.load() == kBleNoHandle;
+}
 WakeRadioResult Esp32Insta360Wake::poll(const WakeOperation &op, uint32_t now) {
   auto &host = Esp32BleHost::instance();
   auto result = host.wakeStatus();
@@ -64,8 +68,7 @@ WakeRadioResult Esp32Insta360Wake::poll(const WakeOperation &op, uint32_t now) {
   if (work_phase_.compare_exchange_strong(finished, 4, std::memory_order_acq_rel)) {
     // Claim final release before inspecting other owners. A late incoming
     // callback can retain the lease, but the worker cannot race payload reuse.
-    if (!lease_.queued.load() && !lease_.barrier_running.load() && !lease_.callbacks.load() &&
-        lease_.connection.load() == kBleNoHandle && host.releaseWake(op)) {
+    if (leaseQuiescent() && host.releaseWake(op)) {
       occupied_ = false;
       work_phase_.store(0, std::memory_order_release);
       result.released = true;

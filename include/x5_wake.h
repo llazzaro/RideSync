@@ -17,6 +17,7 @@ private:
   WakeRecoveryResult result_;
   uint32_t deadline_ = 0;
   bool used_ = false;
+  bool recoveryInUse() const;
   void updateResult(uint32_t);
   void fail(CameraError);
 };
@@ -26,7 +27,7 @@ class X5WakeControl {
 public:
   X5WakeControl(X5Runtime &runtime, Clock &clock, WakeRadio &radio)
       : runtime_(runtime), clock_(clock), recovery_(runtime, clock), manager_(radio, &recovery_) {}
-  bool configure(const WakePeerConfig &, WakePolicy = {});
+  bool configure(const WakePeerConfig &, WakePolicy policy = WakePolicy{});
   CameraError request();
   CameraError command(Operation);
   void cancel();

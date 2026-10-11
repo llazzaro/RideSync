@@ -321,38 +321,18 @@ void declaration_identity_binding_and_disabled_start() {
 }
 
 void badQualification(unsigned mode, OneRsQualification &bad) {
-  switch (mode) {
-  case 0:
-    bad.source_qualified = false;
-    break;
-  case 1:
-    bad.core_one_rs = false;
-    break;
-  case 2:
-    bad.ordinary_360_lens = false;
-    break;
-  case 3:
-    bad.video_mode_declared = false;
-    break;
-  case 4:
-    bad.identity.verified = false;
-    break;
-  case 5:
-    bad.identity.type = IdentityType::UnresolvedPrivate;
-    break;
-  case 6:
-    bad.firmware_size = 0;
-    break;
-  case 7:
-    bad.firmware_size = 33;
-    break;
-  case 8:
-    bad.firmware[0] = '\n';
-    break;
-  case 9:
-    bad.identity.type = IdentityType::RandomStatic;
-    break;
-  }
+  void (*const mutations[])(OneRsQualification &) = {
+      [](OneRsQualification &bad) { bad.source_qualified = false; },
+      [](OneRsQualification &bad) { bad.core_one_rs = false; },
+      [](OneRsQualification &bad) { bad.ordinary_360_lens = false; },
+      [](OneRsQualification &bad) { bad.video_mode_declared = false; },
+      [](OneRsQualification &bad) { bad.identity.verified = false; },
+      [](OneRsQualification &bad) { bad.identity.type = IdentityType::UnresolvedPrivate; },
+      [](OneRsQualification &bad) { bad.firmware_size = 0; },
+      [](OneRsQualification &bad) { bad.firmware_size = 33; },
+      [](OneRsQualification &bad) { bad.firmware[0] = '\n'; },
+      [](OneRsQualification &bad) { bad.identity.type = IdentityType::RandomStatic; }};
+  mutations[mode](bad);
 }
 void qualification_each_guard_and_pending_cleanup_are_enforced() {
   Host h;

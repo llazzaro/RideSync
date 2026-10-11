@@ -19,6 +19,7 @@ public:
   WakeRadioResult status() const;
 
 private:
+  bool validReservation(const WakeOperation &, uint32_t) const;
   WakeRadioResult result_;
   std::array<uint32_t, kWakePeers> last_ids_{}, generations_{};
   uint32_t deadline_ = 0;

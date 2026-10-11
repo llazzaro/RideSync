@@ -6,6 +6,21 @@
 namespace ridesync {
 OneRsAdapter::OneRsAdapter(BleHost &h, Clock &c)
     : host_(h), clock_(c), central_(h, *this, &progress_), forwarding_(central_) {}
+bool OneRsAdapter::commandCapacity(uint8_t i) {
+  const auto &p = peers_[i];
+  if (!sequences_[i].peek()) {
+    retire(i, OneRsFault::SequenceExhausted);
+    return false;
+  }
+  const auto mtu = host_.mtu(p.handle);
+  if (mtu == kBleMtuReserved || mtu < 21) {
+    // Reserved host means no admission; no packet or sequence was consumed.
+    if (mtu != kBleMtuReserved)
+      retire(i, OneRsFault::Mtu);
+    return false;
+  }
+  return true;
+}
 bool OneRsAdapter::reached(uint32_t now, uint32_t deadline) {
   return now - deadline < 0x80000000UL;
 }
@@ -22,22 +37,7 @@ bool OneRsAdapter::matches(const CameraConfig &c, const BondIdentity &id) {
       (id.type == IdentityType::Public ? c.address_type != AddressType::Public
                                        : c.address_type != AddressType::Random))
     return false;
-  auto hex = [](char b) -> int {
-    if (b >= '0' && b <= '9')
-      return b - '0';
-    if (b >= 'A' && b <= 'F')
-      return b - 'A' + 10;
-    if (b >= 'a' && b <= 'f')
-      return b - 'a' + 10;
-    return -1;
-  };
-  for (size_t n = 0; n < 6; ++n) {
-    const int hi = hex(c.identifier[n * 3]), lo = hex(c.identifier[n * 3 + 1]);
-    if (hi < 0 || lo < 0 || (n != 5 && c.identifier[n * 3 + 2] != ':') ||
-        id.address[5 - n] != static_cast<uint8_t>(hi * 16 + lo))
-      return false;
-  }
-  return true;
+  return qualification::identifierAddress(c.identifier, id, true);
 }
 BleProfileSpec OneRsAdapter::profileSpec() { return insta360Be80ProfileSpec(); }
 RetryPolicy OneRsAdapter::managerPolicy() {
@@ -90,22 +90,13 @@ bool OneRsAdapter::beginConnection(uint8_t i, Token t) {
 }
 bool OneRsAdapter::beginCommand(uint8_t i, Operation op, Token t) {
   auto &p = peers_[i];
-  if (op == Operation::Start || op == Operation::Stop)
+  if (qualification::recordingOperation(op))
     forwarding_.service(forwarding_time_, uint8_t(1u << i));
   if (!commandReady(i) || p.token.connection != t.connection ||
-      (op != Operation::Start && op != Operation::Stop))
+      (!qualification::recordingOperation(op)))
     return false;
-  if (!sequences_[i].peek()) {
-    retire(i, OneRsFault::SequenceExhausted);
+  if (!commandCapacity(i))
     return false;
-  }
-  const auto mtu = host_.mtu(p.handle);
-  if (mtu == kBleMtuReserved || mtu < 21) {
-    // Reserved host means no admission; no packet or sequence was consumed.
-    if (mtu != kBleMtuReserved)
-      retire(i, OneRsFault::Mtu);
-    return false;
-  }
   insta360::Be80ControlConfig config;
   config.profile = insta360::Be80ControlProfile::GarminBe80ControlV1;
   const auto packet = insta360::encodeRecordingCommand(
@@ -124,7 +115,7 @@ bool OneRsAdapter::beginCommand(uint8_t i, Operation op, Token t) {
   return true;
 }
 bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
-  if (!enabled_ || !manager_ || index >= kBlePeers || !t.valid() || !t.hasRoom())
+  if (!enabled_ || !manager_ || index >= kBlePeers || !qualification::usableToken(t))
     return false;
   const auto i = static_cast<uint8_t>(index);
   auto &p = peers_[i];
@@ -133,6 +124,14 @@ bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op,
   if (op == Operation::Connect)
     return beginConnection(i, t);
   return beginCommand(i, op, t);
+}
+void OneRsAdapter::dispatchResult(uint8_t i, const BleResult &r) {
+  const auto &p = peers_[i];
+  if (r.kind == BleResultKind::TransportReady && p.connecting) {
+    transportReady(i, r);
+  } else if (r.kind == BleResultKind::WriteComplete) {
+    writeComplete(i, r);
+  }
 }
 void OneRsAdapter::retire(uint8_t i, OneRsFault reason) {
   auto &p = peers_[i];
@@ -222,11 +221,7 @@ void OneRsAdapter::result(const BleResult &r) {
     retire(i, OneRsFault::Timeout);
     return;
   }
-  if (r.kind == BleResultKind::TransportReady && p.connecting) {
-    transportReady(i, r);
-  } else if (r.kind == BleResultKind::WriteComplete) {
-    writeComplete(i, r);
-  }
+  dispatchResult(i, r);
   // BE82 is opaque. No invented SYNC, auth, ACK, recording or timer semantics.
 }
 void OneRsAdapter::drain() {

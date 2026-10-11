@@ -105,21 +105,26 @@ Response decodeQuery(Response r, const Message &message) {
   r.outcome = unknown ? Outcome::Unknown : Outcome::Complete;
   return r;
 }
+bool identityFieldsEnd(uint8_t id, const Message &message, size_t &i) {
+  const size_t fields = id == 0x51 ? 2 : 7;
+  for (size_t f = 0; f < fields; ++f) {
+    if (i >= message.size)
+      return false;
+    const size_t length = message.bytes[i++];
+    if (length > message.size - i || (id == 0x51 && length == 0))
+      return false;
+    i += length;
+  }
+  return true;
+}
 Response decodeIdentityShape(Response r, const Message &message) {
 
   // Version: two length-prefixed unsigned fields. Hardware: seven fields
   // (model number/name, deprecated, firmware, serial, AP SSID/MAC),
   // followed by the documented eleven reserved bytes. No invented widths.
-  const size_t fields = r.id == 0x51 ? 2 : 7;
   size_t i = 2;
-  for (size_t f = 0; f < fields; ++f) {
-    if (i >= message.size)
-      return r;
-    const size_t length = message.bytes[i++];
-    if (length > message.size - i || (r.id == 0x51 && length == 0))
-      return r;
-    i += length;
-  }
+  if (!identityFieldsEnd(r.id, message, i))
+    return r;
   if (r.id == 0x3c) {
     if (message.size - i != 0 && message.size - i != 11)
       return r;

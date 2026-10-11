@@ -153,16 +153,19 @@ namespace ridesync { class Esp32BleHost { public:
             (temp/'harness.cpp').write_text(HARNESS)
             units=['recording_manager.cpp','x5_wake.cpp','wake_manager.cpp','insta360_wake_encoder.cpp','x5_runtime.cpp','x5_serial_control.cpp','profiles/insta360_x5.cpp','protocol/insta360_codec.cpp','camera_manager.cpp','config.cpp','health_supervisor.cpp']
             for provider,inspector,wake in [(False,False,False),(True,False,False),(True,True,False),(False,False,True),(True,False,True)]:
-                binary=temp/f'harness-{provider}-{inspector}-{wake}'
-                command=['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-DRIDESYNC_X5_SERIAL_MILESTONE','-DRIDESYNC_X5_NO_PRIVATE_HEADER','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-ffunction-sections','-fdata-sections','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(temp/'harness.cpp')]
-                if wake:command+=['-DRIDESYNC_X5_WAKE_MILESTONE']
-                if inspector:command+=['-DRIDESYNC_X5_STORE_INSPECT']
-                if provider:command+=['-DTEST_PROVIDER','-DRIDESYNC_X5_PRIVATE_HEADER="provider.h"']
-                command += ['-Wl,-dead_strip' if sys.platform == 'darwin' else '-Wl,--gc-sections']
-                command += [str(ROOT/'src'/unit) for unit in units]+['-o',str(binary)]
-                build=subprocess.run(command,capture_output=True,text=True)
-                self.assertEqual(0,build.returncode,build.stderr)
-                for scenario in range(7):
-                    if not provider and scenario==4:continue
-                    run=subprocess.run([str(binary),str(scenario)],capture_output=True,text=True)
-                    self.assertEqual(0,run.returncode,f'provider={provider} scenario={scenario}: {run.stderr}')
+                self.verify_variant(temp, units, provider, inspector, wake)
+
+    def verify_variant(self, temp, units, provider, inspector, wake):
+        binary=temp/f'harness-{provider}-{inspector}-{wake}'
+        command=['clang++','-std=c++11','-DARDUINO_ARCH_ESP32','-DRIDESYNC_X5_SERIAL_MILESTONE','-DRIDESYNC_X5_NO_PRIVATE_HEADER','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-ffunction-sections','-fdata-sections','-I',str(temp),'-I',str(ROOT/'include'),'-I',str(ROOT),str(temp/'harness.cpp')]
+        if wake:command+=['-DRIDESYNC_X5_WAKE_MILESTONE']
+        if inspector:command+=['-DRIDESYNC_X5_STORE_INSPECT']
+        if provider:command+=['-DTEST_PROVIDER','-DRIDESYNC_X5_PRIVATE_HEADER="provider.h"']
+        command += ['-Wl,-dead_strip' if sys.platform == 'darwin' else '-Wl,--gc-sections']
+        command += [str(ROOT/'src'/unit) for unit in units]+['-o',str(binary)]
+        build=subprocess.run(command,capture_output=True,text=True)
+        self.assertEqual(0,build.returncode,build.stderr)
+        for scenario in range(7):
+            if not provider and scenario==4:continue
+            run=subprocess.run([str(binary),str(scenario)],capture_output=True,text=True)
+            self.assertEqual(0,run.returncode,f'provider={provider} scenario={scenario}: {run.stderr}')

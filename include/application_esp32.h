@@ -30,8 +30,10 @@ struct ApplicationPairingResetStatus {
 class SupervisedEsp32Application final : public ApplicationWorkers {
 public:
   SupervisedEsp32Application(HardwareSerial &, SPIClass &, TwoWire &,
-                             const QualifiedLocalTelemetry &, const QualifiedHandlebar & = {},
-                             const std::array<Hero12Qualification, kMaxCameras> & = {},
+                             const QualifiedLocalTelemetry &,
+                             const QualifiedHandlebar &handlebar = QualifiedHandlebar{},
+                             const std::array<Hero12Qualification, kMaxCameras> &hero12 =
+                                 std::array<Hero12Qualification, kMaxCameras>{},
                              StaticMotionReferenceSource *source = nullptr);
   SupervisedEsp32Application(HardwareSerial &, SPIClass &, TwoWire &,
                              const QualifiedLocalTelemetry &, const QualifiedHandlebar &,
@@ -95,6 +97,9 @@ private:
   void revokeReset(bool timeout = false);
   void serviceReset();
   bool serviceResetProof();
+  void launchControl();
+  void observeHostReset(const BleBondResetResult &);
+  void publishWorkers(const LocalTelemetryStatus &);
   bool serviceResetHost(uint32_t now);
   void serviceResetPhase(uint32_t now);
   void finishReset();

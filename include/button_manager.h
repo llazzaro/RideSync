@@ -32,6 +32,8 @@ private:
   bool enabled_ = false, sampled_ = false, raw_ = false, stable_ = false;
   bool armed_ = false, long_sent_ = false, pending_ = false, second_ = false;
   uint32_t changed_ = 0, pressed_ = 0, released_ = 0;
+  void sample(bool raw, uint32_t now);
+  void expireShort(uint32_t now);
   void emit(ButtonAction action);
   void release(uint32_t now);
   void transition(uint32_t now);

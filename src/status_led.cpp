@@ -27,6 +27,17 @@ void observePeers(const RecordingStatus *group, const std::array<Lifecycle, kMax
     c.partial |= peer.error != CameraError::None && peer.error != CameraError::Cancelled;
   }
 }
+LedState groupState(const RecordingStatus *group) {
+  if (!group || !group->enabled)
+    return LedState::Off;
+  if (group->ready != group->enabled || group->pending || group->unknown)
+    return LedState::Partial;
+  if (group->recording == group->enabled)
+    return LedState::Recording;
+  if (group->stopped == group->enabled)
+    return LedState::Ready;
+  return LedState::Partial;
+}
 } // namespace
 LedState selectLedState(const RecordingStatus *group,
                         const std::array<Lifecycle, kMaxCameras> &lifecycle,
@@ -42,18 +53,12 @@ LedState selectLedState(const RecordingStatus *group,
     return LedState::Recovery;
   if (conditions.partial)
     return LedState::Partial;
-  if (!group || !group->enabled)
-    return LedState::Off;
-  if (group->ready != group->enabled || group->pending || group->unknown)
-    return LedState::Partial;
-  if (group->recording == group->enabled)
-    return LedState::Recording;
-  if (group->stopped == group->enabled)
-    return LedState::Ready;
-  return LedState::Partial;
+  return groupState(group);
 }
 namespace {
 uint32_t period(LedState state) { return state == LedState::Partial ? 2000U : 1000U; }
+bool doublePulse(uint32_t phase) { return phase < 100 || (phase >= 200 && phase < 300); }
+bool triplePulse(uint32_t phase) { return doublePulse(phase) || (phase >= 400 && phase < 500); }
 LedFrame frame(LedState state, uint32_t phase) {
   switch (state) {
   case LedState::Ready:
@@ -61,12 +66,11 @@ LedFrame frame(LedState state, uint32_t phase) {
   case LedState::Recording:
     return {phase < 500};
   case LedState::Partial:
-    return {phase < 100 || (phase >= 200 && phase < 300),
-            phase < 100 || (phase >= 200 && phase < 300)};
+    return {doublePulse(phase), doublePulse(phase)};
   case LedState::Recovery:
     return {false, false, phase % 200 < 100};
   case LedState::Error:
-    return {phase < 100 || (phase >= 200 && phase < 300) || (phase >= 400 && phase < 500)};
+    return {triplePulse(phase)};
   default:
     return {};
   }
@@ -113,10 +117,13 @@ bool unusedChannelsClear(const LedWiring &w, size_t channels) {
       return false;
   return true;
 }
+bool qualifiedWiring(const LedWiring &w, bool ack) {
+  return w.board_qualified && w.reservations_complete && ack &&
+         (w.mode == LedMode::Mono || w.mode == LedMode::Rgb);
+}
 } // namespace
 bool validateLedWiring(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
-  if (!w.board_qualified || !w.reservations_complete || !ack ||
-      (w.mode != LedMode::Mono && w.mode != LedMode::Rgb))
+  if (!qualifiedWiring(w, ack))
     return false;
   if (button.enabled && (button.pin < 0 || button.pin > 39))
     return false;

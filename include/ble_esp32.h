@@ -7,6 +7,7 @@
 #include <nimble/nimble/include/nimble/nimble_npl.h>
 
 namespace ridesync {
+struct BleResetInventory;
 class Esp32BleHost final : public BleHost, public NimBLEDeviceCallbacks {
 public:
   // One boot-lifetime instance, also the future raw peripheral host/store owner.
@@ -79,6 +80,12 @@ public:
   bool wakeSecurityAllowed(uint16_t);
 
 private:
+  bool resetRoutingBusy(std::memory_order) const;
+  bool leaseHostQualified() const;
+  bool foreignConnection(uint16_t) const;
+  bool identifyWakeAddress(const ble_gap_conn_desc &);
+  bool wakeStoreKeyAllowed(int, const void *);
+  bool wakeStoreValueAllowed(int, const void *);
   bool gapSetupBusy(std::memory_order) const;
   bool wakeStoreAddressAllowed(const ble_addr_t &) const;
   bool establishedIdentity(const ble_addr_t &) const;
@@ -130,6 +137,51 @@ private:
     std::array<std::array<uint8_t, 32>, 80> digests{};
     bool ambiguous = false, initialized = false;
   } reset_;
+  int initializeController();
+  void installHostCallbacks();
+  bool startupAdmitted() const;
+  bool proofMatches(const BleStoreObservation &) const;
+  bool storeStatusWakeOwned(ble_store_status_event *);
+  bool storeStatusMatches(const ble_store_status_event &, const Slot &) const;
+  bool resetRequestAdmitted(const BondIdentity &, uint32_t, uint32_t) const;
+  bool bondCounts(BleBondAdmission &);
+  void qualifyExistingBond(const BondIdentity &, BleBondAdmission &);
+  bool digestResetRecord(BleResetInventory &, unsigned, const uint8_t *, size_t);
+  bool finishResetDigest(BleResetInventory &, std::array<uint8_t, 32> &);
+  bool matchResetTarget(BleResetInventory &, unsigned);
+  bool inspectResetLiveSchema(BleResetInventory &, unsigned, unsigned &);
+  bool restoreHostStore();
+  void failStoreObservation(const BleStoreObservation &);
+  void finishStoreInspection(BleStoreObservation &, bool) const;
+  bool resetWorkPending() const;
+  bool inspectResetDurableEntry(uint32_t, const char *, BleResetInventory &, unsigned &);
+  bool inspectResetLiveEntry(BleResetInventory &, unsigned, const uint8_t *, unsigned, unsigned &);
+  bool resetTargetQuiescent(const ble_addr_t &);
+  bool admitResetMutation();
+  int deleteResetSchema(const ble_addr_t &, unsigned);
+  int deleteResetPrivateRecords(int);
+  void *findResetPrivateRecord(int);
+  bool resetInventoryBefore(std::array<uint8_t, 32> &, unsigned &);
+  void finishBondReset(int, const std::array<uint8_t, 32> &, const std::array<uint8_t, 32> &);
+  bool submissionReserved(BlePhase) const;
+  void attributeSlot(Slot &, const BleCommand &, const BleContext &);
+  int submitAtt(const BleCommand &, Slot &);
+  int submitCommand(const BleCommand &, Slot &);
+  int submitUnacknowledgedWrite(const BleCommand &, Slot &);
+  int rejectSubmission(BlePhase, BleContext &, int);
+  static bool copyAdvertisement(const ble_gap_event *, Slot &, BleEvent &);
+  static bool disconnectProcedures(Slot &, const BleEvent &);
+  static void copySecurity(BleEvent &);
+  static bool captureConnected(Slot &, const BleEvent &);
+  bool inspectionAllowed() const;
+  bool resetDigestMatches(BleResetInventory &, const std::array<uint8_t, 32> &, unsigned, unsigned);
+  bool resetRoutingAdmission();
+  void publishResetVerification(int, bool);
+  int deleteResetSchemas(const ble_addr_t &, int);
+  bool submissionOpen(const BleContext &) const;
+  static bool copyNotification(Slot &, const ble_gap_event *, BleEvent &);
+  static void deliverAdvertisement(Slot &, const ble_gap_event *);
+  static bool gapScanEvent(Slot &, const ble_gap_event *);
   bool resetAllowed();
   bool resetInventory(std::array<uint8_t, 32> &, unsigned &target_records);
   bool resetResolving(std::array<uint8_t, 32> &, bool &found);

@@ -72,16 +72,26 @@ bool ApplicationSettings::accept(const SettingsSnapshot &s) {
   snapshot_ = s;
   return true;
 }
+namespace {
+bool anyEnabledCamera(const Settings &settings) {
+  bool enabled = false;
+  for (size_t i = 0; i < settings.count && i < kMaxCameras; ++i)
+    enabled = enabled || settings.cameras[i].enabled;
+  return enabled;
+}
+bool persistenceRefused(PersistStatus status) {
+  return status == PersistStatus::Refused || status == PersistStatus::Future ||
+         status == PersistStatus::Corrupt || status == PersistStatus::Ambiguous ||
+         status == PersistStatus::ReadError;
+}
+} // namespace
 SettingsAdmission admitSettings(const SettingsSnapshot &s, const SettingsQualification &q) {
   SettingsAdmission a;
   // Independent eligibility only: this does not start or qualify any hardware.
   a.local_telemetry = q.local_telemetry;
   if (!s.completed || !s.effective || q.safe_mode || !q.nvs_allowed)
     return a;
-  bool enabled = false;
-  for (size_t i = 0; i < s.settings.count && i < kMaxCameras; ++i)
-    enabled = enabled || s.settings.cameras[i].enabled;
-  a.cameras = q.cameras && enabled && s.peers_valid;
+  a.cameras = q.cameras && anyEnabledCamera(s.settings) && s.peers_valid;
   a.button = q.button && s.settings.button_gpio.enabled;
   return a;
 }
@@ -114,6 +124,17 @@ void ConfigBootstrap::unavailable(PersistResult result) {
   dirty_ = true;
   publish();
 }
+void ConfigBootstrap::adoptLoadedSettings() {
+  if (snapshot_.load.status == PersistStatus::Defaults && defaults_supplied_) {
+    if (!defaults_valid_ || !expandSettings(defaults_, ram_))
+      snapshot_.outcome = PersistStatus::Invalid;
+  }
+  snapshot_.effective = effectiveLoad(snapshot_.load.status) &&
+                        snapshot_.outcome.status != PersistStatus::Invalid &&
+                        copySettings(ram_, snapshot_.settings);
+  if (effectiveLoad(snapshot_.load.status) && !snapshot_.effective)
+    snapshot_.outcome = PersistStatus::Invalid;
+}
 void ConfigBootstrap::start(bool safe_mode, bool nvs_allowed) {
   if (started_)
     return;
@@ -125,15 +146,7 @@ void ConfigBootstrap::start(bool safe_mode, bool nvs_allowed) {
   snapshot_.epoch = epoch_;
   snapshot_.generation = 1;
   snapshot_.load = snapshot_.outcome = persistence_.load(ram_);
-  if (snapshot_.load.status == PersistStatus::Defaults && defaults_supplied_) {
-    if (!defaults_valid_ || !expandSettings(defaults_, ram_))
-      snapshot_.outcome = PersistStatus::Invalid;
-  }
-  snapshot_.effective = effectiveLoad(snapshot_.load.status) &&
-                        snapshot_.outcome.status != PersistStatus::Invalid &&
-                        copySettings(ram_, snapshot_.settings);
-  if (effectiveLoad(snapshot_.load.status) && !snapshot_.effective)
-    snapshot_.outcome = PersistStatus::Invalid;
+  adoptLoadedSettings();
   snapshot_.completed = true;
   snapshot_.peers = peers_;
   snapshot_.peers_valid = snapshot_.effective && peersValid();
@@ -210,9 +223,7 @@ void ConfigBootstrap::servicePersistence(uint32_t now) {
   const auto result = persistence_.service(now);
   if (saving_)
     save_result_ = result;
-  if (result.status == PersistStatus::Refused || result.status == PersistStatus::Future ||
-      result.status == PersistStatus::Corrupt || result.status == PersistStatus::Ambiguous ||
-      result.status == PersistStatus::ReadError)
+  if (persistenceRefused(result.status))
     refuse(result);
   else if (saving_ &&
            (result.status == PersistStatus::Durable || result.status == PersistStatus::Unchanged)) {

@@ -44,8 +44,12 @@ class DynamicReplayTests(unittest.TestCase):
         cls.directory.cleanup()
 
     def run_rows(self, rows):
-        result = subprocess.run([str(self.executable), '20000', '2000000'],
-                                input=encode(rows), text=True, capture_output=True, check=True)
+        # A file avoids a bidirectional pipe stall while the replay emits CSV.
+        with tempfile.TemporaryFile(mode='w+') as inputs:
+            inputs.write(encode(rows))
+            inputs.seek(0)
+            result = subprocess.run([str(self.executable), '20000', '2000000'],
+                                    stdin=inputs, text=True, capture_output=True, check=True)
         return list(csv.DictReader(io.StringIO(result.stdout)))
 
     def test_independent_roll_trajectory_and_body_translation(self):

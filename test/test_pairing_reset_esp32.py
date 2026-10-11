@@ -386,17 +386,21 @@ int main(int argc,char**argv){
 }
 '''
 
+def reset_sdk_source():
+    fixtures=ROOT/'test/fixtures/nimble'
+    sdk_source=(fixtures/'reset_sdk_prefix.c.txt').read_text()
+    for name in ('config_reset','nvs_lookup','nvs_reset','privacy_reset','delete_dispatch'):
+        body=(fixtures/(name+'.c.txt')).read_text()
+        sdk_source+=patch.guard_privacy(body) if name=='privacy_reset' else patch.guard_private_stride(body) if name=='nvs_lookup' else body
+    sdk_source+=(fixtures/'reset_sdk_suffix.c.txt').read_text()
+    return sdk_source
+
 class PairingResetEsp32(unittest.TestCase):
     def test_concrete_host_owns_explicit_reset(self):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             (temp / 'standin.h').write_text(sdk_standin())
-            fixtures=ROOT/'test/fixtures/nimble'
-            sdk_source=(fixtures/'reset_sdk_prefix.c.txt').read_text()
-            for name in ('config_reset','nvs_lookup','nvs_reset','privacy_reset','delete_dispatch'):
-                body=(fixtures/(name+'.c.txt')).read_text()
-                sdk_source+=patch.guard_privacy(body) if name=='privacy_reset' else patch.guard_private_stride(body) if name=='nvs_lookup' else body
-            sdk_source+=(fixtures/'reset_sdk_suffix.c.txt').read_text()
+            sdk_source = reset_sdk_source()
             (temp/'sdk.c').write_text(sdk_source)
             subprocess.run(['clang','-fno-common','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-O0','-c',str(temp/'sdk.c'),'-o',str(temp/'sdk.o')],check=True)
             for name in INCLUDES:

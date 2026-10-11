@@ -5,14 +5,9 @@ X5Runtime::X5Runtime(X5PeripheralPort &p, Clock &c)
     : adapter_(p, c), manager_(c, adapter_, X5Adapter::managerPolicy()) {
   adapter_.attach(manager_);
 }
-bool X5Runtime::configure(const X5Qualification &q, const SourceConfig &source) {
-  if (attempted_ || revoked_)
-    return false;
-  attempted_ = true;
-  refusal_ = X5Failure::Qualification;
-  if (source.count != 1 || !validate(source).ok())
-    return false;
-  const auto &c = source.cameras[0];
+namespace {
+bool cameraMatches(const CameraConfig &camera, const X5Qualification &q) {
+  const auto &c = camera;
   char identifier[18]{};
   std::snprintf(identifier, sizeof identifier, "%02X:%02X:%02X:%02X:%02X:%02X",
                 q.identity.address[5], q.identity.address[4], q.identity.address[3],
@@ -21,6 +16,18 @@ bool X5Runtime::configure(const X5Qualification &q, const SourceConfig &source) 
       c.gps_telemetry || !c.wake_identifier.empty() || c.identifier != identifier ||
       (q.identity.type == IdentityType::Public ? c.address_type != AddressType::Public
                                                : c.address_type != AddressType::Random))
+    return false;
+  return true;
+}
+} // namespace
+bool X5Runtime::configure(const X5Qualification &q, const SourceConfig &source) {
+  if (attempted_ || revoked_)
+    return false;
+  attempted_ = true;
+  refusal_ = X5Failure::Qualification;
+  if (source.count != 1 || !validate(source).ok())
+    return false;
+  if (!cameraMatches(source.cameras[0], q))
     return false;
   if (!adapter_.configure(q)) {
     refusal_ = adapter_.failure();

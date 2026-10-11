@@ -10,7 +10,7 @@ public:
   CameraEventSession(Clock &raw, StorageSink &sink, CameraRuntimePort &adapter,
                      CameraManager &manager, RecordingManager &group, uint64_t session_id,
                      const char *firmware, const char *provenance,
-                     const MotionAdmissionConfig &motion = {},
+                     const MotionAdmissionConfig &motion = MotionAdmissionConfig{},
                      StaticMotionReferenceSource *source = nullptr);
   ~CameraEventSession();
   CameraEventSession(const CameraEventSession &) = delete;

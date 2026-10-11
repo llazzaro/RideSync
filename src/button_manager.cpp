@@ -55,10 +55,7 @@ void ButtonManager::transition(uint32_t now) {
     release(now);
   }
 }
-void ButtonManager::poll(ButtonInput &input, uint32_t now) {
-  if (!enabled_)
-    return;
-  bool raw = input.pressed();
+void ButtonManager::sample(bool raw, uint32_t now) {
   if (!sampled_) {
     sampled_ = true;
     raw_ = raw;
@@ -69,11 +66,19 @@ void ButtonManager::poll(ButtonInput &input, uint32_t now) {
     raw_ = raw;
     changed_ = now;
   }
+}
+void ButtonManager::expireShort(uint32_t now) {
   // Expiry wins at equality, including when a second press debounces then.
   if (pending_ && !second_ && uint32_t(now - released_) >= config_.double_ms) {
     pending_ = false;
     emit(config_.short_action);
   }
+}
+void ButtonManager::poll(ButtonInput &input, uint32_t now) {
+  if (!enabled_)
+    return;
+  sample(input.pressed(), now);
+  expireShort(now);
   if (!armed_) {
     if (!raw_ && uint32_t(now - changed_) >= config_.debounce_ms) {
       stable_ = false;
@@ -96,22 +101,15 @@ bool validateButtonGpioConfig(const ButtonGpioConfig &c) {
   if (c.pull != ButtonPull::External && c.pull != ButtonPull::Up && c.pull != ButtonPull::Down)
     return false;
   // Silicon-valid inputs after rejecting straps, flash/PSRAM and known vendor peripherals.
-  switch (c.pin) {
-  case 18:
-  case 19:
-  case 21:
-  case 22:
-  case 23:
-  case 32:
-    return true;
-  case 34:
-  case 35:
-  case 36:
-  case 39:
-    return c.pull == ButtonPull::External;
-  default:
-    return false;
-  }
+  constexpr int outputs[] = {18, 19, 21, 22, 23, 32};
+  for (int pin : outputs)
+    if (c.pin == pin)
+      return true;
+  constexpr int inputs[] = {34, 35, 36, 39};
+  for (int pin : inputs)
+    if (c.pin == pin)
+      return c.pull == ButtonPull::External;
+  return false;
 }
 #if defined(ARDUINO_ARCH_ESP32)
 bool ArduinoButtonInput::begin(const ButtonGpioConfig &c, bool acknowledge) {

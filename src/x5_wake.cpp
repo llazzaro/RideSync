@@ -2,6 +2,13 @@
 namespace ridesync {
 namespace {
 bool due(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000u; }
+bool validRecoveryOperation(const WakeOperation &op) {
+  return op.id && op.id != UINT32_MAX && op.generation && op.generation != UINT32_MAX;
+}
+bool recoveryConfigured(const X5RuntimeStatus &state) { return state.configured && !state.revoked; }
+bool freshConnection(const X5RuntimeStatus &state) {
+  return !state.active && state.connected && state.subscribed && state.age_known;
+}
 } // namespace
 RecordingState X5WakeRecovery::currentObserved(uint8_t peer) const {
   if (peer != 0 || runtime_.status().revoked ||
@@ -10,16 +17,18 @@ RecordingState X5WakeRecovery::currentObserved(uint8_t peer) const {
     return RecordingState::Unknown;
   return runtime_.status().observed;
 }
+bool X5WakeRecovery::recoveryInUse() const {
+  return used_ && (!result_.terminal || !result_.released);
+}
 CameraError X5WakeRecovery::begin(const WakeOperation &op, uint32_t deadline) {
   if (op.peer != 0)
     return CameraError::Unsupported;
-  if (!op.id || op.id == UINT32_MAX || !op.generation || op.generation == UINT32_MAX ||
-      due(clock_.now(), deadline))
+  if (!validRecoveryOperation(op) || due(clock_.now(), deadline))
     return CameraError::InvalidPolicy;
-  if (used_ && (!result_.terminal || !result_.released))
+  if (recoveryInUse())
     return CameraError::Busy;
   const auto state = runtime_.status();
-  if (!state.configured || state.revoked)
+  if (!recoveryConfigured(state))
     return CameraError::Disabled;
   if (state.connected || state.active || !runtime_.adapter().connectionReleased())
     return CameraError::Busy;
@@ -55,8 +64,7 @@ void X5WakeRecovery::updateResult(uint32_t now) {
     fail(state.error == CameraError::None ? CameraError::Transport : state.error);
     return;
   }
-  if (!state.active && state.connected && state.subscribed && state.age_known &&
-      runtime_.adapter().ready(Operation::Start)) {
+  if (freshConnection(state) && runtime_.adapter().ready(Operation::Start)) {
     // This observation belongs to the new connection, never pre-wake cache.
     result_.terminal = result_.released = result_.fresh = true;
     result_.observed = state.observed;

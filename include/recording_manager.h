@@ -84,6 +84,9 @@ private:
   void admit(size_t peer);
   void command(size_t peer);
   void advance();
+  void invalidateCompletedSync(Peer &, const CameraState &);
+  bool responseRetired(const Event &) const;
+  void observeAcceptedEvent(Peer &, const Event &);
   void advancePeer(size_t);
   void advanceConnected(size_t);
   void advanceConfirm(size_t);

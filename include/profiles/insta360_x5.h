@@ -33,6 +33,11 @@ public:
   static RetryPolicy managerPolicy();
 
 private:
+  void expireEvidence();
+  void dispatchInput(const X5Input &e);
+  void observeDisplay(const X5Input &e, const insta360::Ce80DisplayResult &result);
+  X5Failure commandRefusal(Operation op) const;
+  bool commandReady(Operation op) const;
   void completePending();
   void inputLoss();
   void completeFromObservation();

@@ -34,6 +34,7 @@ private:
   void cycle();
   bool prepareAdvertising();
   void terminateIncoming();
+  bool leaseQuiescent() const;
   bool open(uint32_t now) const;
   void finish();
   void queueBarrier();

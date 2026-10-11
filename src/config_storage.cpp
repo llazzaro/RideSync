@@ -161,13 +161,32 @@ bool decodeButtonSettings(Reader &reader, SourceConfig &c) {
   g.active_low = reader.boolean();
   return true;
 }
+bool intactEnvelope(const ConfigRecord &r) {
+  return !r.bytes[5] && !r.bytes[18] && !r.bytes[19] &&
+         get(r.bytes.data() + 16, 2) == r.size - header && get(r.bytes.data() + 20, 4) == crc(r) &&
+         get(r.bytes.data() + 8, 8);
+}
+uint8_t encodedFamily(CameraFamily family) {
+  return family == CameraFamily::Insta360 ? 1 : family == CameraFamily::GoPro ? 2 : 3;
+}
+uint8_t encodedAddress(AddressType type) {
+  return type == AddressType::Public ? 1 : type == AddressType::Random ? 2 : 0;
+}
+uint8_t encodedPull(ButtonPull pull) {
+  return pull == ButtonPull::External ? 0 : pull == ButtonPull::Up ? 1 : 2;
+}
+bool decodedRecordComplete(const Reader &reader, const ConfigRecord &r, const SourceConfig &c) {
+  return reader.ok && reader.at == r.size && settingsValid(c);
+}
+bool validRecordCount(const SourceConfig &c) {
+  return c.capacity && c.capacity <= kMaxCameras && c.count <= c.capacity;
+}
 PersistStatus validateEnvelope(const ConfigRecord &r) {
   if (r.size < header || r.size > kConfigRecordMax || std::memcmp(r.bytes.data(), "RSCF", 4))
     return PersistStatus::Corrupt;
   if (r.bytes[4] != 1)
     return PersistStatus::Future;
-  if (r.bytes[5] || r.bytes[18] || r.bytes[19] || get(r.bytes.data() + 16, 2) != r.size - header ||
-      get(r.bytes.data() + 20, 4) != crc(r) || !get(r.bytes.data() + 8, 8))
+  if (!intactEnvelope(r))
     return PersistStatus::Corrupt;
   const auto schema = get(r.bytes.data() + 6, 2);
   if (schema > 2)
@@ -293,12 +312,9 @@ PersistResult encodeConfig(const SourceConfig &c, uint64_t generation, ConfigRec
     string(p.name);
     string(p.identifier);
     string(p.wake_identifier);
-    number(p.family == CameraFamily::Insta360 ? 1 : p.family == CameraFamily::GoPro ? 2 : 3, 1);
+    number(encodedFamily(p.family), 1);
     number(model(p.model), 1);
-    number(p.address_type == AddressType::Public   ? 1
-           : p.address_type == AddressType::Random ? 2
-                                                   : 0,
-           1);
+    number(encodedAddress(p.address_type), 1);
     number(p.enabled, 1);
     number(p.gps_telemetry, 1);
   }
@@ -314,7 +330,7 @@ PersistResult encodeConfig(const SourceConfig &c, uint64_t generation, ConfigRec
   number(g.enabled, 1);
   number(g.board_qualified, 1);
   number(uint32_t(g.pin), 4);
-  number(g.pull == ButtonPull::External ? 0 : g.pull == ButtonPull::Up ? 1 : 2, 1);
+  number(encodedPull(g.pull), 1);
   number(g.active_low, 1);
   std::memcpy(r.bytes.data(), "RSCF", 4);
   r.bytes[4] = 1;
@@ -333,14 +349,14 @@ PersistResult decodeConfig(const ConfigRecord &r, SourceConfig &out, uint64_t &g
   Reader reader{r};
   c.count = size_t(reader.number(1));
   c.capacity = size_t(reader.number(1));
-  if (!c.capacity || c.capacity > kMaxCameras || c.count > c.capacity)
+  if (!validRecordCount(c))
     return PersistStatus::Corrupt;
   for (size_t i = 0; i < c.count; ++i)
     if (!decodeCamera(reader, c.cameras[i]))
       return PersistStatus::Corrupt;
   if (schema == 2 && !decodeButtonSettings(reader, c))
     return PersistStatus::Corrupt;
-  if (!reader.ok || reader.at != r.size || !settingsValid(c))
+  if (!decodedRecordComplete(reader, r, c))
     return PersistStatus::Corrupt;
   out = std::move(c);
   generation = get(r.bytes.data() + 8, 8);
@@ -424,6 +440,21 @@ bool ConfigPersistence::unchangedPayload() const {
   return scan_.winner >= 0 && !scan_.migration && !uncertain_ &&
          samePayload(scan_.canonical, desired_);
 }
+bool ConfigPersistence::saveDue(uint32_t now) const {
+  const uint32_t wait = failures_ > 1 ? 10000 : 5000;
+  return uint32_t(now - requested_) >= 1000 &&
+         (!attempted_ || uint32_t(now - attempted_at_) >= wait);
+}
+bool ConfigPersistence::blockFailedScan() {
+  auto &s = scan_;
+  if (!s.blocked)
+    return false;
+  latched_ = true;
+  if (s.result.status == PersistStatus::Refused)
+    pending_ = false;
+  result_ = s.result;
+  return true;
+}
 PersistResult ConfigPersistence::service(uint32_t now) {
   if (!store_.allowed()) {
     // Refusal discards the mailbox: reopening a gate must not replay commands.
@@ -432,17 +463,12 @@ PersistResult ConfigPersistence::service(uint32_t now) {
   }
   if (!pending_ || latched_)
     return result_;
-  const uint32_t wait = failures_ > 1 ? 10000 : 5000;
-  if (uint32_t(now - requested_) < 1000 || (attempted_ && uint32_t(now - attempted_at_) < wait))
+  if (!saveDue(now))
     return result_;
   scan();
   auto &s = scan_;
-  if (s.blocked) {
-    latched_ = true;
-    if (s.result.status == PersistStatus::Refused)
-      pending_ = false;
-    return result_ = s.result;
-  }
+  if (blockFailedScan())
+    return result_;
   // Schema1 must be upgraded even if its decoded settings equal schema2.
   if (unchangedPayload()) {
     pending_ = false;

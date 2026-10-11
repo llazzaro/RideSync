@@ -1,4 +1,5 @@
 #include "profiles/mixed_camera.h"
+#include "profiles/qualification.h"
 #include <algorithm>
 namespace ridesync {
 namespace {
@@ -26,18 +27,7 @@ bool matches(const CameraConfig &camera, const BondIdentity &id) {
            ? camera.address_type != AddressType::Public
            : id.type != IdentityType::RandomStatic || camera.address_type != AddressType::Random))
     return false;
-  auto hex = [](char c) -> int {
-    return c >= '0' && c <= '9'   ? c - '0'
-           : c >= 'A' && c <= 'F' ? c - 'A' + 10
-           : c >= 'a' && c <= 'f' ? c - 'a' + 10
-                                  : -1;
-  };
-  for (size_t i = 0; i < 6; ++i) {
-    int hi = hex(camera.identifier[3 * i]), lo = hex(camera.identifier[3 * i + 1]);
-    if (hi < 0 || lo < 0 || uint8_t(hi * 16 + lo) != id.address[5 - i])
-      return false;
-  }
-  return true;
+  return qualification::identifierAddress(camera.identifier, id, false);
 }
 Hero12RecoveryPhase wakeRecoveryPhase(WakePhase phase) {
   switch (phase) {
@@ -65,6 +55,16 @@ MixedCameraAdapter::MixedCameraAdapter(BleHost &host, X5PeripheralPort &port, Cl
     : clock_(clock), wake_recovery_(*this),
       wake_(radio ? *radio : unsupportedRadio(), &wake_recovery_), x5_(port, clock),
       one_(host, clock), go_(host, clock), hero_(host, clock), dji_(host, clock) {}
+void MixedCameraAdapter::serviceGps() {
+  uint8_t mask = 0;
+  for (size_t i = 0; i < source_.count; ++i) {
+    auto *s = manager_->state(i);
+    if (s->lifecycle == Lifecycle::Operating || s->lifecycle == Lifecycle::Connecting ||
+        (group_ && group_->status().peers[i].pending))
+      mask |= uint8_t(1u << i);
+  }
+  one_.serviceGps(mask);
+}
 void MixedCameraAdapter::attach(CameraManager &m, RecordingManager &g) {
   if (manager_)
     return;
@@ -98,23 +98,46 @@ RetryPolicy MixedCameraAdapter::managerPolicy() {
   p.max_attempts = 1;
   return p;
 }
+bool MixedCameraAdapter::configurePeripheral(size_t i, const CameraConfig &camera,
+                                             const X5Qualification &q) {
+  return i == 0 && matches(camera, q.identity) && x5_.configure(q);
+}
+bool MixedCameraAdapter::startCentrals(bool one, bool go, bool hero, bool dji) {
+  return (!one || one_.start(true, true)) && (!go || go_.start(true, true)) &&
+         (!hero || hero_.start(true, true)) && (!dji || dji_.start(true, true));
+}
+bool MixedCameraAdapter::configureTelemetry(size_t i, const CameraConfig &camera,
+                                            const GpsForwardingConfig &gps) {
+  if (camera.gps_telemetry && (camera.model != CameraModel::ONE_RS || !gps.enabled ||
+                               !gps.source_qualified || !one_.configureGps(i, camera, gps)))
+    return false;
+  return true;
+}
+bool MixedCameraAdapter::configureDji(size_t i, const CameraConfig &camera,
+                                      const DjiQualification &q) {
+  return q.model == camera.model && matches(camera, q.identity) && dji_.configurePeer(i, q);
+}
+bool MixedCameraAdapter::invalidWakePolicy() const {
+  return !wake_policy_.total_ms || wake_policy_.total_ms >= 0x80000000u || !wake_policy_.slice_ms ||
+         wake_policy_.slice_ms > wake_policy_.total_ms;
+}
 bool MixedCameraAdapter::invalidWakeConfig(const SourceConfig &s) const {
   return wake_config_.enabled &&
          (s.count == 0 || !wake_config_.source_qualified || s.cameras[0].model != CameraModel::X5 ||
           insta360::encodeWake(wake_config_.profile, wake_config_.identifier.data(), 6).error !=
               insta360::WakeCodecError::None ||
-          !wake_policy_.total_ms || wake_policy_.total_ms >= 0x80000000u ||
-          !wake_policy_.slice_ms || wake_policy_.slice_ms > wake_policy_.total_ms ||
-          s.cameras[0].wake_identifier.size() != 6 ||
+          invalidWakePolicy() || s.cameras[0].wake_identifier.size() != 6 ||
           !std::equal(wake_config_.identifier.begin(), wake_config_.identifier.end(),
                       s.cameras[0].wake_identifier.begin()));
 }
 bool MixedCameraAdapter::configureModel(size_t i, const CameraConfig &camera,
                                         const MixedCameraQualifications &q) {
+  if (isDji(camera.model))
+    return configureDji(i, camera, q.dji[i]);
   bool ok = false;
   switch (camera.model) {
   case CameraModel::X5:
-    ok = i == 0 && matches(camera, q.x5.identity) && x5_.configure(q.x5);
+    ok = configurePeripheral(i, camera, q.x5);
     break;
   case CameraModel::ONE_RS:
     ok = matches(camera, q.one_rs[i].identity) && one_.configurePeer(i, q.one_rs[i]);
@@ -124,13 +147,6 @@ bool MixedCameraAdapter::configureModel(size_t i, const CameraConfig &camera,
     break;
   case CameraModel::HERO12_BLACK:
     ok = matches(camera, q.hero12[i].identity) && hero_.configurePeer(i, q.hero12[i]);
-    break;
-  case CameraModel::DJI_ACTION4:
-  case CameraModel::DJI_ACTION5_PRO:
-  case CameraModel::DJI_ACTION6:
-  case CameraModel::DJI_OSMO360:
-    ok = q.dji[i].model == camera.model && matches(camera, q.dji[i].identity) &&
-         dji_.configurePeer(i, q.dji[i]);
     break;
   default:
     break;
@@ -146,11 +162,7 @@ bool MixedCameraAdapter::configureCamera(size_t i, const SourceConfig &s,
     return false;
   if (!configureModel(i, s.cameras[i], q))
     return false;
-  if (s.cameras[i].gps_telemetry &&
-      (s.cameras[i].model != CameraModel::ONE_RS || !q.gps[i].enabled ||
-       !q.gps[i].source_qualified || !one_.configureGps(i, s.cameras[i], q.gps[i])))
-    return false;
-  return true;
+  return configureTelemetry(i, s.cameras[i], q.gps[i]);
 }
 bool MixedCameraAdapter::configure(const SourceConfig &s, const MixedCameraQualifications &q) {
   if (configured_ || !manager_ || !validate(s).ok() || manager_->size() != s.count)
@@ -180,12 +192,13 @@ bool MixedCameraAdapter::start(bool enabled, bool qualified) {
       dji |= isDji(source_.cameras[i].model);
     }
   // X5 registration/restore was configured before any central starts the host.
-  return (!one || one_.start(true, true)) && (!go || go_.start(true, true)) &&
-         (!hero || hero_.start(true, true)) && (!dji || dji_.start(true, true));
+  return startCentrals(one, go, hero, dji);
 }
 CameraTransport *MixedCameraAdapter::route(size_t i) {
   if (i >= source_.count || !source_.cameras[i].enabled)
     return nullptr;
+  if (isDji(source_.cameras[i].model))
+    return &dji_;
   switch (source_.cameras[i].model) {
   case CameraModel::X5:
     return &x5_;
@@ -195,11 +208,6 @@ CameraTransport *MixedCameraAdapter::route(size_t i) {
     return &go_;
   case CameraModel::HERO12_BLACK:
     return &hero_;
-  case CameraModel::DJI_ACTION4:
-  case CameraModel::DJI_ACTION5_PRO:
-  case CameraModel::DJI_ACTION6:
-  case CameraModel::DJI_OSMO360:
-    return &dji_;
   default:
     return nullptr;
   }
@@ -232,14 +240,7 @@ void MixedCameraAdapter::service(CameraServiceAction *action) {
   dji_.service(false);
   if (action)
     action->beforeAdvance();
-  uint8_t mask = 0;
-  for (size_t i = 0; i < source_.count; ++i) {
-    auto *s = manager_->state(i);
-    if (s->lifecycle == Lifecycle::Operating || s->lifecycle == Lifecycle::Connecting ||
-        (group_ && group_->status().peers[i].pending))
-      mask |= uint8_t(1u << i);
-  }
-  one_.serviceGps(mask);
+  serviceGps();
   if (group_)
     group_->tick();
   else
@@ -390,14 +391,16 @@ RecordingState MixedCameraAdapter::X5Recovery::currentObserved(uint8_t i) const 
              ? owner_.x5_.observed()
              : RecordingState::Unknown;
 }
+bool MixedCameraAdapter::X5Recovery::released() const {
+  return (!used_ || (result_.terminal && result_.released)) && !owner_.x5_.connected() &&
+         !owner_.x5_.active() && owner_.x5_.connectionReleased();
+}
 CameraError MixedCameraAdapter::X5Recovery::begin(const WakeOperation &op, uint32_t deadline) {
   if (op.peer != 0 || !owner_.configured_ || owner_.stopped_)
     return CameraError::Disabled;
   if (reached(owner_.clock_.now(), deadline))
     return CameraError::Timeout;
-  if (used_ && (!result_.terminal || !result_.released))
-    return CameraError::Busy;
-  if (owner_.x5_.connected() || owner_.x5_.active() || !owner_.x5_.connectionReleased())
+  if (!released())
     return CameraError::Busy;
   auto e = owner_.manager_->request(0, Operation::Connect);
   if (e != CameraError::None)

@@ -44,29 +44,25 @@ float real(const std::string &value) {
   return result;
 }
 const char *fault(ridesync::DynamicMotionFault f) {
-  switch (f) {
-  case ridesync::DynamicMotionFault::None:
-    return "none";
-  case ridesync::DynamicMotionFault::Disabled:
-    return "disabled";
-  case ridesync::DynamicMotionFault::Configuration:
-    return "configuration";
-  case ridesync::DynamicMotionFault::Reference:
-    return "reference";
-  case ridesync::DynamicMotionFault::Measurement:
-    return "measurement";
-  case ridesync::DynamicMotionFault::Identity:
-    return "identity";
-  case ridesync::DynamicMotionFault::Timing:
-    return "timing";
-  case ridesync::DynamicMotionFault::Sequence:
-    return "sequence";
-  case ridesync::DynamicMotionFault::Discontinuity:
-    return "discontinuity";
-  case ridesync::DynamicMotionFault::Horizon:
-    return "horizon";
-  case ridesync::DynamicMotionFault::Uninitialized:
-    return "uninitialized";
+  static const struct {
+    ridesync::DynamicMotionFault fault;
+    const char *name;
+  } names[] = {
+      {ridesync::DynamicMotionFault::None, "none"},
+      {ridesync::DynamicMotionFault::Disabled, "disabled"},
+      {ridesync::DynamicMotionFault::Configuration, "configuration"},
+      {ridesync::DynamicMotionFault::Reference, "reference"},
+      {ridesync::DynamicMotionFault::Measurement, "measurement"},
+      {ridesync::DynamicMotionFault::Identity, "identity"},
+      {ridesync::DynamicMotionFault::Timing, "timing"},
+      {ridesync::DynamicMotionFault::Sequence, "sequence"},
+      {ridesync::DynamicMotionFault::Discontinuity, "discontinuity"},
+      {ridesync::DynamicMotionFault::Horizon, "horizon"},
+      {ridesync::DynamicMotionFault::Uninitialized, "uninitialized"},
+  };
+  for (const auto &entry : names) {
+    if (entry.fault == f)
+      return entry.name;
   }
   return "unknown";
 }

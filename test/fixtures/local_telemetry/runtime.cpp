@@ -196,7 +196,7 @@ void pass(Esp32LocalTelemetry &r) {
   std::this_thread::sleep_for(std::chrono::microseconds(100));
 }
 #include "main_app.inc"
-struct LocalTelemetryScenario {
+struct LocalTelemetryContext {
   const std::string mode;
   HardwareSerial uart;
   SPIClass spi;
@@ -209,31 +209,36 @@ struct LocalTelemetryScenario {
   RouteClock route_clock;
   std::unique_ptr<CameraEventSession> legacy;
   std::unique_ptr<Esp32HandlebarControl> control;
-  explicit LocalTelemetryScenario(const std::string &scenario) : mode(scenario) {}
+  explicit LocalTelemetryContext(const std::string &scenario) : mode(scenario) {}
+};
+struct TelemetrySetup {
+  LocalTelemetryContext &context;
+  explicit TelemetrySetup(LocalTelemetryContext &c) : context(c) {}
   void configureMotion() {
-    if (mode == "motion-csv") {
+    if (context.mode == "motion-csv") {
       test_motion_fixture = true;
-      q.runtime.motion_enabled = true;
-      q.runtime.motion_config = motion_fixture::config();
-      q.runtime.motion_snapshot_max_age_ms = 100;
-      q.metadata = motion_fixture::sample().config;
+      context.q.runtime.motion_enabled = true;
+      context.q.runtime.motion_config = motion_fixture::config();
+      context.q.runtime.motion_snapshot_max_age_ms = 100;
+      context.q.metadata = motion_fixture::sample().config;
     }
     commission();
     pairingProofMaintenance().beginOwner();
-    wire.payload[0] = 0x8c;
-    wire.payload[1] = 7;
-    wire.payload[7] = 6;
-    if (mode == "motion-csv") {
+    context.wire.payload[0] = 0x8c;
+    context.wire.payload[1] = 7;
+    context.wire.payload[7] = 6;
+    if (context.mode == "motion-csv") {
       for (unsigned i = 1; i < 13; ++i)
-        wire.payload[i] = 0;
-      wire.payload[12] = 8;
+        context.wire.payload[i] = 0;
+      context.wire.payload[12] = 8;
       // The real driver reads FIFO length plus its four-byte end trailer. Zero
       // padding is an unsupported header and exhausts retries after three reads.
-      wire.payload[13] = 0x80;
+      context.wire.payload[13] = 0x80;
     }
   }
   void configureCameras() {
-    if (mode == "camera" || mode == "control" || mode == "control-route-refusal") {
+    if (context.mode == "camera" || context.mode == "control" ||
+        context.mode == "control-route-refusal") {
       auto camera = hero12Runtime();
       SourceConfig source;
       source.count = 1;
@@ -243,45 +248,92 @@ struct LocalTelemetryScenario {
       source.cameras[0].identifier = "01:02:03:04:05:06";
       source.cameras[0].address_type = AddressType::Public;
       assert(camera.manager.configure(source).ok());
-      q.runtime.cameras_qualified = true;
-      q.runtime.peers.count = 1;
-      q.runtime.peers.entries[0].id = 301;
-      q.runtime.peers.entries[0].model = CameraModel::HERO12_BLACK;
+      context.q.runtime.cameras_qualified = true;
+      context.q.runtime.peers.count = 1;
+      context.q.runtime.peers.entries[0].id = 301;
+      context.q.runtime.peers.entries[0].model = CameraModel::HERO12_BLACK;
     }
   }
   void configureFaults() {
-    if (mode == "default") {
-      q = QualifiedLocalTelemetry{};
-      refuse = true;
+    if (context.mode == "default") {
+      context.q = QualifiedLocalTelemetry{};
+      context.refuse = true;
     }
-    if (mode == "uart-unqualified") {
-      q.modem.pins_qualified = false;
-      refuse = true;
+    if (context.mode == "uart-unqualified") {
+      context.q.modem.pins_qualified = false;
+      context.refuse = true;
     }
-    if (mode == "imu-unqualified") {
-      q.imu.dedicated_bus = false;
-      refuse = true;
+    if (context.mode == "imu-unqualified") {
+      context.q.imu.dedicated_bus = false;
+      context.refuse = true;
     }
-    if (mode == "power-unqualified") {
-      q.modem_already_powered = false;
-      refuse = true;
+    if (context.mode == "power-unqualified") {
+      context.q.modem_already_powered = false;
+      context.refuse = true;
     }
     configureControlFaults();
-    if (mode == "sd-task") {
+    if (context.mode == "sd-task") {
       fail_sd = true;
-      refuse = true;
+      context.refuse = true;
     }
-    if (mode == "imu-task")
+    if (context.mode == "imu-task")
       fail_imu = true;
-    if (mode == "safe-mode")
-      q.runtime.safe_mode = true;
-    if (mode == "close-barrier")
+    if (context.mode == "safe-mode")
+      context.q.runtime.safe_mode = true;
+    if (context.mode == "close-barrier")
       block_close.store(true);
   }
+  void configureControlFaults() {
+    if (context.mode == "control-route-refusal")
+      context.refuse = true;
+    if (context.mode == "control-imu-refusal") {
+      context.q.imu.dedicated_bus = false;
+      context.refuse = true;
+    }
+    if (context.mode == "control-power-refusal") {
+      context.q.modem_already_powered = false;
+      context.refuse = true;
+    }
+    if (context.mode == "control-gps-refusal") {
+      context.q.runtime.gps_qualified = false;
+      context.refuse = true;
+    }
+    if (context.mode == "control-uart-refusal") {
+      context.q.modem.pins_qualified = false;
+      context.refuse = true;
+    }
+    if (context.mode == "control-task-refusal") {
+      fail_sd = true;
+      context.refuse = true;
+    }
+  }
+};
+void verifyLocalAdmission(LocalTelemetryContext &context) {
+  if (context.mode == "local") {
+    QualifiedHandlebar h;
+    h.opt_in = h.acknowledge_qualification = true;
+    h.button.enabled = h.button.board_qualified = true;
+    h.button.pin = 32;
+    Esp32HandlebarControl late(*context.runtime, h);
+    assert(!late.begin());
+    struct Probe : RecordingPreparation {
+      CameraError prepare(size_t) override { return CameraError::Unsupported; }
+      RecordingPreparationResult prepared(size_t) override { return {}; }
+      void retire(size_t) override {}
+    } probe;
+    auto camera = hero12Runtime();
+    assert(camera.group.attachPreparation(probe));
+    camera.group.detachPreparation(probe);
+    assert(led_configs == 0 && led_writes == 0);
+  }
+}
+struct TelemetryControlScenario {
+  LocalTelemetryContext &context;
+  explicit TelemetryControlScenario(LocalTelemetryContext &c) : context(c) {}
   void configureControl() {
-    if (mode.find("control") == 0) {
+    if (context.mode.find("control") == 0) {
       QualifiedHandlebar h;
-      if (mode != "control-default") {
+      if (context.mode != "control-default") {
         h.opt_in = h.acknowledge_qualification = true;
         h.button.enabled = h.button.board_qualified = true;
         h.button.pin = 32;
@@ -293,174 +345,55 @@ struct LocalTelemetryScenario {
         h.led.reserved_pins = (uint64_t(1) << 18) | (uint64_t(1) << 19) | (uint64_t(1) << 5) |
                               (uint64_t(1) << 22) | (uint64_t(1) << 23);
       }
-      if (mode == "control-gpio-fault")
+      if (context.mode == "control-gpio-fault")
         gpio_failure = 17;
-      control.reset(new Esp32HandlebarControl(*runtime, h));
-      assert(ridesync_handlebar_begin(*control) == (controlExpectedToAttach()));
-      const auto state = control->status();
-      if (mode == "control-default")
+      context.control.reset(new Esp32HandlebarControl(*context.runtime, h));
+      assert(ridesync_handlebar_begin(*context.control) == (controlExpectedToAttach()));
+      const auto state = context.control->status();
+      if (context.mode == "control-default")
         assert(!state.attached && !led_configs && !led_writes);
-      if (mode == "control-gpio-fault")
+      if (context.mode == "control-gpio-fault")
         assert(!state.attached && state.backend_error == 17 &&
                state.backend == LedBackendState::ConfigFailed);
     }
   }
   void bindLegacyRoute() {
-    if (mode == "control-route-refusal") {
+    if (context.mode == "control-route-refusal") {
       auto camera = hero12Runtime();
-      legacy.reset(new CameraEventSession(route_clock, route_sink, camera.adapter, camera.manager,
-                                          camera.group, 77, "test", "synthetic"));
-      assert(legacy->configurePeer(0, 301, CameraModel::HERO12_BLACK));
-      assert(legacy->activate() && hero12BindSession(*legacy));
-    }
-  }
-  void verifyRefusedStart() {
-    assert(runtime->status().phase == TelemetryPhase::Refused);
-    assert(runtime->status().fault != TelemetryFault::None);
-    assert(runtime->canRelease() && worker_threads.empty());
-    verifyRefusedControl();
-    releaseLegacyRoute();
-    assert(hero12BindTelemetry(runtime->owner()));
-    assert(hero12UnbindTelemetry(runtime->owner()));
-  }
-  void waitMotionEvidence() {
-    if (mode == "motion-csv") {
-      // Wait for actual worker evidence, not a guessed host scheduling window.
-      // Keep the wait finite; production readiness/error behavior is unchanged.
-      const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-      while (runtime->status().kinds[1].accepted < 10 && std::chrono::steady_clock::now() < limit)
-        pass(*runtime);
-      if (runtime->status().kinds[1].accepted < 10) {
-        const auto state = runtime->status();
-        std::fprintf(stderr,
-                     "motion fixture: worker=%u completed=%u admitted=%u dropped=%u rejected=%u\n",
-                     unsigned(state.imu_worker.outcome), state.imu_worker.completed,
-                     state.kinds[1].accepted, state.kinds[1].dropped, state.kinds[1].rejected);
-      }
-      assert(runtime->status().kinds[1].accepted >= 10);
-    }
-  }
-  void verifyLocalAdmission() {
-    if (mode == "local") {
-      QualifiedHandlebar h;
-      h.opt_in = h.acknowledge_qualification = true;
-      h.button.enabled = h.button.board_qualified = true;
-      h.button.pin = 32;
-      Esp32HandlebarControl late(*runtime, h);
-      assert(!late.begin());
-      struct Probe : RecordingPreparation {
-        CameraError prepare(size_t) override { return CameraError::Unsupported; }
-        RecordingPreparationResult prepared(size_t) override { return {}; }
-        void retire(size_t) override {}
-      } probe;
-      auto camera = hero12Runtime();
-      assert(camera.group.attachPreparation(probe));
-      camera.group.detachPreparation(probe);
-      assert(led_configs == 0 && led_writes == 0);
-    }
-  }
-  void exerciseControls() {
-    if (mode == "control") {
-      assert(control->status().control.local.camera == CameraAdmission::Admitted);
-      for (unsigned press = 0; press < 2; ++press) {
-        exerciseControlPress(press);
-      }
-      assert(control->status().input_ready && led_configs == 1 && led_writes > 0);
-    }
-  }
-  void verifyRunning() {
-    auto s = runtime->status();
-    assert(s.phase == TelemetryPhase::Running);
-    assert(s.identity.id == 0x700000001ULL && s.kinds[0].accepted > 0);
-    if (mode == "safe-mode")
-      assert(s.imu == SensorAdmission::SafeModeRefused && imu_tasks == 0);
-    else if (mode == "imu-task")
-      assert(s.imu == SensorAdmission::TaskRefused && imu_tasks == 1);
-    else
-      assert(s.imu == SensorAdmission::Admitted && imu_tasks == 1);
-    assert(uart.begins == 1 && uart.writes > 0 && sd_tasks == 1);
-    verifyCompetingRouteRefused();
-    assert(!hero12BindSession(*runtime->owner().session())); // Mutually exclusive routing.
-  }
-  void stopAndClose() {
-    runtime->requestStop();
-    for (unsigned i = 0; i < 1000 && !runtime->canRelease() && !close_entered.load(); ++i)
-      pass(*runtime);
-    releaseBlockedClose();
-    for (unsigned i = 0; i < 1000 && !runtime->canRelease(); ++i)
-      pass(*runtime);
-    assert(runtime->canRelease() && runtime->status().storage_worker_finished);
-    assert(mounts == 1 && unmounts == 1);
-    control.reset();
-    runtime.reset();
-    for (auto &t : worker_threads)
-      t.join();
-  }
-  void verifyCsv() {
-    assert(csv.find("gps,") != std::string::npos);
-    if (mode != "imu-task" && mode != "safe-mode") {
-      assert(csv.find("config,") != std::string::npos);
-      assert(csv.find("imu,") != std::string::npos);
-    }
-    if (mode == "camera")
-      assert(csv.find("camera,") != std::string::npos);
-    if (mode == "motion-csv") {
-      assert(motion_source.declaration > 0);
-      std::fprintf(stderr, "native-sdk Esp32LocalTelemetry=%zu SupervisedEsp32Application=%zu\n",
-                   sizeof(Esp32LocalTelemetry), sizeof(SupervisedEsp32Application));
-      std::fwrite(csv.data(), 1, csv.size(), stdout);
+      context.legacy.reset(new CameraEventSession(context.route_clock, context.route_sink,
+                                                  camera.adapter, camera.manager, camera.group, 77,
+                                                  "test", "synthetic"));
+      assert(context.legacy->configurePeer(0, 301, CameraModel::HERO12_BLACK));
+      assert(context.legacy->activate() && hero12BindSession(*context.legacy));
     }
   }
   void verifyRefusedControl() {
-    if (control) {
+    if (context.control) {
       auto camera = hero12Runtime();
       const auto ticks = camera.manager.ticks(), advances = camera.group.advancements();
       for (unsigned i = 0; i < 3; ++i)
-        ridesync_handlebar_service(*control);
-      const auto copied = control->status().control;
+        ridesync_handlebar_service(*context.control);
+      const auto copied = context.control->status().control;
       assert(copied.local.phase == TelemetryPhase::Refused);
-      assert(copied.local.fault == runtime->status().fault && copied.led == LedState::Error);
+      assert(copied.local.fault == context.runtime->status().fault &&
+             copied.led == LedState::Error);
       assert(camera.manager.ticks() == ticks && camera.group.advancements() == advances);
       assert(worker_threads.empty() && imu_tasks == 0 && mounts == 0);
     }
   }
   void releaseLegacyRoute() {
-    if (legacy) {
-      assert(runtime->status().fault == TelemetryFault::CameraRoute && uart.begins == 0 &&
-             sd_tasks == 0);
-      assert(!hero12BindTelemetry(runtime->owner()));
-      legacy->requestStop();
-      legacy->finishImu();
-      for (unsigned i = 0; i < 1000 && !legacy->stopped(); ++i) {
-        legacy->service();
-        legacy->storage().workerStep();
+    if (context.legacy) {
+      assert(context.runtime->status().fault == TelemetryFault::CameraRoute &&
+             context.uart.begins == 0 && sd_tasks == 0);
+      assert(!hero12BindTelemetry(context.runtime->owner()));
+      context.legacy->requestStop();
+      context.legacy->finishImu();
+      for (unsigned i = 0; i < 1000 && !context.legacy->stopped(); ++i) {
+        context.legacy->service();
+        context.legacy->storage().workerStep();
       }
-      assert(legacy->stopped() && hero12UnbindStoppedSession());
-      legacy.reset();
-    }
-  }
-  void configureControlFaults() {
-    if (mode == "control-route-refusal")
-      refuse = true;
-    if (mode == "control-imu-refusal") {
-      q.imu.dedicated_bus = false;
-      refuse = true;
-    }
-    if (mode == "control-power-refusal") {
-      q.modem_already_powered = false;
-      refuse = true;
-    }
-    if (mode == "control-gps-refusal") {
-      q.runtime.gps_qualified = false;
-      refuse = true;
-    }
-    if (mode == "control-uart-refusal") {
-      q.modem.pins_qualified = false;
-      refuse = true;
-    }
-    if (mode == "control-task-refusal") {
-      fail_sd = true;
-      refuse = true;
+      assert(context.legacy->stopped() && hero12UnbindStoppedSession());
+      context.legacy.reset();
     }
   }
   bool controlExpectedToAttach() const {
@@ -472,7 +405,7 @@ struct LocalTelemetryScenario {
                               "control-power-refusal",
                               "control-route-refusal"};
     for (const auto *scenario : attached)
-      if (mode == scenario)
+      if (context.mode == scenario)
         return true;
     return false;
   }
@@ -482,54 +415,142 @@ struct LocalTelemetryScenario {
       button_level = sample == 1 || sample == 2 ? 0 : 1;
       raw_time.fetch_add(25);
       const auto ticks = camera.manager.ticks(), advances = camera.group.advancements();
-      ridesync_handlebar_service(*control);
+      ridesync_handlebar_service(*context.control);
       assert(camera.manager.ticks() == ticks + 1);
       assert(camera.group.advancements() == advances + 1);
     }
-    assert(control->status().control.group.intent ==
+    assert(context.control->status().control.group.intent ==
            (press == 0 ? RecordingState::Recording : RecordingState::Stopped));
+  }
+  void exerciseControls() {
+    if (context.mode == "control") {
+      assert(context.control->status().control.local.camera == CameraAdmission::Admitted);
+      for (unsigned press = 0; press < 2; ++press) {
+        exerciseControlPress(press);
+      }
+      assert(context.control->status().input_ready && led_configs == 1 && led_writes > 0);
+    }
+  }
+};
+struct TelemetryRuntimeChecks {
+  LocalTelemetryContext &context;
+  explicit TelemetryRuntimeChecks(LocalTelemetryContext &c) : context(c) {}
+  void verifyRefusedStart() {
+    assert(context.runtime->status().phase == TelemetryPhase::Refused);
+    assert(context.runtime->status().fault != TelemetryFault::None);
+    assert(context.runtime->canRelease() && worker_threads.empty());
+    TelemetryControlScenario(context).verifyRefusedControl();
+    TelemetryControlScenario(context).releaseLegacyRoute();
+    assert(hero12BindTelemetry(context.runtime->owner()));
+    assert(hero12UnbindTelemetry(context.runtime->owner()));
+  }
+  void waitMotionEvidence() {
+    if (context.mode == "motion-csv") {
+      // Wait for actual worker evidence, not a guessed host scheduling window.
+      // Keep the wait finite; production readiness/error behavior is unchanged.
+      const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+      while (context.runtime->status().kinds[1].accepted < 10 &&
+             std::chrono::steady_clock::now() < limit)
+        pass(*context.runtime);
+      if (context.runtime->status().kinds[1].accepted < 10) {
+        const auto state = context.runtime->status();
+        std::fprintf(stderr,
+                     "motion fixture: worker=%u completed=%u admitted=%u dropped=%u rejected=%u\n",
+                     unsigned(state.imu_worker.outcome), state.imu_worker.completed,
+                     state.kinds[1].accepted, state.kinds[1].dropped, state.kinds[1].rejected);
+      }
+      assert(context.runtime->status().kinds[1].accepted >= 10);
+    }
+  }
+  void verifyRunning() {
+    auto s = context.runtime->status();
+    assert(s.phase == TelemetryPhase::Running);
+    assert(s.identity.id == 0x700000001ULL && s.kinds[0].accepted > 0);
+    if (context.mode == "safe-mode")
+      assert(s.imu == SensorAdmission::SafeModeRefused && imu_tasks == 0);
+    else if (context.mode == "imu-task")
+      assert(s.imu == SensorAdmission::TaskRefused && imu_tasks == 1);
+    else
+      assert(s.imu == SensorAdmission::Admitted && imu_tasks == 1);
+    assert(context.uart.begins == 1 && context.uart.writes > 0 && sd_tasks == 1);
+    verifyCompetingRouteRefused();
+    assert(!hero12BindSession(*context.runtime->owner().session())); // Mutually exclusive routing.
+  }
+  void stopAndClose() {
+    context.runtime->requestStop();
+    for (unsigned i = 0; i < 1000 && !context.runtime->canRelease() && !close_entered.load(); ++i)
+      pass(*context.runtime);
+    releaseBlockedClose();
+    for (unsigned i = 0; i < 1000 && !context.runtime->canRelease(); ++i)
+      pass(*context.runtime);
+    assert(context.runtime->canRelease() && context.runtime->status().storage_worker_finished);
+    assert(mounts == 1 && unmounts == 1);
+    context.control.reset();
+    context.runtime.reset();
+    for (auto &t : worker_threads)
+      t.join();
+  }
+  void verifyCsv() {
+    assert(csv.find("gps,") != std::string::npos);
+    if (context.mode != "imu-task" && context.mode != "safe-mode") {
+      assert(csv.find("config,") != std::string::npos);
+      assert(csv.find("imu,") != std::string::npos);
+    }
+    if (context.mode == "camera")
+      assert(csv.find("camera,") != std::string::npos);
+    if (context.mode == "motion-csv") {
+      assert(context.motion_source.declaration > 0);
+      std::fprintf(stderr, "native-sdk Esp32LocalTelemetry=%zu SupervisedEsp32Application=%zu\n",
+                   sizeof(Esp32LocalTelemetry), sizeof(SupervisedEsp32Application));
+      std::fwrite(csv.data(), 1, csv.size(), stdout);
+    }
   }
   void verifyCompetingRouteRefused() {
     HardwareSerial second_uart;
     {
-      Esp32LocalTelemetry competing(second_uart, spi, wire, q);
+      Esp32LocalTelemetry competing(second_uart, context.spi, context.wire, context.q);
       assert(!competing.start() && competing.canRelease());
       assert(competing.status().fault == TelemetryFault::CameraRoute && second_uart.begins == 0);
     }
   }
   void releaseBlockedClose() {
     if (block_close.load()) {
-      assert(close_entered.load() && !runtime->canRelease());
+      assert(close_entered.load() && !context.runtime->canRelease());
       for (unsigned i = 0; i < 100; ++i)
-        runtime->service(); // Control never waits on final close.
-      assert(!runtime->canRelease());
+        context.runtime->service(); // Control never waits on final close.
+      assert(!context.runtime->canRelease());
       release_close.store(true);
     }
   }
+};
+struct LocalTelemetryScenario {
+  LocalTelemetryContext context;
+  explicit LocalTelemetryScenario(const std::string &scenario) : context(scenario) {}
   int run() {
-    configureMotion();
-    configureCameras();
-    configureFaults();
-    runtime = std::unique_ptr<Esp32LocalTelemetry>(new Esp32LocalTelemetry(
-        uart, spi, wire, q, mode == "motion-csv" ? &motion_source : nullptr));
-    configureControl();
-    bindLegacyRoute();
-    assert(ridesync_local_telemetry_start(*runtime) == !refuse);
-    if (refuse) {
-      verifyRefusedStart();
+    TelemetrySetup(context).configureMotion();
+    TelemetrySetup(context).configureCameras();
+    TelemetrySetup(context).configureFaults();
+    context.runtime = std::unique_ptr<Esp32LocalTelemetry>(
+        new Esp32LocalTelemetry(context.uart, context.spi, context.wire, context.q,
+                                context.mode == "motion-csv" ? &context.motion_source : nullptr));
+    TelemetryControlScenario(context).configureControl();
+    TelemetryControlScenario(context).bindLegacyRoute();
+    assert(ridesync_local_telemetry_start(*context.runtime) == !context.refuse);
+    if (context.refuse) {
+      TelemetryRuntimeChecks(context).verifyRefusedStart();
       return 0;
     }
     for (unsigned i = 0; i < 400; ++i) {
-      if (mode == "camera" && runtime->owner().session())
+      if (context.mode == "camera" && context.runtime->owner().session())
         hero12Runtime().manager.request(0, Operation::Wake);
-      pass(*runtime);
+      pass(*context.runtime);
     }
-    waitMotionEvidence();
-    verifyLocalAdmission();
-    exerciseControls();
-    verifyRunning();
-    stopAndClose();
-    verifyCsv();
+    TelemetryRuntimeChecks(context).waitMotionEvidence();
+    verifyLocalAdmission(context);
+    TelemetryControlScenario(context).exerciseControls();
+    TelemetryRuntimeChecks(context).verifyRunning();
+    TelemetryRuntimeChecks(context).stopAndClose();
+    TelemetryRuntimeChecks(context).verifyCsv();
     return 0;
   }
 };

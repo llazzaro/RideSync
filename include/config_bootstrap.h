@@ -105,7 +105,7 @@ enum class SaveOutcome { None, Accepted, Stale, Busy, Invalid, Refused, Durable,
 class ConfigBootstrap {
 public:
   ConfigBootstrap(ConfigPersistence &p, SettingsPublication &s, SettingsRequests &r, uint32_t epoch,
-                  const CameraPeers &peers = {}, const SourceConfig *defaults = nullptr)
+                  const CameraPeers &peers = CameraPeers{}, const SourceConfig *defaults = nullptr)
       : persistence_(p), publication_(s), requests_(r), epoch_(epoch), peers_(peers),
         defaults_supplied_(defaults != nullptr),
         defaults_valid_(!defaults || copySettings(*defaults, defaults_)) {}
@@ -119,6 +119,7 @@ public:
 
 private:
   void serviceRequest(uint32_t);
+  void adoptLoadedSettings();
   void servicePersistence(uint32_t);
   void adoptSaved(PersistResult);
   void publish();

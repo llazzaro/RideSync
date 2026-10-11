@@ -16,6 +16,16 @@ void RecordingManager::detachPreparation(RecordingPreparation &p) {
   if (preparation_ == &p)
     preparation_ = nullptr;
 }
+namespace {
+void countObservation(const CameraState &c, RecordingStatus &s) {
+  if (c.has_observation && c.observed == RecordingState::Recording)
+    ++s.recording;
+  else if (c.has_observation && c.observed == RecordingState::Stopped)
+    ++s.stopped;
+  else
+    ++s.unknown;
+}
+} // namespace
 void RecordingManager::peerStatus(size_t i, RecordingStatus &s) const {
   const auto &c = *cameras_.state(i);
   auto &p = s.peers[i];
@@ -27,12 +37,7 @@ void RecordingManager::peerStatus(size_t i, RecordingStatus &s) const {
   if (p.ready)
     ++s.ready;
   p.observed = c.observed;
-  if (c.has_observation && c.observed == RecordingState::Recording)
-    ++s.recording;
-  else if (c.has_observation && c.observed == RecordingState::Stopped)
-    ++s.stopped;
-  else
-    ++s.unknown;
+  countObservation(c, s);
   p.pending = pending(static_cast<int>(peers_[i].stage));
   p.terminal_failure = peers_[i].stage == Stage::Error;
   p.acknowledged = peers_[i].acknowledged;
@@ -276,15 +281,18 @@ void RecordingManager::advanceConnected(size_t i) {
     break;
   }
 }
-void RecordingManager::advancePeer(size_t i) {
-  auto &p = peers_[i];
-  const auto &c = *cameras_.state(i);
+void RecordingManager::invalidateCompletedSync(Peer &p, const CameraState &c) {
   if (syncing_ && p.stage == Stage::Done &&
       (c.lifecycle != Lifecycle::Ready || !c.has_observation ||
        c.observed == RecordingState::Unknown)) {
     p.stage = Stage::Error;
     p.error = c.error == CameraError::None ? CameraError::Transport : c.error;
   }
+}
+void RecordingManager::advancePeer(size_t i) {
+  auto &p = peers_[i];
+  const auto &c = *cameras_.state(i);
+  invalidateCompletedSync(p, c);
   if (!pending(static_cast<int>(p.stage)))
     return;
   if (p.stage == Stage::Retiring) {
@@ -332,23 +340,14 @@ void RecordingManager::advance() {
   decideAfterSync_ = false;
   decideIntentAfterSync();
 }
-bool RecordingManager::event(const Event &e) {
-  if (e.peer < cameras_.size() && peers_[e.peer].stage == Stage::Confirm &&
-      reached(clock_.now(), peers_[e.peer].deadline))
-    expireConfirm(e.peer);
+bool RecordingManager::responseRetired(const Event &e) const {
   const bool connectionEvent =
       e.kind == EventKind::RecordingObserved || e.kind == EventKind::Disconnected;
-  const bool retiredResponse = e.peer < cameras_.size() && !connectionEvent &&
-                               peers_[e.peer].hasRetired &&
-                               e.token.connection == peers_[e.peer].retired.connection &&
-                               e.token.operation == peers_[e.peer].retired.operation;
-  // A new request can use a confirmed-state shortcut without dispatching an
-  // operation. Retire that prior response token here without losing observation.
-  if (retiredResponse || !cameras_.event(e)) {
-    update();
-    return false;
-  }
-  auto &p = peers_[e.peer];
+  return e.peer < cameras_.size() && !connectionEvent && peers_[e.peer].hasRetired &&
+         e.token.connection == peers_[e.peer].retired.connection &&
+         e.token.operation == peers_[e.peer].retired.operation;
+}
+void RecordingManager::observeAcceptedEvent(Peer &p, const Event &e) {
   if ((p.stage == Stage::Command || p.stage == Stage::Confirm) &&
       (e.kind == EventKind::RecordingObserved || e.kind == EventKind::CommandRecordingObserved))
     p.fresh = true;
@@ -358,6 +357,20 @@ bool RecordingManager::event(const Event &e) {
     p.confirm = e.token;
     p.deadline = clock_.now() + 1000;
   }
+}
+bool RecordingManager::event(const Event &e) {
+  if (e.peer < cameras_.size() && peers_[e.peer].stage == Stage::Confirm &&
+      reached(clock_.now(), peers_[e.peer].deadline))
+    expireConfirm(e.peer);
+  const bool retiredResponse = responseRetired(e);
+  // A new request can use a confirmed-state shortcut without dispatching an
+  // operation. Retire that prior response token here without losing observation.
+  if (retiredResponse || !cameras_.event(e)) {
+    update();
+    return false;
+  }
+  auto &p = peers_[e.peer];
+  observeAcceptedEvent(p, e);
   update();
   return true;
 }

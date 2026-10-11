@@ -50,7 +50,8 @@ class TelemetryAdmission {
 public:
   static constexpr uint8_t kQuota = 2;
   TelemetryAdmission(SessionClock &clock, Storage &storage, ImuInbox &inbox,
-                     CameraInbox *camera = nullptr, const MotionAdmissionConfig &motion = {},
+                     CameraInbox *camera = nullptr,
+                     const MotionAdmissionConfig &motion = MotionAdmissionConfig{},
                      StaticMotionReferenceSource *source = nullptr);
   // Prefer this overload with the same owner snapshot used by Modem::snapshot.
   bool gps(const RecordTimestamp &timestamp, const ModemSnapshot &sample);

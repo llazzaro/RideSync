@@ -24,8 +24,8 @@ bool validQualification(const X5Qualification &q) {
 }
 bool validRequest(size_t peer, const CameraConfig &camera, Token token) {
   return !(peer != 0 || camera.family != CameraFamily::Insta360 ||
-           camera.model != CameraModel::X5 || !camera.enabled || !token.valid() ||
-           !token.hasRoom() || !token.connection || !token.operation);
+           camera.model != CameraModel::X5 || !camera.enabled ||
+           !qualification::usableToken(token) || !token.connection || !token.operation);
 }
 } // namespace
 RetryPolicy X5Adapter::managerPolicy() {
@@ -34,6 +34,15 @@ RetryPolicy X5Adapter::managerPolicy() {
   p.backoff_ms = 200;
   p.max_attempts = 1;
   return p;
+}
+bool X5Adapter::commandReady(Operation op) const {
+  if (!connected_ || !subscribed_ || input_lost_)
+    return false;
+  if (op == Operation::Query)
+    return true;
+  if (!qualification::recordingOperation(op))
+    return false;
+  return video_ && fresh() && recording_ != RecordingState::Unknown;
 }
 bool X5Adapter::configure(const X5Qualification &q) {
   if (active_ || connected_ || (token_.connection && !port_.released(token_.connection))) {
@@ -67,6 +76,53 @@ bool X5Adapter::attachRecording(RecordingManager &owner) {
   recording_owner_ = &owner;
   return true;
 }
+void X5Adapter::expireEvidence() {
+  if (token_.connection && port_.takeLoss(token_.connection)) {
+    inputLoss();
+  }
+  if (active_ && due(clock_.now(), deadline_))
+    fail(X5Failure::Timeout);
+  if (has_observation_ && !fresh())
+    invalidate();
+}
+void X5Adapter::dispatchInput(const X5Input &e) {
+  switch (e.kind) {
+  case X5InputKind::Connected:
+    connectedInput(e);
+    break;
+  case X5InputKind::Subscribed:
+    subscribedInput(e);
+    break;
+  case X5InputKind::Unsubscribed:
+    unsubscribedInput(e);
+    break;
+  case X5InputKind::Display:
+    if (!input_lost_)
+      display(e);
+    break;
+  case X5InputKind::Disconnected:
+    disconnectedInput(e);
+    break;
+  case X5InputKind::Fault:
+    fail(X5Failure::Transport);
+    break;
+  default:
+    break;
+  }
+}
+void X5Adapter::observeDisplay(const X5Input &e, const insta360::Ce80DisplayResult &result) {
+  // A timer cannot rediscover mode after old evidence expired or was revoked.
+  if (has_observation_ && !fresh())
+    video_ = false;
+  if (result.kind == insta360::Ce80DisplayKind::Settings)
+    video_ = result.mode == insta360::Ce80CameraMode::Video;
+  recording_ = result.recording;
+  observed_ms_ = e.received_ms;
+  observation_sequence_ = e.sequence;
+  has_observation_ = true;
+  publishObservation();
+  completeFromObservation();
+}
 void X5Adapter::publish(const Event &event) {
   if (recording_owner_)
     recording_owner_->event(event);
@@ -82,13 +138,20 @@ bool X5Adapter::ready(Operation op) const {
     return false;
   if (op == Operation::Connect)
     return !connected_ && (!token_.connection || port_.released(token_.connection));
-  if (!connected_ || !subscribed_ || input_lost_)
-    return false;
-  if (op == Operation::Query)
-    return true;
-  if (op != Operation::Start && op != Operation::Stop)
-    return false;
-  return video_ && fresh() && recording_ != RecordingState::Unknown;
+  return commandReady(op);
+}
+X5Failure X5Adapter::commandRefusal(Operation op) const {
+  if (!connected_ || !subscribed_)
+    return X5Failure::Subscription;
+  if (input_lost_)
+    return X5Failure::LostInput;
+  if (!qualification::cameraCommand(op))
+    return X5Failure::Qualification;
+  if (!fresh())
+    return X5Failure::Stale;
+  if (!video_)
+    return X5Failure::WrongMode;
+  return X5Failure::UnknownState;
 }
 X5Failure X5Adapter::refusal(Operation op) const {
   if (ready(op))
@@ -99,17 +162,7 @@ X5Failure X5Adapter::refusal(Operation op) const {
     return X5Failure::Busy;
   if (op == Operation::Connect)
     return X5Failure::Busy; // Actual cleanup barrier pending.
-  if (!connected_ || !subscribed_)
-    return X5Failure::Subscription;
-  if (input_lost_)
-    return X5Failure::LostInput;
-  if (op != Operation::Start && op != Operation::Stop && op != Operation::Query)
-    return X5Failure::Qualification;
-  if (!fresh())
-    return X5Failure::Stale;
-  if (!video_)
-    return X5Failure::WrongMode;
-  return X5Failure::UnknownState;
+  return commandRefusal(op);
 }
 X5Failure X5Adapter::admissionFailure() const {
   if (active_)
@@ -247,17 +300,7 @@ void X5Adapter::display(const X5Input &e) {
   if (result.kind == insta360::Ce80DisplayKind::Unknown ||
       result.kind == insta360::Ce80DisplayKind::Remaining)
     return;
-  // A timer cannot rediscover mode after old evidence expired or was revoked.
-  if (has_observation_ && !fresh())
-    video_ = false;
-  if (result.kind == insta360::Ce80DisplayKind::Settings)
-    video_ = result.mode == insta360::Ce80CameraMode::Video;
-  recording_ = result.recording;
-  observed_ms_ = e.received_ms;
-  observation_sequence_ = e.sequence;
-  has_observation_ = true;
-  publishObservation();
-  completeFromObservation();
+  observeDisplay(e, result);
 }
 void X5Adapter::connectedInput(const X5Input &e) {
   if (!active_ || operation_ != Operation::Connect || connected_ || e.status ||
@@ -306,41 +349,13 @@ void X5Adapter::input(const X5Input &e) {
   if (!e.sequence || e.sequence <= last_sequence_)
     return;
   last_sequence_ = e.sequence;
-  switch (e.kind) {
-  case X5InputKind::Connected:
-    connectedInput(e);
-    break;
-  case X5InputKind::Subscribed:
-    subscribedInput(e);
-    break;
-  case X5InputKind::Unsubscribed:
-    unsubscribedInput(e);
-    break;
-  case X5InputKind::Display:
-    if (!input_lost_)
-      display(e);
-    break;
-  case X5InputKind::Disconnected:
-    disconnectedInput(e);
-    break;
-  case X5InputKind::Fault:
-    fail(X5Failure::Transport);
-    break;
-  default:
-    break;
-  }
+  dispatchInput(e);
 }
 void X5Adapter::service() {
   if (!configured_ || !manager_)
     return;
   port_.service(clock_.now());
-  if (token_.connection && port_.takeLoss(token_.connection)) {
-    inputLoss();
-  }
-  if (active_ && due(clock_.now(), deadline_))
-    fail(X5Failure::Timeout);
-  if (has_observation_ && !fresh())
-    invalidate();
+  expireEvidence();
   for (unsigned n = 0; n < 32 && port_.poll(input_); ++n)
     input(input_);
   if (active_ && complete_pending_) {

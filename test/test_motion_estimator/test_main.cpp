@@ -205,43 +205,25 @@ void saturation_invalid_metadata_and_singular_attitude_fail_closed() {
 void reusable_configuration_qualification_rejects_unknown_and_improper_mounts() {
   auto c = qualifiedConfig();
   TEST_ASSERT_TRUE(MotionEstimator::configValid(c));
+  void (*const mutations[])(MotionEstimatorConfig &) = {
+      [](MotionEstimatorConfig &c) { c.sensor_to_body[0] = -1; },
+      [](MotionEstimatorConfig &c) { c.sensor_to_body[0] = 2; },
+      [](MotionEstimatorConfig &c) { c.sensor_to_body[1] = 0.2f; },
+      [](MotionEstimatorConfig &c) {
+        c.sensor_to_body[0] = std::numeric_limits<float>::quiet_NaN();
+      },
+      [](MotionEstimatorConfig &c) {
+        c.sensor_to_body[0] = std::numeric_limits<float>::infinity();
+      },
+      [](MotionEstimatorConfig &c) { c.mount_id = 0; },
+      [](MotionEstimatorConfig &c) { c.calibration_id = 0; },
+      [](MotionEstimatorConfig &c) { c.mount_qualified = false; },
+      [](MotionEstimatorConfig &c) { c.residual_calibration_qualified = false; },
+      [](MotionEstimatorConfig &c) { c.convention = MotionCalibrationConvention::Unsupported; },
+      [](MotionEstimatorConfig &c) { c.gyro_compensation = 0; }};
   for (unsigned mode = 0; mode < 11; ++mode) {
     c = qualifiedConfig();
-    switch (mode) {
-    case 0:
-      c.sensor_to_body[0] = -1;
-      break;
-    case 1:
-      c.sensor_to_body[0] = 2;
-      break;
-    case 2:
-      c.sensor_to_body[1] = 0.2f;
-      break;
-    case 3:
-      c.sensor_to_body[0] = std::numeric_limits<float>::quiet_NaN();
-      break;
-    case 4:
-      c.sensor_to_body[0] = std::numeric_limits<float>::infinity();
-      break;
-    case 5:
-      c.mount_id = 0;
-      break;
-    case 6:
-      c.calibration_id = 0;
-      break;
-    case 7:
-      c.mount_qualified = false;
-      break;
-    case 8:
-      c.residual_calibration_qualified = false;
-      break;
-    case 9:
-      c.convention = MotionCalibrationConvention::Unsupported;
-      break;
-    case 10:
-      c.gyro_compensation = 0;
-      break;
-    }
+    mutations[mode](c);
     TEST_ASSERT_FALSE(MotionEstimator::configValid(c));
   }
   c = qualifiedConfig();

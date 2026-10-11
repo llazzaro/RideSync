@@ -55,6 +55,7 @@ private:
   std::array<HealthProgress, 4> progress_;
   void observeWorker(std::size_t, uint32_t);
   void evaluateWorker(std::size_t, uint32_t, HealthDecision &, bool &, bool &);
+  void evaluateActiveWorker(std::size_t, uint32_t, HealthDecision &, bool &, bool &);
   std::array<uint32_t, 4> seen_{}, fed_{}, last_{};
   std::array<bool, 4> started_{};
   uint32_t boot_ = 0;

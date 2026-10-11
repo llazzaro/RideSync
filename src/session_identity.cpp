@@ -69,6 +69,29 @@ bool commit(IdentityLedgerIO &io, unsigned slot, const Bytes &b, bool create) {
   return readSlot(io, slot, observed) == IdentityStatus::Committed &&
          std::memcmp(b, observed, sizeof(b)) == 0;
 }
+IdentityAllocation allocateFromCounters(IdentityLedgerIO &io, uint32_t ns, uint32_t a, uint32_t b) {
+  const uint32_t high = a > b ? a : b, low = a > b ? b : a;
+  if ((high != 0 && high - low != 1) || (high == 0 && low != 0))
+    return outcome(IdentityStatus::LedgerCorrupt);
+  if (high == std::numeric_limits<uint32_t>::max())
+    return outcome(IdentityStatus::Exhausted);
+  Bytes next;
+  record(next, ns, high + 1);
+  if (!commit(io, a <= b ? 0 : 1, next, false))
+    return outcome(IdentityStatus::CommitUncertain, io.error());
+  return outcome(IdentityStatus::Committed, 0, (uint64_t(ns) << 32) | (high + 1));
+}
+IdentityAllocation reserveFromLedger(IdentityLedgerIO &io, uint32_t ns) {
+  Bytes slots[2];
+  for (unsigned i = 0; i < 2; ++i) {
+    const auto status = readSlot(io, i, slots[i]);
+    if (status != IdentityStatus::Committed)
+      return outcome(status, io.error());
+    if (!valid(slots[i], ns))
+      return outcome(IdentityStatus::LedgerCorrupt);
+  }
+  return allocateFromCounters(io, ns, get(slots[0] + 12), get(slots[1] + 12));
+}
 } // namespace
 IdentityAllocation SessionIdentityAllocator::reserve() {
   if (attempted_)
@@ -76,25 +99,7 @@ IdentityAllocation SessionIdentityAllocator::reserve() {
   attempted_ = true;
   if (!namespace_)
     return result_ = outcome(IdentityStatus::IdentityUnavailable);
-  Bytes slots[2];
-  for (unsigned i = 0; i < 2; ++i) {
-    const auto status = readSlot(io_, i, slots[i]);
-    if (status != IdentityStatus::Committed)
-      return result_ = outcome(status, io_.error());
-    if (!valid(slots[i], namespace_))
-      return result_ = outcome(IdentityStatus::LedgerCorrupt);
-  }
-  const uint32_t a = get(slots[0] + 12), b = get(slots[1] + 12);
-  const uint32_t high = a > b ? a : b, low = a > b ? b : a;
-  if ((high != 0 && high - low != 1) || (high == 0 && low != 0))
-    return result_ = outcome(IdentityStatus::LedgerCorrupt);
-  if (high == std::numeric_limits<uint32_t>::max())
-    return result_ = outcome(IdentityStatus::Exhausted);
-  Bytes next;
-  record(next, namespace_, high + 1);
-  if (!commit(io_, a <= b ? 0 : 1, next, false))
-    return result_ = outcome(IdentityStatus::CommitUncertain, io_.error());
-  return result_ = outcome(IdentityStatus::Committed, 0, (uint64_t(namespace_) << 32) | (high + 1));
+  return result_ = reserveFromLedger(io_, namespace_);
 }
 IdentityAllocation SessionIdentityAllocator::commission(IdentityLedgerIO &io, uint32_t ns) {
   if (!ns)
