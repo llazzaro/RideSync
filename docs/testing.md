@@ -25,6 +25,20 @@ probe’s three remote Start/Stop cycles and reconnect are already confirmed.
 
 ## Automated baseline
 
+CI runs pinned Ruff 0.15.0 with `ruff check scripts test tools mechanical`.
+The selected rules (`E9`, `F63`, `F7`, `F82`) catch syntax and selected undefined-name
+errors. PlatformIO/SCons supplies `Import` and `env` to extra scripts at runtime;
+only their specific references have inline `F821` annotations.
+
+The separate CodeQL workflow analyzes GitHub Actions, C++ and Python on main
+pushes, pull requests and a weekly schedule. Each language has its own analysis
+category. C++ starts with build mode `none`: CodeQL infers preprocessor macros
+and include paths without building the pinned ESP32 toolchain. Conditional
+firmware paths and unavailable external SDK headers can therefore reduce
+precision and coverage. The native test build excludes the production `main`
+and conditional ESP32 backends; neither that build nor CodeQL substitutes for
+the target firmware builds or physical acceptance checks below.
+
 GPS forwarding (#14): `pio test -e native -f test_gps_forwarding -f test_local_telemetry`
 checks the real encoder/central and GNSS producer path, literal71-byte delivery,
 default-off/model/route selection, coalescing/rate/freshness/MTU, shared sequences,

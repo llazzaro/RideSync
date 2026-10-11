@@ -1,7 +1,7 @@
 """Inject private bench acknowledgments at build time; never save a namespace here."""
 import os
 
-Import('env')
+Import('env')  # noqa: F821 - SCons injects Import.
 
 try:
     namespace = int(os.environ.get('RIDESYNC_BENCH_NAMESPACE', ''), 0)
@@ -11,7 +11,7 @@ if not 0 < namespace <= 0xffffffff:
     raise RuntimeError('RIDESYNC_BENCH_NAMESPACE must be a nonzero uint32 value')
 if os.environ.get('RIDESYNC_BENCH_WRITE_OPT_IN') != '1':
     raise RuntimeError('Set RIDESYNC_BENCH_WRITE_OPT_IN=1 to acknowledge this bench writer')
-env.Append(CPPDEFINES=[
+env.Append(CPPDEFINES=[  # noqa: F821 - SCons injects env.
     ('RIDESYNC_BENCH_NAMESPACE', str(namespace) + 'UL'),
     ('RIDESYNC_BENCH_WRITE_OPT_IN', 1),
 ])

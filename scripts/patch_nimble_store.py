@@ -250,9 +250,9 @@ def install(directory):
 
 
 if "Import" in globals():
-    Import("env")
+    Import("env")  # noqa: F821 - SCons injects Import.
     # PlatformIO installs declared lib_deps before running extra scripts.
-    libraries = Path(env.subst("$PROJECT_LIBDEPS_DIR")) / env.subst("$PIOENV")
+    libraries = Path(env.subst("$PROJECT_LIBDEPS_DIR")) / env.subst("$PIOENV")  # noqa: F821 - SCons injects env.
     matches = list(libraries.glob("*/" + RELATIVE))
     if len(matches) != 1:
         raise RuntimeError("Exactly one pinned NimBLE dependency is required")
