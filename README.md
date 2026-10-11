@@ -182,6 +182,11 @@ qualification. `STATIONARY` initializes one bounded experimental motion window
 from a stationary fixture; its numerical results remain Unreliable. Complete the
 camera and local logging bench observations before motorcycle installation.
 
+## Optional code navigation
+
+[Graphify setup](docs/graphify.md) provides a project-scoped Codex skill and a
+local C/C++ knowledge graph for queries about symbols and relationships.
+
 ## Configuration and controls
 
 [examples/cameras.example.json](examples/cameras.example.json) records the planned

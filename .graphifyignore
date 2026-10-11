@@ -1,0 +1,4 @@
+# Assistant tooling and caches are not RideSync source.
+.codex/
+.superpowers/
+.ruff_cache/

@@ -11,3 +11,6 @@ compile_commands.json
 
 include/x5_commissioning.local.h
 include/bench_commissioning.local.h
+
+# Local Graphify indexes and reports (regenerate from source).
+graphify-out/
