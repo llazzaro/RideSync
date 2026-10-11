@@ -69,7 +69,7 @@ checks are consolidated in
 This is not yet ride-ready firmware. The matrix below reports **hardware support**;
 passing synthetic tests does not promote a camera to Confirmed.
 
-| Feature | X5 | GO 3S | ONE RS | HERO12 Black | DJI Osmo |
+| Feature | X5 | GO 3S | ONE RS | GoPro | DJI Osmo |
 |---|---|---|---|---|---|
 | BLE connect | Observed (isolated CE80 probe) | Not tested | Not tested | Not tested | Not tested |
 | Start recording | Observed in three cycles (isolated probe, 1.11.10) | Not tested | Not tested | Not tested | Not tested |
