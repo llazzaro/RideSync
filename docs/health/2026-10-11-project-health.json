@@ -7525,7 +7525,7 @@
     "class_candidates": [],
     "errors": []
   },
-  "verification_status": "Passed full frozen pre-commit pipeline and all 13 pinned firmware builds; CI pending push.",
+  "verification_status": "Passed frozen pre-commit pipeline, 13 pinned firmware builds, CI and CodeQL.",
   "verification": {
     "code_commit": "19def7e43063504c21a8dc696e1a371c5c45dd0d",
     "python_tests": 83,
@@ -7538,6 +7538,19 @@
     "gps_resource_audit": "passed",
     "config_stack_application_allowance": 3088,
     "config_stack_budget": 4096,
-    "independent_review": "passed after failure-path SDK getter order correction"
+    "independent_review": "passed after failure-path SDK getter order correction",
+    "ci": {
+      "conclusion": "success",
+      "headSha": "35716d173b3fa4497ec2fd7ce1c1c16eeb637411",
+      "status": "completed",
+      "url": "https://github.com/llazzaro/RideSync/actions/runs/38143933860"
+    },
+    "codeql": {
+      "conclusion": "success",
+      "headSha": "35716d173b3fa4497ec2fd7ce1c1c16eeb637411",
+      "status": "completed",
+      "url": "https://github.com/llazzaro/RideSync/actions/runs/38143933861"
+    },
+    "reuse_note": "Subsequent delivery record updates are documentation-only; verified source is unchanged."
   }
 }

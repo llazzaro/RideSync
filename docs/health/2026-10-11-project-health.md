@@ -77,8 +77,11 @@ includes the extracted service frames, retaining its fixed 1024-byte helper
 reserve, 4096-byte application budget and 8192-byte SDK/RTOS reserve. The worst
 configuration path plus helper reserve uses 3088 bytes.
 
-The verified code commit is `19def7e`. CI is checked after pushing the
-verification record to `origin/main`.
+The verified code commit is `19def7e`. [CI](https://github.com/llazzaro/RideSync/actions/runs/38143933860)
+and [CodeQL](https://github.com/llazzaro/RideSync/actions/runs/38143933861) passed
+on `35716d1`, which includes the remediation and subsequent README-only changes.
+The final verification-record update changes documentation only and reuses
+that passing source evidence.
 
 No firmware was flashed, and physical compatibility/support claims are unchanged.
 
