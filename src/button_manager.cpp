@@ -26,6 +26,35 @@ bool ButtonManager::begin(const ButtonConfig &c, ButtonCallback cb, void *contex
   return true;
 }
 void ButtonManager::emit(ButtonAction action) { callback_(context_, action); }
+void ButtonManager::release(uint32_t now) {
+  // Release duration is measured between debounced transitions.
+  if (!long_sent_ && uint32_t(now - pressed_) >= config_.long_ms) {
+    pending_ = false;
+    long_sent_ = true;
+    emit(config_.long_action);
+  }
+  if (!long_sent_) {
+    if (second_) {
+      pending_ = false;
+      emit(config_.double_action);
+    } else if (config_.double_enabled) {
+      pending_ = true;
+      released_ = now;
+    } else
+      emit(config_.short_action);
+  }
+  second_ = false;
+}
+void ButtonManager::transition(uint32_t now) {
+  stable_ = raw_;
+  if (stable_) {
+    pressed_ = now;
+    long_sent_ = false;
+    second_ = pending_;
+  } else {
+    release(now);
+  }
+}
 void ButtonManager::poll(ButtonInput &input, uint32_t now) {
   if (!enabled_)
     return;
@@ -53,30 +82,7 @@ void ButtonManager::poll(ButtonInput &input, uint32_t now) {
     return;
   }
   if (raw_ != stable_ && uint32_t(now - changed_) >= config_.debounce_ms) {
-    stable_ = raw_;
-    if (stable_) {
-      pressed_ = now;
-      long_sent_ = false;
-      second_ = pending_;
-    } else {
-      // Release duration is measured between debounced transitions.
-      if (!long_sent_ && uint32_t(now - pressed_) >= config_.long_ms) {
-        pending_ = false;
-        long_sent_ = true;
-        emit(config_.long_action);
-      }
-      if (!long_sent_) {
-        if (second_) {
-          pending_ = false;
-          emit(config_.double_action);
-        } else if (config_.double_enabled) {
-          pending_ = true;
-          released_ = now;
-        } else
-          emit(config_.short_action);
-      }
-      second_ = false;
-    }
+    transition(now);
   }
   if (stable_ && !long_sent_ && uint32_t(now - pressed_) >= config_.long_ms) {
     pending_ = false;

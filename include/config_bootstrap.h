@@ -118,6 +118,9 @@ public:
   PersistResult saveResult() const { return save_result_; }
 
 private:
+  void serviceRequest(uint32_t);
+  void servicePersistence(uint32_t);
+  void adoptSaved(PersistResult);
   void publish();
   void refuse(PersistResult);
   bool peersValid() const;

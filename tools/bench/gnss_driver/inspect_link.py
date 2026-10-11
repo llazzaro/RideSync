@@ -3,6 +3,10 @@ import argparse
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from link_audit import callers_from_disassembly
 
 BENCH = Path(__file__).resolve().parent
 
@@ -10,13 +14,31 @@ BENCH = Path(__file__).resolve().parent
 def inspect(nm, objdump):
     elf = BENCH / '.pio/build/gnss_driver/firmware.elf'
     symbols = subprocess.check_output([nm, '-C', str(elf)], text=True)
-    names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
     guarded = {'nvs_flash_init', 'nvs_flash_erase', 'nvs_open',
                'nvs_open_from_partition', 'esp_partition_erase_range'}
+    _validate_flash_symbols(symbols, guarded)
+    _validate_routes(symbols)
+    disassembly = subprocess.check_output([objdump, '-d', str(elf)], text=True)
+    callers = callers_from_disassembly(disassembly)
+    assert callers.get('__wrap_nvs_flash_init') == {'initArduino'}, 'core init boundary changed'
+    assert callers.get('__wrap_esp_partition_erase_range') == {
+        'initArduino', 'rewrite_ota_seq$part$1'}, 'core/OTA erase boundary changed'
+    _validate_ota_refusal(disassembly)
+    _validate_wrapper_calls(callers, guarded)
+    print('PASS: real production parser/clock/modem/manager; no BLE/SD/power GPIO/restart route')
+    print('PASS: real NVS lifecycle absent; core init/erase branches reach explicit refusal only')
+    print('PASS: no application flush call; SDK UART call latency remains physically unmeasured')
+
+
+def _validate_flash_symbols(symbols, guarded):
+    names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
     for name in guarded:
         assert name not in names, f'real flash/NVS lifecycle linked: {name}'
         assert '__wrap_' + name in names, f'missing refusal: {name}'
     assert not any(name.startswith('nvs_') for name in names), 'real NVS entry linked'
+
+
+def _validate_routes(symbols):
     for forbidden in ('NimBLE', 'ble_gap_', 'ArduinoGnssPower', 'restartAfterVerifiedBarrier',
                       'SDClass', 'SDFS', 'SPIClass', 'digitalWrite', 'pinMode',
                       'esp_bt_controller_init', 'esp_bt_controller_enable', 'esp_phy_load_cal'):
@@ -25,19 +47,9 @@ def inspect(nm, objdump):
                      'ridesync::GpsManager::cancel()', 'ridesync::SessionClock::snapshot()',
                      'ridesync::parseGnssLine(', 'HardwareSerial::begin('):
         assert required in symbols, f'missing real production route: {required}'
-    disassembly = subprocess.check_output([objdump, '-d', str(elf)], text=True)
-    callers = {}
-    owner = None
-    for line in disassembly.splitlines():
-        label = re.match(r'[0-9a-f]+ <(.+)>:', line)
-        if label:
-            owner = label.group(1)
-        call = re.search(r'\bcall\w*\s+[0-9a-f]+ <([^>]+)>', line)
-        if call:
-            callers.setdefault(call.group(1), set()).add(owner)
-    assert callers.get('__wrap_nvs_flash_init') == {'initArduino'}, 'core init boundary changed'
-    assert callers.get('__wrap_esp_partition_erase_range') == {
-        'initArduino', 'rewrite_ota_seq$part$1'}, 'core/OTA erase boundary changed'
+
+
+def _validate_ota_refusal(disassembly):
     # Pinned Arduino also links OTA boot verification. Its write follows a
     # successful erase only: the explicit erase refusal branches to the return.
     ota = re.search(r'<rewrite_ota_seq\$part\$1>:\n(.*?)(?=\n\S+ <|\Z)',
@@ -50,6 +62,9 @@ def inspect(nm, objdump):
     assert re.search(r'^' + refusal_exit +
                      r':\s+[0-9a-f]+\s+mov(?:\.n)?\s+a2,\s*a10\n[^\n]+\bretw',
                      ota.group(1), re.MULTILINE), 'OTA refusal target must return the error'
+
+
+def _validate_wrapper_calls(callers, guarded):
     for name in guarded:
         wrapper = '__wrap_' + name
         outgoing = {target for target, owners in callers.items() if wrapper in owners}
@@ -62,9 +77,6 @@ def inspect(nm, objdump):
     # that flushes; this one-shot diagnostic never reopens an installed UART2.
     assert not callers.get('_ZN14HardwareSerial5flushEv'), 'application serial flush call'
     assert callers.get('uartFlush', set()) <= {'_ZN14HardwareSerial5flushEv', 'uartBegin'}
-    print('PASS: real production parser/clock/modem/manager; no BLE/SD/power GPIO/restart route')
-    print('PASS: real NVS lifecycle absent; core init/erase branches reach explicit refusal only')
-    print('PASS: no application flush call; SDK UART call latency remains physically unmeasured')
 
 
 if __name__ == '__main__':

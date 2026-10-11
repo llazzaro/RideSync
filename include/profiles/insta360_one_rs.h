@@ -56,6 +56,11 @@ public:
   void result(const BleResult &) override;
 
 private:
+  bool expired(uint8_t i) const;
+  void writeComplete(uint8_t i, const BleResult &r);
+  void transportReady(uint8_t i, const BleResult &r);
+  bool beginCommand(uint8_t i, Operation op, Token t);
+  bool beginConnection(uint8_t i, Token t);
   struct Peer {
     OneRsQualification qualification;
     Token token;

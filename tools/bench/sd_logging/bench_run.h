@@ -32,47 +32,12 @@ public:
     if (!started_ || failed_ || done_)
       return;
     const auto h = health();
-    if (owner_.ioError() || h.terminal || h.dropped || h.rejected || h.lost) {
-      fail("storage_error");
+    if (!withinDeadline(now, h))
       return;
-    }
-    if (uint32_t(now - began_) >= overallMs()) {
-      fail("overall_timeout");
+    if (!storage_ && !bindStorage(now))
       return;
-    }
-    // Allocation AND the first actual row write must return within startup.
-    if (!h.written && uint32_t(now - began_) >= kStartupMs) {
-      fail("startup_timeout");
-      return;
-    }
-    if (!storage_) {
-      const auto a = owner_.allocation();
-      if (a.status == ridesync::IdentityStatus::Pending)
-        return;
-      if (a.status != ridesync::IdentityStatus::Committed || !a.id) {
-        fail("identity_refused");
-        return;
-      }
-      session_clock_ = new (clock_memory_) ridesync::SessionClock(clock_, a.id, 1000);
-      storage_ = new (storage_memory_)
-          ridesync::Storage(owner_.sink(), {a.id, "sd_bench_v1", "bench_missing_gnss", 1, 4});
-      if (!storage_->configValid() || !owner_.bind(*storage_)) {
-        fail("bind_refused");
-        return;
-      }
-      next_row_ = now;
-    }
     if (owner_.workerFinished()) {
-      // Recopy AFTER the acquire lifetime barrier, including the final close
-      // error: a pre-barrier snapshot can miss writes/flush/close publication.
-      const auto final = health();
-      if (rows_ == rowLimit() && stopping_ && final.stopped && !final.terminal &&
-          final.accepted == rowLimit() && final.written == rowLimit() &&
-          final.flushed == rowLimit() && !final.dropped && !final.rejected && !final.lost &&
-          !owner_.ioError())
-        done_ = true;
-      else
-        fail("final_verification_failed");
+      verifyFinished();
       return;
     }
     if (h.stopped) {
@@ -81,23 +46,7 @@ public:
         fail("unexpected_stop");
       return;
     }
-    if (!stopping_ && uint32_t(now - next_row_) >= kRowPeriodMs) {
-      const auto timestamp = session_clock_->snapshot();
-      ridesync::ModemSnapshot sample;
-      sample.session_id = timestamp.session_id;
-      // Default Missing validity, Disabled modem/UART, unavailable UTC/position.
-      if (!storage_->enqueue(timestamp, sample)) {
-        fail("enqueue_refused");
-        return;
-      }
-      ++rows_;
-      last_row_ms_ = timestamp.monotonic_ms;
-      next_row_ = now; // No backdating or bursts to synthesize missed periods.
-      if (rows_ == rowLimit()) {
-        stopping_ = true;
-        storage_->requestStop();
-      }
-    }
+    enqueueRow(now);
   }
   ridesync::StorageHealth health() const {
     return storage_ ? storage_->health() : ridesync::StorageHealth{};
@@ -117,6 +66,75 @@ public:
   uint32_t overallMs() const { return mode_ == Mode::PowerCut ? 75000 : kOverallMs; }
 
 private:
+  bool withinDeadline(uint32_t now, const ridesync::StorageHealth &h) {
+    if (owner_.ioError() || h.terminal || h.dropped || h.rejected || h.lost) {
+      fail("storage_error");
+      return false;
+    }
+    if (uint32_t(now - began_) >= overallMs()) {
+      fail("overall_timeout");
+      return false;
+    }
+    // Allocation AND the first actual row write must return within startup.
+    if (!h.written && uint32_t(now - began_) >= kStartupMs) {
+      fail("startup_timeout");
+      return false;
+    }
+    return true;
+  }
+  bool bindStorage(uint32_t now) {
+    const auto a = owner_.allocation();
+    if (a.status == ridesync::IdentityStatus::Pending)
+      return false;
+    if (a.status != ridesync::IdentityStatus::Committed || !a.id) {
+      fail("identity_refused");
+      return false;
+    }
+    session_clock_ = new (clock_memory_) ridesync::SessionClock(clock_, a.id, 1000);
+    storage_ = new (storage_memory_)
+        ridesync::Storage(owner_.sink(), {a.id, "sd_bench_v1", "bench_missing_gnss", 1, 4});
+    if (!storage_->configValid() || !owner_.bind(*storage_)) {
+      fail("bind_refused");
+      return false;
+    }
+    next_row_ = now;
+    return true;
+  }
+  void verifyFinished() {
+    // Recopy AFTER the acquire lifetime barrier, including the final close
+    // error: a pre-barrier snapshot can miss writes/flush/close publication.
+    const auto final = health();
+    if (rows_ == rowLimit() && stopping_ && final.stopped && completedRows(final) &&
+        cleanFinish(final))
+      done_ = true;
+    else
+      fail("final_verification_failed");
+  }
+  bool completedRows(const ridesync::StorageHealth &h) const {
+    return h.accepted == rowLimit() && h.written == rowLimit() && h.flushed == rowLimit();
+  }
+  bool cleanFinish(const ridesync::StorageHealth &h) const {
+    return !h.terminal && !h.dropped && !h.rejected && !h.lost && !owner_.ioError();
+  }
+  void enqueueRow(uint32_t now) {
+    if (!stopping_ && uint32_t(now - next_row_) >= kRowPeriodMs) {
+      const auto timestamp = session_clock_->snapshot();
+      ridesync::ModemSnapshot sample;
+      sample.session_id = timestamp.session_id;
+      // Default Missing validity, Disabled modem/UART, unavailable UTC/position.
+      if (!storage_->enqueue(timestamp, sample)) {
+        fail("enqueue_refused");
+        return;
+      }
+      ++rows_;
+      last_row_ms_ = timestamp.monotonic_ms;
+      next_row_ = now; // No backdating or bursts to synthesize missed periods.
+      if (rows_ == rowLimit()) {
+        stopping_ = true;
+        storage_->requestStop();
+      }
+    }
+  }
   void fail(const char *reason) {
     failed_ = true; // Admission stops before cancellation is published.
     reason_ = reason;

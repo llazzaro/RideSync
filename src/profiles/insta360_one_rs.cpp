@@ -1,4 +1,6 @@
 #include "profiles/insta360_one_rs.h"
+#include "profiles/insta360_be80_profile.h"
+#include "profiles/qualification.h"
 #include "protocol/insta360_be80_codec.h"
 #include "recording_manager.h"
 namespace ridesync {
@@ -8,21 +10,12 @@ bool OneRsAdapter::reached(uint32_t now, uint32_t deadline) {
   return now - deadline < 0x80000000UL;
 }
 bool OneRsAdapter::valid(const OneRsQualification &q) {
-  if (!q.source_qualified || !q.core_one_rs || !q.ordinary_360_lens || !q.video_mode_declared ||
-      !q.firmware_size || q.firmware_size > q.firmware.size() || !q.identity.verified ||
-      (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic))
-    return false;
-  for (uint8_t n = 0; n < q.firmware_size; ++n)
-    if (q.firmware[n] < 0x21 || q.firmware[n] > 0x7e)
-      return false;
-  bool nonzero = false, all_ff = true;
-  for (auto b : q.identity.address) {
-    nonzero |= b != 0;
-    all_ff &= b == 255;
-  }
-  return nonzero && !all_ff &&
-         (q.identity.type != IdentityType::RandomStatic || (q.identity.address[5] & 0xc0) == 0xc0);
+  return q.source_qualified && q.core_one_rs && q.ordinary_360_lens && q.video_mode_declared &&
+         q.firmware_size && q.firmware_size <= q.firmware.size() &&
+         qualification::resolvedIdentity(q.identity) &&
+         qualification::printable(q.firmware.data(), q.firmware_size, 0x21);
 }
+
 bool OneRsAdapter::matches(const CameraConfig &c, const BondIdentity &id) {
   if (!c.enabled || c.family != CameraFamily::Insta360 || c.model != CameraModel::ONE_RS ||
       c.identifier.size() != 17 ||
@@ -46,18 +39,7 @@ bool OneRsAdapter::matches(const CameraConfig &c, const BondIdentity &id) {
   }
   return true;
 }
-BleProfileSpec OneRsAdapter::profileSpec() {
-  BleProfileSpec s;
-  s.service_count = 1;
-  s.services[0] = BleUuid::shortUuid(0xbe80);
-  s.endpoint_count = 2;
-  s.endpoints[0].uuid = BleUuid::shortUuid(0xbe81);
-  s.endpoints[0].properties = 8;
-  s.endpoints[1].uuid = BleUuid::shortUuid(0xbe82);
-  s.endpoints[1].properties = 0x10;
-  s.endpoints[1].subscribe = 1;
-  return s;
-}
+BleProfileSpec OneRsAdapter::profileSpec() { return insta360Be80ProfileSpec(); }
 RetryPolicy OneRsAdapter::managerPolicy() {
   RetryPolicy p;
   p.timeout_ms = kConnectMs;
@@ -90,27 +72,24 @@ bool OneRsAdapter::commandReady(uint8_t i) const {
 OneRsFault OneRsAdapter::fault(uint8_t i) const {
   return i < kBlePeers ? peers_[i].fault : OneRsFault::Qualification;
 }
-bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
-  if (!enabled_ || !manager_ || index >= kBlePeers || !t.valid() || !t.hasRoom())
-    return false;
-  const auto i = static_cast<uint8_t>(index);
+bool OneRsAdapter::beginConnection(uint8_t i, Token t) {
   auto &p = peers_[i];
-  if (!p.qualified || !valid(p.qualification) || !matches(camera, p.qualification.identity))
+
+  if (p.ready || p.connecting || disconnected_[i] || !t.connection ||
+      !central_.connect(i, t.connection, p.qualification.identity, profileSpec()))
     return false;
-  if (op == Operation::Connect) {
-    if (p.ready || p.connecting || disconnected_[i] || !t.connection ||
-        !central_.connect(i, t.connection, p.qualification.identity, profileSpec()))
-      return false;
-    const auto q = p.qualification;
-    p = Peer{};
-    sequences_[i].reset(false);
-    p.qualification = q;
-    p.qualified = p.connecting = true;
-    p.token = t;
-    p.fault = OneRsFault::None;
-    p.deadline = clock_.now() + kConnectMs;
-    return true;
-  }
+  const auto q = p.qualification;
+  p = Peer{};
+  sequences_[i].reset(false);
+  p.qualification = q;
+  p.qualified = p.connecting = true;
+  p.token = t;
+  p.fault = OneRsFault::None;
+  p.deadline = clock_.now() + kConnectMs;
+  return true;
+}
+bool OneRsAdapter::beginCommand(uint8_t i, Operation op, Token t) {
+  auto &p = peers_[i];
   if (op == Operation::Start || op == Operation::Stop)
     forwarding_.service(forwarding_time_, uint8_t(1u << i));
   if (!commandReady(i) || p.token.connection != t.connection ||
@@ -143,6 +122,17 @@ bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op,
   p.pending = true;
   p.deadline = clock_.now() + kCommandMs;
   return true;
+}
+bool OneRsAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
+  if (!enabled_ || !manager_ || index >= kBlePeers || !t.valid() || !t.hasRoom())
+    return false;
+  const auto i = static_cast<uint8_t>(index);
+  auto &p = peers_[i];
+  if (!p.qualified || !valid(p.qualification) || !matches(camera, p.qualification.identity))
+    return false;
+  if (op == Operation::Connect)
+    return beginConnection(i, t);
+  return beginCommand(i, op, t);
 }
 void OneRsAdapter::retire(uint8_t i, OneRsFault reason) {
   auto &p = peers_[i];
@@ -189,6 +179,30 @@ void OneRsAdapter::complete(uint8_t i) {
   }
   p.pending = false;
 }
+void OneRsAdapter::transportReady(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+
+  p.handle = r.event.connection;
+  const auto mtu = host_.mtu(p.handle);
+  if (mtu == kBleMtuReserved || mtu < 21) {
+    retire(i, OneRsFault::Mtu);
+    return;
+  }
+  complete(i);
+}
+void OneRsAdapter::writeComplete(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+
+  if (!p.pending || r.endpoint != 0 || r.event.status) {
+    retire(i, OneRsFault::Transport);
+    return;
+  }
+  complete(i); // ATT completion only. No wireAck or RecordingObserved emission.
+}
+bool OneRsAdapter::expired(uint8_t i) const {
+  const auto &p = peers_[i];
+  return (p.connecting || p.pending) && reached(clock_.now(), p.deadline);
+}
 void OneRsAdapter::result(const BleResult &r) {
   const uint8_t i = r.event.peer;
   if (i >= kBlePeers || r.event.generation != peers_[i].token.connection)
@@ -204,24 +218,14 @@ void OneRsAdapter::result(const BleResult &r) {
   }
   if (p.sealed)
     return;
-  if ((p.connecting || p.pending) && reached(clock_.now(), p.deadline)) {
+  if (expired(i)) {
     retire(i, OneRsFault::Timeout);
     return;
   }
   if (r.kind == BleResultKind::TransportReady && p.connecting) {
-    p.handle = r.event.connection;
-    const auto mtu = host_.mtu(p.handle);
-    if (mtu == kBleMtuReserved || mtu < 21) {
-      retire(i, OneRsFault::Mtu);
-      return;
-    }
-    complete(i);
+    transportReady(i, r);
   } else if (r.kind == BleResultKind::WriteComplete) {
-    if (!p.pending || r.endpoint != 0 || r.event.status) {
-      retire(i, OneRsFault::Transport);
-      return;
-    }
-    complete(i); // ATT completion only. No wireAck or RecordingObserved emission.
+    writeComplete(i, r);
   }
   // BE82 is opaque. No invented SYNC, auth, ACK, recording or timer semantics.
 }
@@ -255,8 +259,7 @@ void OneRsAdapter::service(bool advance_manager) {
   servicing_ = true;
   central_.service(clock_.now());
   for (uint8_t i = 0; i < kBlePeers; ++i)
-    if (!peers_[i].sealed && (peers_[i].connecting || peers_[i].pending) &&
-        reached(clock_.now(), peers_[i].deadline))
+    if (!peers_[i].sealed && expired(i))
       retire(i, OneRsFault::Timeout);
   drain();
   if (advance_manager && group_)

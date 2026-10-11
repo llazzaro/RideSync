@@ -154,6 +154,73 @@ void ConfigBootstrap::refuse(PersistResult result) {
   ++snapshot_.generation;
   dirty_ = true;
 }
+void ConfigBootstrap::serviceRequest(uint32_t now) {
+  if (!requests_.take(request_))
+    return;
+  if (!snapshot_.effective) {
+    save_outcome_ = SaveOutcome::Refused;
+    return;
+  }
+  if (request_.epoch != epoch_ || request_.generation != snapshot_.generation) {
+    save_outcome_ = SaveOutcome::Stale;
+    return;
+  }
+  if (saving_) {
+    save_outcome_ = SaveOutcome::Busy;
+    return;
+  }
+  if (snapshot_.generation >= std::numeric_limits<uint64_t>::max() - 1 ||
+      !expandSettings(request_.settings, pending_)) {
+    save_outcome_ = SaveOutcome::Invalid;
+    return;
+  }
+  const auto result = persistence_.request(pending_, now);
+  save_result_ = result;
+  saving_ = result.status == PersistStatus::Pending;
+  save_outcome_ = saving_ ? SaveOutcome::Accepted : SaveOutcome::Invalid;
+  if (result.status == PersistStatus::Refused)
+    refuse(result);
+}
+void ConfigBootstrap::adoptSaved(PersistResult result) {
+  // A session mapping may never rebind an opaque ID to another peer, even
+  // after settings change back. Compare identity; never derive IDs from it.
+  if (pending_.count != snapshot_.settings.count)
+    peers_stable_ = false;
+  else
+    for (size_t i = 0; i < pending_.count; ++i) {
+      const auto &before = snapshot_.settings.cameras[i];
+      const auto &after = pending_.cameras[i];
+      if (before.model != after.model || before.address_type != after.address_type ||
+          after.identifier != before.identifier || after.wake_identifier != before.wake_identifier)
+        peers_stable_ = false;
+    }
+  // Persistence never updates caller RAM. Adopt only this verified candidate.
+  ram_ = std::move(pending_);
+  copySettings(ram_, snapshot_.settings);
+  snapshot_.peers_valid = peersValid();
+  snapshot_.outcome = result;
+  ++snapshot_.generation;
+  saving_ = false;
+  save_outcome_ = SaveOutcome::Durable;
+  dirty_ = true;
+}
+void ConfigBootstrap::servicePersistence(uint32_t now) {
+  if (!snapshot_.effective)
+    return;
+  const auto result = persistence_.service(now);
+  if (saving_)
+    save_result_ = result;
+  if (result.status == PersistStatus::Refused || result.status == PersistStatus::Future ||
+      result.status == PersistStatus::Corrupt || result.status == PersistStatus::Ambiguous ||
+      result.status == PersistStatus::ReadError)
+    refuse(result);
+  else if (saving_ &&
+           (result.status == PersistStatus::Durable || result.status == PersistStatus::Unchanged)) {
+    adoptSaved(result);
+  } else if (saving_ && result.status != PersistStatus::Pending) {
+    save_outcome_ = SaveOutcome::PersistenceError;
+  }
+}
 void ConfigBootstrap::service(uint32_t now, bool safe_mode, bool nvs_allowed) {
   if (!started_)
     return;
@@ -161,61 +228,8 @@ void ConfigBootstrap::service(uint32_t now, bool safe_mode, bool nvs_allowed) {
   // reopen/replay settings or admit cameras; a future supervised restart must quiesce.
   if (safe_mode || !nvs_allowed)
     refuse(PersistStatus::Refused);
-  if (requests_.take(request_)) {
-    if (!snapshot_.effective)
-      save_outcome_ = SaveOutcome::Refused;
-    else if (request_.epoch != epoch_ || request_.generation != snapshot_.generation)
-      save_outcome_ = SaveOutcome::Stale;
-    else if (saving_)
-      save_outcome_ = SaveOutcome::Busy;
-    else if (snapshot_.generation >= std::numeric_limits<uint64_t>::max() - 1 ||
-             !expandSettings(request_.settings, pending_))
-      save_outcome_ = SaveOutcome::Invalid;
-    else {
-      const auto result = persistence_.request(pending_, now);
-      save_result_ = result;
-      saving_ = result.status == PersistStatus::Pending;
-      save_outcome_ = saving_ ? SaveOutcome::Accepted : SaveOutcome::Invalid;
-      if (result.status == PersistStatus::Refused)
-        refuse(result);
-    }
-  }
-  if (snapshot_.effective) {
-    const auto result = persistence_.service(now);
-    if (saving_)
-      save_result_ = result;
-    if (result.status == PersistStatus::Refused || result.status == PersistStatus::Future ||
-        result.status == PersistStatus::Corrupt || result.status == PersistStatus::Ambiguous ||
-        result.status == PersistStatus::ReadError)
-      refuse(result);
-    else if (saving_ && (result.status == PersistStatus::Durable ||
-                         result.status == PersistStatus::Unchanged)) {
-      // A session mapping may never rebind an opaque ID to another peer, even
-      // after settings change back. Compare identity; never derive IDs from it.
-      if (pending_.count != snapshot_.settings.count)
-        peers_stable_ = false;
-      else
-        for (size_t i = 0; i < pending_.count; ++i) {
-          const auto &before = snapshot_.settings.cameras[i];
-          const auto &after = pending_.cameras[i];
-          if (before.model != after.model || before.address_type != after.address_type ||
-              after.identifier != before.identifier ||
-              after.wake_identifier != before.wake_identifier)
-            peers_stable_ = false;
-        }
-      // Persistence never updates caller RAM. Adopt only this verified candidate.
-      ram_ = std::move(pending_);
-      copySettings(ram_, snapshot_.settings);
-      snapshot_.peers_valid = peersValid();
-      snapshot_.outcome = result;
-      ++snapshot_.generation;
-      saving_ = false;
-      save_outcome_ = SaveOutcome::Durable;
-      dirty_ = true;
-    } else if (saving_ && result.status != PersistStatus::Pending) {
-      save_outcome_ = SaveOutcome::PersistenceError;
-    }
-  }
+  serviceRequest(now);
+  servicePersistence(now);
   publish();
 }
 } // namespace ridesync

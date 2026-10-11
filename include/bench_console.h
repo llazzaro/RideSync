@@ -22,6 +22,8 @@ public:
   bool take(BenchCommand &, BenchConsoleError &);
 
 private:
+  void finishLine();
+  void parseCommand();
   char line_[16]{};
   size_t size_ = 0;
   BenchCommand command_ = BenchCommand::Status;

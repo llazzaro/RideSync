@@ -86,6 +86,12 @@ private:
   bool reset_current_ = true, host_cancelled_ = false;
   bool resetNow(uint32_t &);
   bool resetAdmitted() const;
+  void configureWorkerPolicies(bool, bool);
+  void configureCameras(const SettingsSnapshot &);
+  bool resetContextCurrent(uint8_t, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t &);
+  bool resetPeerMatches(uint8_t, uint32_t) const;
+  void submitProofReset(uint32_t);
+  void submitHostReset(uint32_t);
   void revokeReset(bool timeout = false);
   void serviceReset();
   bool serviceResetProof();

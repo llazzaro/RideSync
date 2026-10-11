@@ -46,6 +46,24 @@ static std::vector<std::vector<std::string>> cameraRows(const std::string &text)
   }
   return rows;
 }
+struct IntentAuditEvidence {
+  bool queued = false, start_attempt = false, start_ack = false, stop_attempt = false,
+       refused = false;
+  void admissionRow(const std::vector<std::string> &row) {
+    if (row[20] == "1" && row[21] == "2")
+      queued = row[17] == "3" && row[19] == "0";
+    if (row[20] == "2" && row[21] == "4")
+      refused = row[17] == "0" && row[22] == std::to_string((int)CameraError::Unsupported);
+  }
+  void deliveryRow(const std::vector<std::string> &row, Token active) {
+    if (row[20] == "3" && row[21] == "1")
+      start_attempt = row[17] == "2" && row[19] == std::to_string(active.operation);
+    if (row[20] == "4" && row[25] == "12")
+      start_ack = row[17] == "2" && row[19] == std::to_string(active.operation);
+    if (row[20] == "3" && row[21] == "2")
+      stop_attempt = true;
+  }
+};
 void request_ack_without_observation_and_queued_intent_identity() {
   FakeClock raw;
   FakeTransport transport;
@@ -93,27 +111,18 @@ void request_ack_without_observation_and_queued_intent_identity() {
     storage.workerStep();
   }
   auto rows = cameraRows(sink.bytes);
-  bool queued = false, start_attempt = false, start_ack = false, stop_attempt = false,
-       refused = false;
+  IntentAuditEvidence evidence;
   for (const auto &row : rows) {
     TEST_ASSERT_EQUAL_STRING("0", row[13].c_str());
     TEST_ASSERT_EQUAL_STRING("301", row[14].c_str());
-    if (row[20] == "1" && row[21] == "2")
-      queued = row[17] == "3" && row[19] == "0";
-    if (row[20] == "3" && row[21] == "1")
-      start_attempt = row[17] == "2" && row[19] == std::to_string(active.operation);
-    if (row[20] == "4" && row[25] == "12")
-      start_ack = row[17] == "2" && row[19] == std::to_string(active.operation);
-    if (row[20] == "3" && row[21] == "2")
-      stop_attempt = true;
-    if (row[20] == "2" && row[21] == "4")
-      refused = row[17] == "0" && row[22] == std::to_string((int)CameraError::Unsupported);
+    evidence.admissionRow(row);
+    evidence.deliveryRow(row, active);
   }
-  TEST_ASSERT_TRUE(queued);
-  TEST_ASSERT_TRUE(start_attempt);
-  TEST_ASSERT_TRUE(start_ack);
-  TEST_ASSERT_FALSE(stop_attempt);
-  TEST_ASSERT_TRUE(refused);
+  TEST_ASSERT_TRUE(evidence.queued);
+  TEST_ASSERT_TRUE(evidence.start_attempt);
+  TEST_ASSERT_TRUE(evidence.start_ack);
+  TEST_ASSERT_FALSE(evidence.stop_attempt);
+  TEST_ASSERT_TRUE(evidence.refused);
   TEST_ASSERT_EQUAL_UINT32(1, storage.kindHealth(RecordKind::Camera).flushed > 0);
   TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find("#ridesync_telemetry,3"));
   TEST_ASSERT_NOT_EQUAL(std::string::npos, sink.bytes.find(",301,"));

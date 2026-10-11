@@ -41,24 +41,32 @@ void X5WakeRecovery::fail(CameraError error) {
   result_.error = error;
   runtime_.disconnect();
 }
+void X5WakeRecovery::updateResult(uint32_t now) {
+  const auto state = runtime_.status();
+  if (due(now, deadline_)) {
+    fail(CameraError::Timeout);
+    return;
+  }
+  if (state.revoked) {
+    fail(CameraError::Disabled);
+    return;
+  }
+  if (state.error != CameraError::None || state.failure != X5Failure::None) {
+    fail(state.error == CameraError::None ? CameraError::Transport : state.error);
+    return;
+  }
+  if (!state.active && state.connected && state.subscribed && state.age_known &&
+      runtime_.adapter().ready(Operation::Start)) {
+    // This observation belongs to the new connection, never pre-wake cache.
+    result_.terminal = result_.released = result_.fresh = true;
+    result_.observed = state.observed;
+  }
+}
 WakeRecoveryResult X5WakeRecovery::poll(const WakeOperation &op, uint32_t now) {
   if (!used_ || !sameWakeOperation(op, result_.operation))
     return {}; // A stale caller cannot progress or release another operation.
-  if (!result_.terminal) {
-    const auto state = runtime_.status();
-    if (due(now, deadline_))
-      fail(CameraError::Timeout);
-    else if (state.revoked)
-      fail(CameraError::Disabled);
-    else if (state.error != CameraError::None || state.failure != X5Failure::None)
-      fail(state.error == CameraError::None ? CameraError::Transport : state.error);
-    else if (!state.active && state.connected && state.subscribed && state.age_known &&
-             runtime_.adapter().ready(Operation::Start)) {
-      // This observation belongs to the new connection, never pre-wake cache.
-      result_.terminal = result_.released = result_.fresh = true;
-      result_.observed = state.observed;
-    }
-  }
+  if (!result_.terminal)
+    updateResult(now);
   if (result_.terminal && result_.error != CameraError::None)
     result_.released = runtime_.adapter().connectionReleased();
   return result_;

@@ -2,6 +2,9 @@
 #include "bmi270_imu.h"
 #include <Arduino.h>
 namespace ridesync {
+namespace {
+bool readBufferValid(const uint8_t *p, uint16_t cap) { return p && cap >= 4 && cap <= 112; }
+} // namespace
 Bmi270Imu::Bmi270Imu(TwoWire &w, const Bmi270Qualification &q)
     : wire_(w), qualification_(q), bus_(*this) {}
 bool Bmi270Imu::selectRegister(uint8_t reg) {
@@ -30,12 +33,7 @@ int8_t Bmi270Imu::writeCallback(uint8_t r, const uint8_t *p, uint32_t n, void *s
   return static_cast<Bmi270Imu *>(self)->bus_.write(r, p, n) ? 0 : -1;
 }
 void Bmi270Imu::delayCallback(uint32_t us, void *) { delayMicroseconds(us); }
-bool Bmi270Imu::begin(ImuConfig &metadata) {
-  if (ready_ || !qualification_.enabled || !qualification_.dedicated_bus ||
-      !qualification_.electrically_qualified || !qualification_.sensor_id ||
-      (qualification_.address != 0x68 && qualification_.address != 0x69) ||
-      metadata.generation == UINT32_MAX)
-    return false;
+bool Bmi270Imu::initializeDevice() {
   device_.intf = BMI2_I2C_INTF;
   device_.read = readCallback;
   device_.write = writeCallback;
@@ -48,10 +46,10 @@ bool Bmi270Imu::begin(ImuConfig &metadata) {
   if (bmi2_set_adv_power_save(0, &device_) != BMI2_OK ||
       bmi2_get_adv_power_save(&aps, &device_) != BMI2_OK || aps)
     return false;
+  return true;
+}
+bool Bmi270Imu::configureSensors(bmi2_sens_config *c) {
   uint8_t sensors[] = {BMI2_ACCEL, BMI2_GYRO};
-  bmi2_sens_config c[2]{};
-  c[0].type = BMI2_ACCEL;
-  c[1].type = BMI2_GYRO;
   if (bmi270_get_sensor_config(c, 2, &device_) != BMI2_OK)
     return false;
   c[0].cfg.acc.odr = BMI2_ACC_ODR_200HZ;
@@ -68,9 +66,10 @@ bool Bmi270Imu::begin(ImuConfig &metadata) {
       bmi2_set_accel_offset_comp(0, &device_) != BMI2_OK ||
       bmi2_set_gyro_offset_comp(0, &device_) != BMI2_OK)
     return false;
-  bmi2_sens_config readback[2]{};
-  readback[0].type = BMI2_ACCEL;
-  readback[1].type = BMI2_GYRO;
+  return true;
+}
+bool Bmi270Imu::configureFifoCadence() {
+  uint8_t sensors[] = {BMI2_ACCEL, BMI2_GYRO};
   for (uint8_t sensor : sensors) {
     uint8_t filtered = 0, downsample = 1;
     if (bmi2_set_fifo_filter_data(sensor, BMI2_FIFO_FILTERED_DATA, &device_) != BMI2_OK ||
@@ -80,6 +79,9 @@ bool Bmi270Imu::begin(ImuConfig &metadata) {
         filtered != BMI2_FIFO_FILTERED_DATA || downsample)
       return false;
   }
+  return true;
+}
+bool Bmi270Imu::verifyFifoConfig(bmi2_sens_config *readback) {
   uint8_t a = 1, g = 1;
   uint16_t fifo = 0;
   const uint16_t wanted =
@@ -91,6 +93,9 @@ bool Bmi270Imu::begin(ImuConfig &metadata) {
       bmi2_get_accel_offset_comp(&a, &device_) != BMI2_OK ||
       bmi2_get_gyro_offset_comp(&g, &device_) != BMI2_OK || a || g)
     return false;
+  return true;
+}
+bool Bmi270Imu::verifySensorConfig(const bmi2_sens_config *readback, const bmi2_sens_config *c) {
   if (readback[0].cfg.acc.odr != c[0].cfg.acc.odr ||
       readback[0].cfg.acc.range != c[0].cfg.acc.range ||
       readback[0].cfg.acc.bwp != c[0].cfg.acc.bwp || readback[0].cfg.acc.filter_perf != 1 ||
@@ -99,12 +104,18 @@ bool Bmi270Imu::begin(ImuConfig &metadata) {
       readback[1].cfg.gyr.bwp != c[1].cfg.gyr.bwp || readback[1].cfg.gyr.filter_perf != 1 ||
       readback[1].cfg.gyr.noise_perf != 1)
     return false;
+  return true;
+}
+bool Bmi270Imu::prepareSampling() {
   uint8_t power = 0;
   if (!bus_.read(BMI2_PWR_CTRL_ADDR, &power, 1) ||
       (power & (BMI2_ACC_EN_MASK | BMI2_GYR_EN_MASK)) != (BMI2_ACC_EN_MASK | BMI2_GYR_EN_MASK))
     return false;
   if (!flush())
     return false;
+  return true;
+}
+void Bmi270Imu::publishMetadata(ImuConfig &metadata) {
   ++metadata.generation;
   metadata.sensor_id = qualification_.sensor_id;
   metadata.sensor_state = Qualification::Qualified;
@@ -118,6 +129,37 @@ bool Bmi270Imu::begin(ImuConfig &metadata) {
   metadata.accel_filter = 0x502;
   metadata.gyro_filter = 0x702;
   metadata.accel_offset_compensation = metadata.gyro_offset_compensation = 1;
+}
+bool Bmi270Imu::configureProfile() {
+  if (!initializeDevice())
+    return false;
+  bmi2_sens_config c[2]{};
+  c[0].type = BMI2_ACCEL;
+  c[1].type = BMI2_GYRO;
+  if (!configureSensors(c))
+    return false;
+  bmi2_sens_config readback[2]{};
+  readback[0].type = BMI2_ACCEL;
+  readback[1].type = BMI2_GYRO;
+  if (!configureFifoCadence())
+    return false;
+  if (!verifyFifoConfig(readback))
+    return false;
+  if (!verifySensorConfig(readback, c))
+    return false;
+  if (!prepareSampling())
+    return false;
+  return true;
+}
+bool Bmi270Imu::begin(ImuConfig &metadata) {
+  if (ready_ || !qualification_.enabled || !qualification_.dedicated_bus ||
+      !qualification_.electrically_qualified || !qualification_.sensor_id ||
+      (qualification_.address != 0x68 && qualification_.address != 0x69) ||
+      metadata.generation == UINT32_MAX)
+    return false;
+  if (!configureProfile())
+    return false;
+  publishMetadata(metadata);
   ready_ = true;
   return true;
 }
@@ -128,7 +170,7 @@ bool Bmi270Imu::read(uint8_t *p, uint16_t cap, uint16_t &n, uint8_t &flags) {
   drained_ = false;
   capacity_refusal_ = false;
   drain_start_ = millis();
-  if (!ready_ || !p || cap < 4 || cap > 112 || bmi2_get_fifo_length(&length, &device_) != BMI2_OK)
+  if (!ready_ || !readBufferValid(p, cap) || bmi2_get_fifo_length(&length, &device_) != BMI2_OK)
     return false;
   if (length > cap - 4) {
     capacity_refusal_ = true;

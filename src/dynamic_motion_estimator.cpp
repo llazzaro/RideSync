@@ -10,6 +10,18 @@ bool finite(const MotionVector &v) {
 double norm(const MotionVector &v) {
   return std::sqrt(double(v.x) * v.x + double(v.y) * v.y + double(v.z) * v.z);
 }
+bool identityPresent(const DynamicMotionInput &i) {
+  return !(!i.session_id || !i.sensor_id || !i.config_generation || !i.mount_id ||
+           !i.calibration_id || !i.sensor_epoch);
+}
+bool sameIdentity(const DynamicMotionInput &i, const DynamicMotionInput &p) {
+  return !(i.session_id != p.session_id || i.sensor_id != p.sensor_id ||
+           i.config_generation != p.config_generation || i.mount_id != p.mount_id ||
+           i.calibration_id != p.calibration_id || i.sensor_epoch != p.sensor_epoch);
+}
+bool nextSequence(uint32_t next, uint32_t previous) {
+  return previous != std::numeric_limits<uint32_t>::max() && next == previous + 1;
+}
 } // namespace
 bool DynamicMotionEstimator::configValid(const DynamicMotionConfig &c) {
   return c.max_step_us && c.max_horizon_us && c.max_step_us <= c.max_horizon_us &&
@@ -35,8 +47,7 @@ DynamicMotionFault DynamicMotionEstimator::validate(const DynamicMotionInput &i)
     return DynamicMotionFault::Configuration;
   if (i.discontinuity)
     return DynamicMotionFault::Discontinuity;
-  if (!i.session_id || !i.sensor_id || !i.config_generation || !i.mount_id || !i.calibration_id ||
-      !i.sensor_epoch)
+  if (!identityPresent(i))
     return DynamicMotionFault::Identity;
   if (i.timing_source != DynamicTimingSource::ModelledCadence &&
       i.timing_source != DynamicTimingSource::QualifiedAcquisition)
@@ -105,28 +116,7 @@ DynamicMotionEstimate DynamicMotionEstimator::publish(const DynamicMotionInput &
   estimate_ = out;
   return estimate_;
 }
-DynamicMotionEstimate DynamicMotionEstimator::update(const DynamicMotionInput &i) {
-  const auto fault = validate(i);
-  if (fault != DynamicMotionFault::None)
-    return fail(fault);
-  if (!initialized_)
-    return fail(DynamicMotionFault::Uninitialized);
-  const auto &p = previous_;
-  if (i.session_id != p.session_id || i.sensor_id != p.sensor_id ||
-      i.config_generation != p.config_generation || i.mount_id != p.mount_id ||
-      i.calibration_id != p.calibration_id || i.sensor_epoch != p.sensor_epoch)
-    return fail(DynamicMotionFault::Identity);
-  if (i.timing_source != p.timing_source || i.sample_time_us <= p.sample_time_us)
-    return fail(DynamicMotionFault::Timing);
-  if (p.sequence == std::numeric_limits<uint32_t>::max() || i.sequence != p.sequence + 1)
-    return fail(DynamicMotionFault::Sequence);
-  const uint64_t interval = i.sample_time_us - p.sample_time_us;
-  if (interval > config_.max_step_us)
-    return fail(DynamicMotionFault::Timing);
-  const uint64_t elapsed = i.sample_time_us - initialized_us_;
-  if (elapsed > config_.max_horizon_us)
-    return fail(DynamicMotionFault::Horizon);
-  const auto &v = i.angular_rate_rad_s;
+bool DynamicMotionEstimator::integrate(const MotionVector &v, uint64_t interval) {
   const double rate = norm(v), half_angle = rate * double(interval) * .0000005;
   const double scale = rate == 0 ? double(interval) * .0000005 : std::sin(half_angle) / rate;
   const double dw = std::cos(half_angle), dx = double(v.x) * scale, dy = double(v.y) * scale,
@@ -141,9 +131,32 @@ DynamicMotionEstimate DynamicMotionEstimator::update(const DynamicMotionInput &i
     length += q * q;
   length = std::sqrt(length);
   if (!std::isfinite(length) || length == 0)
-    return fail(DynamicMotionFault::Measurement);
+    return false;
   for (auto &q : quaternion_)
     q /= length;
+  return true;
+}
+DynamicMotionEstimate DynamicMotionEstimator::update(const DynamicMotionInput &i) {
+  const auto fault = validate(i);
+  if (fault != DynamicMotionFault::None)
+    return fail(fault);
+  if (!initialized_)
+    return fail(DynamicMotionFault::Uninitialized);
+  const auto &p = previous_;
+  if (!sameIdentity(i, p))
+    return fail(DynamicMotionFault::Identity);
+  if (i.timing_source != p.timing_source || i.sample_time_us <= p.sample_time_us)
+    return fail(DynamicMotionFault::Timing);
+  if (!nextSequence(i.sequence, p.sequence))
+    return fail(DynamicMotionFault::Sequence);
+  const uint64_t interval = i.sample_time_us - p.sample_time_us;
+  if (interval > config_.max_step_us)
+    return fail(DynamicMotionFault::Timing);
+  const uint64_t elapsed = i.sample_time_us - initialized_us_;
+  if (elapsed > config_.max_horizon_us)
+    return fail(DynamicMotionFault::Horizon);
+  if (!integrate(i.angular_rate_rad_s, interval))
+    return fail(DynamicMotionFault::Measurement);
   previous_ = i;
   return publish(i, static_cast<uint32_t>(elapsed));
 }

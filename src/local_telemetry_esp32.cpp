@@ -10,6 +10,19 @@
 #include <esp_heap_caps.h>
 #endif
 namespace ridesync {
+namespace {
+bool imuQualified(const QualifiedLocalTelemetry &q) {
+  return !q.runtime.imu_enabled ||
+         (q.imu.enabled && q.imu.dedicated_bus && q.imu.electrically_qualified && q.imu.sensor_id &&
+          (q.imu.address == 0x68 || q.imu.address == 0x69));
+}
+bool localQualified(const QualifiedLocalTelemetry &q) {
+  return !(!q.runtime.opt_in || !q.runtime.gps_qualified ||
+           (q.runtime.imu_enabled && !q.runtime.imu_qualified) || !imuQualified(q) ||
+           (!q.modem_already_powered && !q.modem_power_sequence) ||
+           !q.runtime.power_timing.qualified);
+}
+} // namespace
 uint32_t Esp32LocalTelemetry::RawClock::now() const { return millis(); }
 Esp32LocalTelemetry::ImuWorker::Active::Active(ImuPort &port, ImuInbox &inbox, uint64_t id,
                                                const ImuConfig &metadata)
@@ -69,6 +82,24 @@ Esp32LocalTelemetry::~Esp32LocalTelemetry() {
     hero12UnbindTelemetry(runtime_);
 #endif
 }
+bool Esp32LocalTelemetry::startPower() {
+  const auto &q = qualification_;
+  if (q.modem_power_sequence &&
+      (q.modem_already_powered || !q.runtime.power_timing.key_active_ms ||
+       !q.runtime.power_timing.settle_ms || q.runtime.power_timing.key_active_ms > 60000 ||
+       q.runtime.power_timing.settle_ms > 60000 || q.runtime.power_timing.pre_key_ms > 60000 ||
+       !power_.begin(true))) {
+    return false;
+  }
+  return true;
+}
+void Esp32LocalTelemetry::releaseRoute() {
+#if !defined(RIDESYNC_BENCH_APPLICATION) && !defined(RIDESYNC_MIXED_COMPOSITION)
+  if (!cameras_)
+    hero12UnbindTelemetry(runtime_);
+#endif
+  route_bound_ = false;
+}
 bool Esp32LocalTelemetry::start() {
   if (attempted_)
     return false;
@@ -77,20 +108,11 @@ bool Esp32LocalTelemetry::start() {
   // owner independently validates volume qualification before task creation.
   // NVS and camera readiness deliberately do not participate in local admission.
   const auto &q = qualification_;
-  const bool imu_ok = !q.runtime.imu_enabled ||
-                      (q.imu.enabled && q.imu.dedicated_bus && q.imu.electrically_qualified &&
-                       q.imu.sensor_id && (q.imu.address == 0x68 || q.imu.address == 0x69));
-  if (!q.runtime.opt_in || !q.runtime.gps_qualified ||
-      (q.runtime.imu_enabled && !q.runtime.imu_qualified) || !imu_ok ||
-      (!q.modem_already_powered && !q.modem_power_sequence) || !q.runtime.power_timing.qualified) {
+  if (!localQualified(q)) {
     runtime_.refuseStart(TelemetryFault::Qualification);
     return false;
   }
-  if (q.modem_power_sequence &&
-      (q.modem_already_powered || !q.runtime.power_timing.key_active_ms ||
-       !q.runtime.power_timing.settle_ms || q.runtime.power_timing.key_active_ms > 60000 ||
-       q.runtime.power_timing.settle_ms > 60000 || q.runtime.power_timing.pre_key_ms > 60000 ||
-       !power_.begin(true))) {
+  if (!startPower()) {
     runtime_.refuseStart(TelemetryFault::Qualification);
     return false;
   }
@@ -103,19 +125,11 @@ bool Esp32LocalTelemetry::start() {
   route_bound_ = true;
   if (!uart_.begin(q.modem)) {
     runtime_.refuseStart(TelemetryFault::Qualification);
-#if !defined(RIDESYNC_BENCH_APPLICATION) && !defined(RIDESYNC_MIXED_COMPOSITION)
-    if (!cameras_)
-      hero12UnbindTelemetry(runtime_);
-#endif
-    route_bound_ = false;
+    releaseRoute();
     return false;
   }
   if (!runtime_.start()) {
-#if !defined(RIDESYNC_BENCH_APPLICATION) && !defined(RIDESYNC_MIXED_COMPOSITION)
-    if (!cameras_)
-      hero12UnbindTelemetry(runtime_);
-#endif
-    route_bound_ = false;
+    releaseRoute();
     return false;
   }
   return true;

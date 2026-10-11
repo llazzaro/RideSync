@@ -137,25 +137,7 @@ bool PairingProofMaintenance::active() const {
   return !cancelled_.load(std::memory_order_acquire) && nvsBootStatus().persistenceAllowed() &&
          uint32_t(esp_timer_get_time() / 1000) - deadline_ >= 0x80000000UL;
 }
-void PairingProofMaintenance::perform() {
-  if (!active()) {
-    result_.error = kRevoked;
-    return;
-  }
-  uint32_t previous = 0;
-  result_.error = readFloor(previous);
-  if (result_.error || previous < floor_.load() || !active()) {
-    if (!result_.error)
-      result_.error = kRevoked;
-    boot_.store(Boot::Error, std::memory_order_release);
-    return;
-  }
-  const uint32_t next = std::max(previous, proof_.qualification_record);
-  if (next == previous) {
-    floor_.store(previous);
-    result_.durable = true; // Prior successful boot/transaction, not failed-write laundering.
-    return;
-  }
+void PairingProofMaintenance::writeFloor(uint32_t next) {
   Handle h;
   auto rc = nvs_open(kNamespace, NVS_READWRITE, &h.value);
   if (rc != ESP_OK) {
@@ -192,6 +174,27 @@ void PairingProofMaintenance::perform() {
   }
   floor_.store(next);
   result_.durable = true;
+}
+void PairingProofMaintenance::perform() {
+  if (!active()) {
+    result_.error = kRevoked;
+    return;
+  }
+  uint32_t previous = 0;
+  result_.error = readFloor(previous);
+  if (result_.error || previous < floor_.load() || !active()) {
+    if (!result_.error)
+      result_.error = kRevoked;
+    boot_.store(Boot::Error, std::memory_order_release);
+    return;
+  }
+  const uint32_t next = std::max(previous, proof_.qualification_record);
+  if (next == previous) {
+    floor_.store(previous);
+    result_.durable = true; // Prior successful boot/transaction, not failed-write laundering.
+    return;
+  }
+  writeFloor(next);
 }
 void PairingProofMaintenance::service() {
   unsigned queued = 1;

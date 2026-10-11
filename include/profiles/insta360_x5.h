@@ -33,6 +33,17 @@ public:
   static RetryPolicy managerPolicy();
 
 private:
+  void completePending();
+  void inputLoss();
+  void completeFromObservation();
+  X5Failure admissionFailure() const;
+  void sendShutter();
+  void connectedInput(const X5Input &e);
+  void subscribedInput(const X5Input &e);
+  void unsubscribedInput(const X5Input &e);
+  void disconnectedInput(const X5Input &e);
+
+  void sendReturned(const X5Input &e);
   X5PeripheralPort &port_;
   Clock &clock_;
   CameraManager *manager_ = nullptr;

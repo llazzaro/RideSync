@@ -76,6 +76,12 @@ def call_graph(disassembly, addresses, literal_value):
     return graph, instructions
 
 
+def _audit_encoder_target(name, target, runtime):
+    assert target != '<unresolved-register-call>', f'unresolved register call from {name}'
+    assert target.startswith('_ZN8ridesync8insta36012_GLOBAL__N_1') or target in runtime, (
+        f'unexpected encoder dependency: {name} -> {target}')
+
+
 def audit_calls(graph, instructions, encoder, rom=()):
     # Compiler runtime float/integer arithmetic and byte copying only. An
     # unexpected direct call or indirect dispatch must be inspected explicitly.
@@ -99,9 +105,7 @@ def audit_calls(graph, instructions, encoder, rom=()):
             continue  # Pinned absolute ROM arithmetic/byte symbols; body unavailable.
         assert name in instructions, f'missing disassembly for reachable function: {name}'
         for target in graph.get(name, ()):
-            assert target != '<unresolved-register-call>', f'unresolved register call from {name}'
-            assert target.startswith('_ZN8ridesync8insta36012_GLOBAL__N_1') or target in runtime, (
-                f'unexpected encoder dependency: {name} -> {target}')
+            _audit_encoder_target(name, target, runtime)
             pending.append(target)
     return visited
 

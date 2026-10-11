@@ -134,13 +134,10 @@ public:
       deliver(*ctx, e, true);
     }
   }
-  void process(size_t n) {
-    const auto c = commands[n];
+  bool processLink(size_t n, const BleCommand &c) {
     auto &ctx = *contexts[n];
     BleEvent e;
     e.connection = c.connection;
-    if (c.phase == BlePhase::Scan)
-      return;
     if (c.phase == BlePhase::Connect) {
       links[ctx.peer] = &ctx;
       identities[ctx.peer] = c.identity;
@@ -148,75 +145,123 @@ public:
       e.connection = 10 + ctx.peer;
       ctx.connection.store(e.connection);
       deliver(ctx, e);
-    } else if (c.phase == BlePhase::Security) {
+      return true;
+    }
+    if (c.phase == BlePhase::Security) {
       e.kind = BleEventKind::Security;
       e.encrypted = e.bonded = true;
       e.identity = identities[ctx.peer];
       deliver(ctx, e);
-    } else if (c.phase == BlePhase::Services) {
+      return true;
+    }
+    return false;
+  }
+  void characteristics(size_t n, const BleCommand &c, BleEvent e) {
+    auto &ctx = *contexts[n];
+    const auto spec = Hero12Adapter::profileSpec();
+    const bool management = c.start == 41;
+    for (unsigned j = management ? 6 : 0; j < (management ? 8u : 6u); ++j) {
+      e.kind = BleEventKind::Characteristic;
+      e.uuid = spec.endpoints[j].uuid;
+      e.start = (management ? 42 : 2) + (j - (management ? 6 : 0)) * 3;
+      e.handle = e.start + 1;
+      e.properties = spec.endpoints[j].properties;
+      deliver(ctx, e);
+    }
+    complete(n);
+  }
+  bool processDiscovery(size_t n, const BleCommand &c) {
+    auto &ctx = *contexts[n];
+    BleEvent e;
+    e.connection = c.connection;
+    switch (c.phase) {
+    case BlePhase::Services:
       e.kind = BleEventKind::Service;
       e.uuid = c.uuid;
       e.start = c.uuid == Hero12Adapter::profileSpec().services[0] ? 1 : 41;
       e.end = e.start == 1 ? 40 : 60;
       deliver(ctx, e);
       complete(n);
-    } else if (c.phase == BlePhase::Characteristics) {
-      const auto spec = Hero12Adapter::profileSpec();
-      const bool management = c.start == 41;
-      for (unsigned j = management ? 6 : 0; j < (management ? 8u : 6u); ++j) {
-        e.kind = BleEventKind::Characteristic;
-        e.uuid = spec.endpoints[j].uuid;
-        e.start = (management ? 42 : 2) + (j - (management ? 6 : 0)) * 3;
-        e.handle = e.start + 1;
-        e.properties = spec.endpoints[j].properties;
-        deliver(ctx, e);
-      }
-      complete(n);
-    } else if (c.phase == BlePhase::Descriptors) {
+      return true;
+    case BlePhase::Characteristics:
+      characteristics(n, c, e);
+      return true;
+    case BlePhase::Descriptors:
       e.kind = BleEventKind::Descriptor;
       e.uuid = BleUuid::shortUuid(0x2902);
       e.handle = c.start + 1;
       deliver(ctx, e);
       complete(n);
-    } else if (c.phase == BlePhase::Subscribe || c.phase == BlePhase::VerifySubscription ||
-               c.phase == BlePhase::Read)
+      return true;
+    default:
+      return false;
+    }
+  }
+  std::vector<uint8_t> commandReply(const uint8_t *payload, uint8_t peer) {
+    switch (payload[0]) {
+    case 0xf1:
+      return {0xf1, 0xe9, 8, 1};
+    case 0x3c:
+      return {0x3c, 0, 1, 62, 1, 'x', 0, 1, 'x', 0, 0, 0};
+    case 0x51:
+      return {0x51, 0, 1, 0, 1, 0};
+    default:
+      if (payload[0] == 1)
+        encoding[peer] = payload[2] == 1;
+      return {payload[0], 0};
+    }
+  }
+  std::vector<uint8_t> queryReply(const uint8_t *payload, uint8_t peer) {
+    if (payload[0] == 0x53)
+      return {0x53, 0, payload[1], 1, 1};
+    return {0x13, 0, payload[1], 1, uint8_t(payload[1] == 10 ? encoding[peer] : payload[1] == 82)};
+  }
+  void processWrite(size_t n, const BleCommand &c) {
+    auto &ctx = *contexts[n];
+    complete(n);
+    if (!auto_camera)
+      return;
+    const auto *payload = c.bytes.data() + 2;
+    std::vector<uint8_t> reply;
+    uint16_t notify = 0;
+    switch (c.handle) {
+    case 43:
+      reply = {3, 0x81, 8, 1};
+      notify = 46;
+      break;
+    case 3:
+      reply = commandReply(payload, ctx.peer);
+      notify = 6;
+      break;
+    case 9:
+      reply = {0x5b, 0};
+      notify = 12;
+      break;
+    case 15:
+      reply = queryReply(payload, ctx.peer);
+      notify = 18;
+      break;
+    default:
+      break;
+    }
+    assert(reply.size() < 63);
+    notification(*links[ctx.peer], notify, reply);
+  }
+  void process(size_t n) {
+    const auto c = commands[n];
+    if (processLink(n, c) || processDiscovery(n, c))
+      return;
+    switch (c.phase) {
+    case BlePhase::Subscribe:
+    case BlePhase::VerifySubscription:
+    case BlePhase::Read:
       complete(n);
-    else if (c.phase == BlePhase::Write) {
-      complete(n);
-      if (!auto_camera)
-        return;
-      const auto *payload = c.bytes.data() + 2;
-      std::vector<uint8_t> reply;
-      uint16_t notify = 0;
-      if (c.handle == 43) {
-        reply = {3, 0x81, 8, 1};
-        notify = 46;
-      } else if (c.handle == 3) {
-        notify = 6;
-        if (payload[0] == 0xf1)
-          reply = {0xf1, 0xe9, 8, 1};
-        else if (payload[0] == 0x3c) {
-          reply = {0x3c, 0, 1, 62, 1, 'x', 0, 1, 'x', 0, 0, 0};
-        } else if (payload[0] == 0x51)
-          reply = {0x51, 0, 1, 0, 1, 0};
-        else {
-          reply = {payload[0], 0};
-          if (payload[0] == 1)
-            encoding[ctx.peer] = payload[2] == 1;
-        }
-      } else if (c.handle == 9) {
-        reply = {0x5b, 0};
-        notify = 12;
-      } else if (c.handle == 15) {
-        notify = 18;
-        if (payload[0] == 0x53)
-          reply = {0x53, 0, payload[1], 1, 1};
-        else
-          reply = {0x13, 0, payload[1], 1,
-                   uint8_t(payload[1] == 10 ? encoding[ctx.peer] : payload[1] == 82)};
-      }
-      assert(reply.size() < 63);
-      notification(*links[ctx.peer], notify, reply);
+      break;
+    case BlePhase::Write:
+      processWrite(n, c);
+      break;
+    default:
+      break;
     }
   }
   void driveProcedures() {

@@ -42,6 +42,10 @@ public:
   PowerStage powerStage() const { return stage_; }
 
 private:
+  void advancePowerSequence(const RecordTimestamp &);
+  bool startPowerSequence(const RecordTimestamp &);
+  void invalidateClock(const RecordTimestamp &);
+  bool powerTimingValid() const;
   SessionClock &clock_;
   ModemGnss &modem_;
   GnssPowerControl *power_;

@@ -19,6 +19,19 @@ bool digits(const Field &f, size_t start, size_t count) {
 unsigned pair(const Field &f, size_t start) {
   return unsigned(f.data[start] - '0') * 10 + unsigned(f.data[start + 1] - '0');
 }
+bool fraction(const Field &f, size_t &i, double &whole) {
+  if (i < f.size && f.data[i] == '.') {
+    const size_t start = ++i;
+    double scale = 0.1;
+    while (i < f.size && digit(f.data[i])) {
+      whole += (f.data[i++] - '0') * scale;
+      scale *= 0.1;
+    }
+    if (i == start)
+      return false;
+  }
+  return true;
+}
 // Deliberately narrow decimal grammar: no locale, exponent, sign except altitude,
 // NaN/Inf, or ignored trailing junk. Bounded 24-digit accumulation stays finite.
 bool decimal(const Field &f, bool allow_negative, double &value) {
@@ -37,30 +50,34 @@ bool decimal(const Field &f, bool allow_negative, double &value) {
     whole = whole * 10 + (f.data[i++] - '0');
   if (i == start)
     return false;
-  if (i < f.size && f.data[i] == '.') {
-    start = ++i;
-    double scale = 0.1;
-    while (i < f.size && digit(f.data[i])) {
-      whole += (f.data[i++] - '0') * scale;
-      scale *= 0.1;
-    }
-    if (i == start)
-      return false;
-  }
+  if (!fraction(f, i, whole))
+    return false;
   if (i != f.size)
     return false;
   value = negative ? -whole : whole;
   return true;
 }
-bool coordinate(const Field &f, const Field &hemisphere, bool latitude, double &value) {
-  const size_t degree_digits = latitude ? 2 : 3;
-  const size_t decimal_point = degree_digits + 2;
+bool hemisphereValid(char h, bool latitude) {
+  return latitude ? (h == 'N' || h == 'S') : (h == 'E' || h == 'W');
+}
+bool coordinateGrammar(const Field &f, const Field &hemisphere, bool latitude) {
+  const size_t decimal_point = (latitude ? 2 : 3) + 2;
   if (f.size != decimal_point + 7 || f.data[decimal_point] != '.' || !digits(f, 0, decimal_point) ||
       !digits(f, decimal_point + 1, 6) || hemisphere.size != 1)
     return false;
   const char h = hemisphere.data[0];
-  if (latitude ? (h != 'N' && h != 'S') : (h != 'E' && h != 'W'))
+  if (!hemisphereValid(h, latitude))
     return false;
+  return true;
+}
+bool coordinateRangeValid(unsigned degrees, double minutes, unsigned limit) {
+  return minutes < 60 && degrees <= limit && (degrees != limit || minutes == 0);
+}
+bool coordinate(const Field &f, const Field &hemisphere, bool latitude, double &value) {
+  const size_t degree_digits = latitude ? 2 : 3;
+  if (!coordinateGrammar(f, hemisphere, latitude))
+    return false;
+  const char h = hemisphere.data[0];
   unsigned degrees = 0;
   for (size_t i = 0; i < degree_digits; ++i)
     degrees = degrees * 10 + (f.data[i] - '0');
@@ -71,7 +88,7 @@ bool coordinate(const Field &f, const Field &hemisphere, bool latitude, double &
   if (!decimal(minute_field, false, minutes))
     return false;
   const unsigned limit = latitude ? 90 : 180;
-  if (minutes >= 60 || degrees > limit || (degrees == limit && minutes != 0))
+  if (!coordinateRangeValid(degrees, minutes, limit))
     return false;
   value = degrees + minutes / 60;
   if (h == 'S' || h == 'W')
@@ -109,6 +126,107 @@ GnssParseResult result(GnssStatus status, GnssError error, uint64_t receipt) {
   r.fix.receipt_monotonic_ms = receipt;
   return r;
 }
+GnssError parsePositionTime(const Field *fields, GnssParseResult &r) {
+  for (size_t i = 0; i < 4; ++i)
+    if (!fields[i].size)
+      return GnssError::MissingCoordinate;
+  if (!coordinate(fields[0], fields[1], true, r.fix.latitude_degrees) ||
+      !coordinate(fields[2], fields[3], false, r.fix.longitude_degrees))
+    return GnssError::InvalidCoordinate;
+  if (fields[4].size) {
+    if (!date(fields[4], r.fix.utc_date.value))
+      return GnssError::InvalidDate;
+    r.fix.utc_date.available = true;
+  }
+  if (fields[5].size) {
+    if (!time(fields[5], r.fix.utc_time.value))
+      return GnssError::InvalidTime;
+    r.fix.utc_time.available = true;
+  }
+  return GnssError::None;
+}
+GnssError parseMetrics(const Field *fields, GnssParseResult &r) {
+  GnssOptional<double> *metrics[] = {&r.fix.altitude_msl_metres, &r.fix.speed_metres_per_second,
+                                     &r.fix.course_degrees};
+  for (size_t i = 0; i < 3; ++i) {
+    if (!fields[i + 6].size)
+      continue;
+    if (!decimal(fields[i + 6], i == 0, metrics[i]->value))
+      return GnssError::InvalidMetric;
+    if (i == 2 && metrics[i]->value >= 360)
+      return GnssError::InvalidMetric;
+    metrics[i]->available = true;
+  }
+  if (r.fix.speed_metres_per_second.available)
+    r.fix.speed_metres_per_second.value *= 1852.0 / 3600.0;
+  return GnssError::None;
+}
+GnssError splitFields(const char *line, size_t length, size_t start, Field *fields, size_t &count,
+                      bool &all_empty) {
+  for (size_t i = start; i <= length; ++i) {
+    if (i != length && line[i] != ',')
+      continue;
+    if (count == 17)
+      return GnssError::WrongFieldCount;
+    if (i - start > kGnssMaxFieldBytes)
+      return GnssError::FieldTooLong;
+    fields[count].data = line + start;
+    fields[count].size = i - start;
+    all_empty = all_empty && fields[count].size == 0;
+    ++count;
+    start = i + 1;
+  }
+  return GnssError::None;
+}
+bool normalizeLine(const char *line, size_t &length) {
+  // Permit a line terminator, but never consume embedded lines or NUL bytes.
+  if (length && line[length - 1] == '\n')
+    --length;
+  if (length && line[length - 1] == '\r')
+    --length;
+  for (size_t i = 0; i < length; ++i)
+    if (line[i] < ' ' || line[i] > '~')
+      return false;
+  return true;
+}
+GnssParseResult parseSchema(const Field *fields, size_t count, bool all_empty, bool is_gnss,
+                            uint64_t receipt_monotonic_ms) {
+  const auto fail = [receipt_monotonic_ms](GnssError e) {
+    return result(GnssStatus::ParseError, e, receipt_monotonic_ms);
+  };
+  if (is_gnss) {
+    if (count == 9 && all_empty)
+      return result(GnssStatus::NoFix, GnssError::None, receipt_monotonic_ms);
+    return fail(GnssError::UnsupportedSchema);
+  }
+  if (count != 9)
+    return fail(GnssError::WrongFieldCount);
+  if (all_empty)
+    return result(GnssStatus::NoFix, GnssError::None, receipt_monotonic_ms);
+  GnssParseResult r = result(GnssStatus::Fix, GnssError::None, receipt_monotonic_ms);
+  const auto position_error = parsePositionTime(fields, r);
+  if (position_error != GnssError::None)
+    return fail(position_error);
+  const auto metric_error = parseMetrics(fields, r);
+  if (metric_error != GnssError::None)
+    return fail(metric_error);
+  r.fix.valid = true;
+  return r;
+}
+bool responsePrefix(const char *line, size_t length, size_t &start, bool &is_gnss) {
+  const char gps_prefix[] = "+CGPSINFO:";
+  const char gnss_prefix[] = "+CGNSSINFO:";
+  is_gnss = length >= sizeof(gnss_prefix) - 1 &&
+            std::memcmp(line, gnss_prefix, sizeof(gnss_prefix) - 1) == 0;
+  bool is_gps = length >= sizeof(gps_prefix) - 1 &&
+                std::memcmp(line, gps_prefix, sizeof(gps_prefix) - 1) == 0;
+  if (!is_gnss && !is_gps)
+    return false;
+  start = is_gnss ? sizeof(gnss_prefix) - 1 : sizeof(gps_prefix) - 1;
+  while (start < length && line[start] == ' ')
+    ++start;
+  return true;
+}
 } // namespace
 
 GnssParseResult parseGnssLine(const char *line, size_t length, uint64_t receipt_monotonic_ms) {
@@ -119,82 +237,19 @@ GnssParseResult parseGnssLine(const char *line, size_t length, uint64_t receipt_
     return fail(GnssError::InvalidInput);
   if (length > kGnssMaxLineBytes)
     return fail(GnssError::LineTooLong);
-  // Permit a line terminator, but never consume embedded lines or NUL bytes.
-  if (length && line[length - 1] == '\n')
-    --length;
-  if (length && line[length - 1] == '\r')
-    --length;
-  for (size_t i = 0; i < length; ++i)
-    if (line[i] < ' ' || line[i] > '~')
-      return fail(GnssError::InvalidInput);
-  const char gps_prefix[] = "+CGPSINFO:";
-  const char gnss_prefix[] = "+CGNSSINFO:";
-  bool is_gnss = length >= sizeof(gnss_prefix) - 1 &&
-                 std::memcmp(line, gnss_prefix, sizeof(gnss_prefix) - 1) == 0;
-  bool is_gps = length >= sizeof(gps_prefix) - 1 &&
-                std::memcmp(line, gps_prefix, sizeof(gps_prefix) - 1) == 0;
-  if (!is_gnss && !is_gps)
+  if (!normalizeLine(line, length))
+    return fail(GnssError::InvalidInput);
+  size_t start = 0;
+  bool is_gnss = false;
+  if (!responsePrefix(line, length, start, is_gnss))
     return fail(GnssError::UnknownResponse);
-  size_t start = is_gnss ? sizeof(gnss_prefix) - 1 : sizeof(gps_prefix) - 1;
-  while (start < length && line[start] == ' ')
-    ++start;
   // Maximum published CGNSSINFO variant has 17 fields; none is selected here.
   Field fields[17];
   size_t count = 0;
   bool all_empty = true;
-  for (size_t i = start; i <= length; ++i) {
-    if (i != length && line[i] != ',')
-      continue;
-    if (count == 17)
-      return fail(GnssError::WrongFieldCount);
-    if (i - start > kGnssMaxFieldBytes)
-      return fail(GnssError::FieldTooLong);
-    fields[count].data = line + start;
-    fields[count].size = i - start;
-    all_empty = all_empty && fields[count].size == 0;
-    ++count;
-    start = i + 1;
-  }
-  if (is_gnss) {
-    if (count == 9 && all_empty)
-      return result(GnssStatus::NoFix, GnssError::None, receipt_monotonic_ms);
-    return fail(GnssError::UnsupportedSchema);
-  }
-  if (count != 9)
-    return fail(GnssError::WrongFieldCount);
-  if (all_empty)
-    return result(GnssStatus::NoFix, GnssError::None, receipt_monotonic_ms);
-  for (size_t i = 0; i < 4; ++i)
-    if (!fields[i].size)
-      return fail(GnssError::MissingCoordinate);
-  GnssParseResult r = result(GnssStatus::Fix, GnssError::None, receipt_monotonic_ms);
-  if (!coordinate(fields[0], fields[1], true, r.fix.latitude_degrees) ||
-      !coordinate(fields[2], fields[3], false, r.fix.longitude_degrees))
-    return fail(GnssError::InvalidCoordinate);
-  if (fields[4].size) {
-    if (!date(fields[4], r.fix.utc_date.value))
-      return fail(GnssError::InvalidDate);
-    r.fix.utc_date.available = true;
-  }
-  if (fields[5].size) {
-    if (!time(fields[5], r.fix.utc_time.value))
-      return fail(GnssError::InvalidTime);
-    r.fix.utc_time.available = true;
-  }
-  GnssOptional<double> *metrics[] = {&r.fix.altitude_msl_metres, &r.fix.speed_metres_per_second,
-                                     &r.fix.course_degrees};
-  for (size_t i = 0; i < 3; ++i) {
-    if (!fields[i + 6].size)
-      continue;
-    if (!decimal(fields[i + 6], i == 0, metrics[i]->value))
-      return fail(GnssError::InvalidMetric);
-    if (i == 2 && metrics[i]->value >= 360)
-      return fail(GnssError::InvalidMetric);
-    metrics[i]->available = true;
-  }
-  if (r.fix.speed_metres_per_second.available)
-    r.fix.speed_metres_per_second.value *= 1852.0 / 3600.0;
-  r.fix.valid = true;
-  return r;
+  const auto split_error = splitFields(line, length, start, fields, count, all_empty);
+  if (split_error != GnssError::None)
+    return fail(split_error);
+  return parseSchema(fields, count, all_empty, is_gnss, receipt_monotonic_ms);
 }
 } // namespace ridesync

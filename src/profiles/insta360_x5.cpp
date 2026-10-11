@@ -1,4 +1,5 @@
 #include "profiles/insta360_x5.h"
+#include "profiles/qualification.h"
 #include "recording_manager.h"
 namespace ridesync {
 namespace {
@@ -6,23 +7,25 @@ bool due(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL
 bool identityEqual(const BondIdentity &a, const BondIdentity &b) {
   return a.verified && b.verified && a.type == b.type && a.address == b.address;
 }
-bool validQualification(const X5Qualification &q) {
-  if (!q.enabled || !q.identity.verified ||
-      (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic) ||
-      q.store.qualification_record == 0 || q.store.qualification_record == UINT32_MAX ||
-      q.display.profile != insta360::Ce80DisplayProfile::X5CapturedDisplayV1 ||
-      q.firmware_size == 0 || q.firmware_size >= q.firmware.size())
-    return false;
-  bool nonzero = false;
-  for (auto b : q.identity.address)
-    nonzero = nonzero || b != 0;
-  if (!nonzero ||
-      (q.identity.type == IdentityType::RandomStatic && (q.identity.address[5] & 0xc0) != 0xc0))
+bool validFirmware(const X5Qualification &q) {
+  if (q.firmware_size == 0 || q.firmware_size >= q.firmware.size())
     return false;
   for (size_t i = 0; i < q.firmware.size(); ++i)
     if (i < q.firmware_size ? (q.firmware[i] < 0x21 || q.firmware[i] > 0x7e) : q.firmware[i] != 0)
       return false;
   return true;
+}
+bool validQualification(const X5Qualification &q) {
+  if (!q.enabled || !qualification::resolvedIdentity(q.identity, false) ||
+      q.store.qualification_record == 0 || q.store.qualification_record == UINT32_MAX ||
+      q.display.profile != insta360::Ce80DisplayProfile::X5CapturedDisplayV1 || !validFirmware(q))
+    return false;
+  return true;
+}
+bool validRequest(size_t peer, const CameraConfig &camera, Token token) {
+  return !(peer != 0 || camera.family != CameraFamily::Insta360 ||
+           camera.model != CameraModel::X5 || !camera.enabled || !token.valid() ||
+           !token.hasRoom() || !token.connection || !token.operation);
 }
 } // namespace
 RetryPolicy X5Adapter::managerPolicy() {
@@ -108,20 +111,26 @@ X5Failure X5Adapter::refusal(Operation op) const {
     return X5Failure::WrongMode;
   return X5Failure::UnknownState;
 }
+X5Failure X5Adapter::admissionFailure() const {
+  if (active_)
+    return X5Failure::Busy;
+  if (!configured_)
+    return X5Failure::Qualification;
+  if (!connected_ || !subscribed_)
+    return X5Failure::Subscription;
+  if (!fresh())
+    return X5Failure::Stale;
+  if (!video_)
+    return X5Failure::WrongMode;
+  return X5Failure::UnknownState;
+}
 bool X5Adapter::begin(size_t peer, const CameraConfig &camera, Operation op, Token token) {
-  if (peer != 0 || camera.family != CameraFamily::Insta360 || camera.model != CameraModel::X5 ||
-      !camera.enabled || !token.valid() || !token.hasRoom() || !token.connection ||
-      !token.operation) {
+  if (!validRequest(peer, camera, token)) {
     failure_ = X5Failure::Qualification;
     return false;
   }
   if (!ready(op)) {
-    failure_ = active_                       ? X5Failure::Busy
-               : !configured_                ? X5Failure::Qualification
-               : !connected_ || !subscribed_ ? X5Failure::Subscription
-               : !fresh()                    ? X5Failure::Stale
-               : !video_                     ? X5Failure::WrongMode
-                                             : X5Failure::UnknownState;
+    failure_ = admissionFailure();
     return false;
   }
   if (op != Operation::Connect && token.connection != token_.connection) {
@@ -215,6 +224,13 @@ bool X5Adapter::desiredObserved() const {
   return video_ && ((operation_ == Operation::Start && recording_ == RecordingState::Recording) ||
                     (operation_ == Operation::Stop && recording_ == RecordingState::Stopped));
 }
+void X5Adapter::completeFromObservation() {
+  if (active_ && operation_ == Operation::Query && desiredObserved())
+    complete();
+  else if (active_ && send_consumed_ && returned_ && observation_sequence_ > cutoff_ &&
+           desiredObserved())
+    complete();
+}
 void X5Adapter::display(const X5Input &e) {
   if (!connected_ || !subscribed_ || e.handle != handle_)
     return;
@@ -241,27 +257,50 @@ void X5Adapter::display(const X5Input &e) {
   observation_sequence_ = e.sequence;
   has_observation_ = true;
   publishObservation();
-  if (active_ && operation_ == Operation::Query && desiredObserved())
-    complete();
-  else if (active_ && send_consumed_ && returned_ && observation_sequence_ > cutoff_ &&
-           desiredObserved())
-    complete();
+  completeFromObservation();
+}
+void X5Adapter::connectedInput(const X5Input &e) {
+  if (!active_ || operation_ != Operation::Connect || connected_ || e.status ||
+      e.handle == kBleNoHandle || !identityEqual(e.identity, qualification_.identity)) {
+    fail(X5Failure::Qualification);
+    return;
+  }
+  handle_ = e.handle;
+  connected_ = true;
+}
+void X5Adapter::subscribedInput(const X5Input &e) {
+  if (connected_ && e.handle == handle_ && !e.status) {
+    subscribed_ = true;
+    if (active_ && operation_ == Operation::Connect)
+      complete();
+  } else {
+    fail(X5Failure::Subscription);
+  }
+}
+void X5Adapter::unsubscribedInput(const X5Input &e) {
+  if (connected_ && e.handle == handle_) {
+    subscribed_ = false;
+    invalidate();
+    if (active_)
+      fail(X5Failure::Subscription);
+  }
+}
+void X5Adapter::disconnectedInput(const X5Input &e) {
+  if (connected_ && e.handle == handle_) {
+    invalidate();
+    active_ = send_pending_ = complete_pending_ = false;
+    connected_ = subscribed_ = false;
+    failure_ = X5Failure::Transport;
+    publish(Event(0, token_.connection, EventKind::Disconnected));
+  } else if (active_) {
+    fail(X5Failure::Transport);
+  }
 }
 void X5Adapter::input(const X5Input &e) {
   if (e.connection != token_.connection)
     return;
   if (e.kind == X5InputKind::SendReturned) {
-    if (!active_ || !send_consumed_ || e.operation != token_.operation || e.handle != handle_ ||
-        returned_)
-      return;
-    if (e.status) {
-      fail(X5Failure::Transport);
-      return;
-    }
-    returned_ = true;
-    cutoff_ = e.sequence;
-    if (observation_sequence_ > cutoff_ && desiredObserved())
-      complete();
+    sendReturned(e);
     return;
   }
   if (!e.sequence || e.sequence <= last_sequence_)
@@ -269,45 +308,20 @@ void X5Adapter::input(const X5Input &e) {
   last_sequence_ = e.sequence;
   switch (e.kind) {
   case X5InputKind::Connected:
-    if (!active_ || operation_ != Operation::Connect || connected_ || e.status ||
-        e.handle == kBleNoHandle || !identityEqual(e.identity, qualification_.identity)) {
-      fail(X5Failure::Qualification);
-      return;
-    }
-    handle_ = e.handle;
-    connected_ = true;
+    connectedInput(e);
     break;
   case X5InputKind::Subscribed:
-    if (connected_ && e.handle == handle_ && !e.status) {
-      subscribed_ = true;
-      if (active_ && operation_ == Operation::Connect)
-        complete();
-    } else {
-      fail(X5Failure::Subscription);
-    }
+    subscribedInput(e);
     break;
   case X5InputKind::Unsubscribed:
-    if (connected_ && e.handle == handle_) {
-      subscribed_ = false;
-      invalidate();
-      if (active_)
-        fail(X5Failure::Subscription);
-    }
+    unsubscribedInput(e);
     break;
   case X5InputKind::Display:
     if (!input_lost_)
       display(e);
     break;
   case X5InputKind::Disconnected:
-    if (connected_ && e.handle == handle_) {
-      invalidate();
-      active_ = send_pending_ = complete_pending_ = false;
-      connected_ = subscribed_ = false;
-      failure_ = X5Failure::Transport;
-      publish(Event(0, token_.connection, EventKind::Disconnected));
-    } else if (active_) {
-      fail(X5Failure::Transport);
-    }
+    disconnectedInput(e);
     break;
   case X5InputKind::Fault:
     fail(X5Failure::Transport);
@@ -321,11 +335,7 @@ void X5Adapter::service() {
     return;
   port_.service(clock_.now());
   if (token_.connection && port_.takeLoss(token_.connection)) {
-    input_lost_ = true;
-    failure_ = X5Failure::LostInput;
-    invalidate();
-    if (active_)
-      fail(X5Failure::LostInput);
+    inputLoss();
   }
   if (active_ && due(clock_.now(), deadline_))
     fail(X5Failure::Timeout);
@@ -334,28 +344,59 @@ void X5Adapter::service() {
   for (unsigned n = 0; n < 32 && port_.poll(input_); ++n)
     input(input_);
   if (active_ && complete_pending_) {
-    if (desiredObserved())
-      complete();
-    else
-      fail(X5Failure::UnknownState);
+    completePending();
   }
   if (active_ && send_pending_) {
-    // A mode/state change queued before actual admission revokes the request.
-    if (!connected_ || !subscribed_ || !video_ || !fresh() || desiredObserved()) {
-      fail(X5Failure::UnknownState);
-      return;
-    }
-    send_pending_ = false;
-    send_consumed_ = true;
-    X5ShutterRequest request;
-    request.token = token_;
-    request.handle = handle_;
-    request.deadline_ms = deadline_;
-    request.observation_sequence = observation_sequence_;
-    request.observation_ms = observed_ms_;
-    invalidate(false); // Keep Video epoch; no old observation can complete this send.
-    if (!port_.notify(request))
-      fail(X5Failure::Transport);
+    sendShutter();
   }
+}
+void X5Adapter::sendReturned(const X5Input &e) {
+
+  if (!active_ || !send_consumed_ || e.operation != token_.operation || e.handle != handle_ ||
+      returned_)
+    return;
+  if (e.status) {
+    fail(X5Failure::Transport);
+    return;
+  }
+  returned_ = true;
+  cutoff_ = e.sequence;
+  if (observation_sequence_ > cutoff_ && desiredObserved())
+    complete();
+  return;
+}
+void X5Adapter::sendShutter() {
+
+  // A mode/state change queued before actual admission revokes the request.
+  if (!connected_ || !subscribed_ || !video_ || !fresh() || desiredObserved()) {
+    fail(X5Failure::UnknownState);
+    return;
+  }
+  send_pending_ = false;
+  send_consumed_ = true;
+  X5ShutterRequest request;
+  request.token = token_;
+  request.handle = handle_;
+  request.deadline_ms = deadline_;
+  request.observation_sequence = observation_sequence_;
+  request.observation_ms = observed_ms_;
+  invalidate(false); // Keep Video epoch; no old observation can complete this send.
+  if (!port_.notify(request))
+    fail(X5Failure::Transport);
+}
+void X5Adapter::inputLoss() {
+
+  input_lost_ = true;
+  failure_ = X5Failure::LostInput;
+  invalidate();
+  if (active_)
+    fail(X5Failure::LostInput);
+}
+void X5Adapter::completePending() {
+
+  if (desiredObserved())
+    complete();
+  else
+    fail(X5Failure::UnknownState);
 }
 } // namespace ridesync

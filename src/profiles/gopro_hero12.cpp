@@ -1,4 +1,5 @@
 #include "profiles/gopro_hero12.h"
+#include "profiles/qualification.h"
 #include "recording_manager.h"
 #include <cstring>
 
@@ -37,14 +38,9 @@ bool validQualification(const Hero12Qualification &q) {
       q.identity.type == IdentityType::UnresolvedPrivate || q.firmware_size == 0 ||
       q.firmware_size > q.firmware.size())
     return false;
-  bool nonzero = false, all_ff = true;
-  for (uint8_t b : q.identity.address) {
-    nonzero |= b != 0;
-    all_ff &= b == 0xff;
-  }
-  return nonzero && !all_ff &&
-         (q.identity.type != IdentityType::RandomStatic || (q.identity.address[5] & 0xc0) == 0xc0);
+  return qualification::staticIdentity(q.identity);
 }
+
 uint8_t channelEndpoint(gopro::Channel c, bool write) {
   switch (c) {
   case gopro::Channel::Command:
@@ -156,6 +152,11 @@ bool Hero12Adapter::recoveryReady(uint8_t i) const {
          s.lifecycle == Lifecycle::Ready && s.has_observation &&
          s.observed != RecordingState::Unknown;
 }
+bool Hero12Adapter::activeRecoveryPhase(Hero12RecoveryPhase phase) {
+  return phase == Hero12RecoveryPhase::Pending || phase == Hero12RecoveryPhase::Scanning ||
+         phase == Hero12RecoveryPhase::Connecting || phase == Hero12RecoveryPhase::Observing ||
+         phase == Hero12RecoveryPhase::Starting;
+}
 CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
                                            Hero12PowerCondition condition) {
   if (i >= kBlePeers || !manager_ || i >= manager_->size())
@@ -167,11 +168,7 @@ CameraError Hero12Adapter::requestRecovery(uint8_t i, bool ensure_recording,
   if (!peers_[i].qualified || !validQualification(peers_[i].qualification))
     return CameraError::Unsupported;
   auto &r = recovery_[i];
-  if (r.state.phase == Hero12RecoveryPhase::Pending ||
-      r.state.phase == Hero12RecoveryPhase::Scanning ||
-      r.state.phase == Hero12RecoveryPhase::Connecting ||
-      r.state.phase == Hero12RecoveryPhase::Observing ||
-      r.state.phase == Hero12RecoveryPhase::Starting)
+  if (activeRecoveryPhase(r.state.phase))
     return CameraError::Busy;
   const auto *state = manager_->state(i);
   if (!state || (state->lifecycle != Lifecycle::Ready && state->lifecycle != Lifecycle::Idle &&
@@ -209,6 +206,12 @@ CameraError Hero12Adapter::cancelRecovery(uint8_t i) {
   r.state.phase = Hero12RecoveryPhase::Cancelled;
   return CameraError::None;
 }
+bool Hero12Adapter::serviceListHasFea6(const BleEvent &e, size_t offset, size_t length) {
+  for (size_t n = offset + 1; n + 1 < offset + length; n += 2)
+    if (e.bytes[n] == 0xa6 && e.bytes[n + 1] == 0xfe)
+      return true;
+  return false;
+}
 bool Hero12Adapter::hasFea6(const BleEvent &e) {
   bool found = false;
   for (size_t offset = 0; offset < e.size;) {
@@ -221,12 +224,43 @@ bool Hero12Adapter::hasFea6(const BleEvent &e) {
     if ((type == 0x02 || type == 0x03) && (!(length & 1) || length < 3))
       return false;
     if (type == 0x02 || type == 0x03)
-      for (size_t n = offset + 1; n + 1 < offset + length; n += 2)
-        if (e.bytes[n] == 0xa6 && e.bytes[n + 1] == 0xfe)
-          found = true;
+      found |= serviceListHasFea6(e, offset, length);
     offset += length;
   }
   return found;
+}
+bool Hero12Adapter::beginConnection(uint8_t i, Token token) {
+  auto &p = peers_[i];
+
+  if (p.connecting || p.ready || disconnect_pending_[i] || token.connection == 0 ||
+      (p.sealed && central_.phase(i) != BlePhase::Closed) ||
+      !central_.connect(i, token.connection, p.qualification.identity, profileSpec())) {
+    p.fault = Hero12Fault::Transport;
+    return false;
+  }
+  p = [&] {
+    Peer fresh;
+    fresh.qualification = p.qualification;
+    fresh.qualified = true;
+    fresh.connection = token.connection;
+    fresh.token = token;
+    fresh.connecting = true;
+    fresh.operation = Operation::Connect;
+    return fresh;
+  }();
+  return true;
+}
+bool Hero12Adapter::beginCommand(uint8_t i, Operation op, Token token) {
+  auto &p = peers_[i];
+  if (!p.ready || p.sealed || p.step != Step::None || p.connection != token.connection ||
+      (op != Operation::Start && op != Operation::Stop && op != Operation::Query))
+    return false;
+  p.operation = op;
+  p.token = token;
+  p.target_encoding = op == Operation::Start;
+  // A fresh encoding query avoids redundant shutter delivery. Start then gets
+  // fresh Busy and Ready before video mode; Stop can proceed while encoding.
+  return send(i, Step::QueryEncoding);
 }
 bool Hero12Adapter::begin(size_t index, const CameraConfig &camera, Operation op, Token token) {
   if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::GoPro ||
@@ -241,34 +275,9 @@ bool Hero12Adapter::begin(size_t index, const CameraConfig &camera, Operation op
     p.fault = Hero12Fault::Qualification;
     return false;
   }
-  if (op == Operation::Connect) {
-    if (p.connecting || p.ready || disconnect_pending_[i] || token.connection == 0 ||
-        (p.sealed && central_.phase(i) != BlePhase::Closed) ||
-        !central_.connect(i, token.connection, p.qualification.identity, profileSpec())) {
-      p.fault = Hero12Fault::Transport;
-      return false;
-    }
-    p = [&] {
-      Peer fresh;
-      fresh.qualification = p.qualification;
-      fresh.qualified = true;
-      fresh.connection = token.connection;
-      fresh.token = token;
-      fresh.connecting = true;
-      fresh.operation = Operation::Connect;
-      return fresh;
-    }();
-    return true;
-  }
-  if (!p.ready || p.sealed || p.step != Step::None || p.connection != token.connection ||
-      (op != Operation::Start && op != Operation::Stop && op != Operation::Query))
-    return false;
-  p.operation = op;
-  p.token = token;
-  p.target_encoding = op == Operation::Start;
-  // A fresh encoding query avoids redundant shutter delivery. Start then gets
-  // fresh Busy and Ready before video mode; Stop can proceed while encoding.
-  return send(i, Step::QueryEncoding);
+  if (op == Operation::Connect)
+    return beginConnection(i, token);
+  return beginCommand(i, op, token);
 }
 void Hero12Adapter::cancel(size_t index, Token token) {
   if (index >= kBlePeers)
@@ -345,6 +354,65 @@ void Hero12Adapter::drain() {
       manager_->event(e);
   }
 }
+const Hero12Adapter::StepSpec &Hero12Adapter::stepSpec(Step step) {
+  // Indexed by the private Step enum; shared by encode, ACK publication and advancement.
+  static const StepSpec specs[] = {
+      {gopro::Request::HardwareInfo, 0, CameraAckAction::None, Step::None, false},      // None
+      {gopro::Request::HardwareInfo, 0, CameraAckAction::Pair, Step::Claim, false},     // Pair
+      {gopro::Request::HardwareInfo, 0, CameraAckAction::Claim, Step::Hardware, false}, // Claim
+      {gopro::Request::HardwareInfo, 0, CameraAckAction::Hardware, Step::Api, true},    // Hardware
+      {gopro::Request::ApiVersion, 0, CameraAckAction::Api, Step::RegisterBusy, true},  // Api
+      {gopro::Request::RegisterBusy, 8, CameraAckAction::RegisterBusy, Step::RegisterEncoding,
+       true}, // RegisterBusy
+      {gopro::Request::RegisterEncoding, 10, CameraAckAction::RegisterEncoding, Step::RegisterReady,
+       true}, // RegisterEncoding
+      {gopro::Request::RegisterReady, 82, CameraAckAction::RegisterReady, Step::GetBusy,
+       true},                                                                   // RegisterReady
+      {gopro::Request::GetBusy, 8, CameraAckAction::GetBusy, Step::None, true}, // GetBusy
+      {gopro::Request::GetEncoding, 10, CameraAckAction::GetEncoding, Step::GetReady,
+       true},                                                                      // GetEncoding
+      {gopro::Request::GetReady, 82, CameraAckAction::GetReady, Step::None, true}, // GetReady
+      {gopro::Request::Video, 0, CameraAckAction::Video, Step::Shutter, true},     // Video
+      {gopro::Request::ShutterOn, 0, CameraAckAction::ShutterOn, Step::ConfirmEncoding,
+       true}, // Shutter
+      {gopro::Request::GetEncoding, 10, CameraAckAction::ConfirmEncoding, Step::None,
+       true}, // ConfirmEncoding
+      {gopro::Request::GetEncoding, 10, CameraAckAction::QueryEncoding, Step::None,
+       true},                                                                  // QueryEncoding
+      {gopro::Request::KeepAlive, 0, CameraAckAction::None, Step::None, true}, // KeepAlive
+  };
+  const auto index = static_cast<size_t>(step);
+  return specs[index < sizeof(specs) / sizeof(specs[0]) ? index : 0];
+}
+bool Hero12Adapter::preparePacket(uint8_t i, Step step, OutgoingPacket &out) const {
+  const auto &p = peers_[i];
+  if (setupStep(step)) {
+    gopro::SetupPacket encoded;
+    const auto op = step == Step::Pair ? gopro::SetupOperation::PairingFinish
+                                       : gopro::SetupOperation::ClaimExternalControl;
+    if (!gopro::encodeSetup(op, encoded))
+      return false;
+    out.route = encoded.channel;
+    out.id = encoded.feature;
+    out.length = encoded.size;
+    std::memcpy(out.bytes, encoded.bytes, out.length);
+  } else {
+    const auto &spec = stepSpec(step);
+    if (!spec.classic)
+      return false;
+    const auto request =
+        step == Step::Shutter && !p.target_encoding ? gopro::Request::ShutterOff : spec.request;
+    out.status = spec.status;
+    gopro::Packet encoded;
+    if (!gopro::encode(request, encoded))
+      return false;
+    out.route = encoded.channel;
+    out.id = encoded.id;
+    out.length = encoded.size;
+    std::memcpy(out.bytes, encoded.bytes, out.length);
+  }
+  return true;
+}
 bool Hero12Adapter::send(uint8_t i, Step step) {
   auto &p = peers_[i];
   if (p.sealed || p.step != Step::None || !central_.admissionOpen(i))
@@ -353,86 +421,20 @@ bool Hero12Adapter::send(uint8_t i, Step step) {
     p.resume = step;
     step = Step::KeepAlive;
   }
-  uint8_t bytes[20] = {};
-  size_t length = 0;
-  gopro::Channel route = gopro::Channel::Command;
-  uint8_t id = 0, status = 0;
-  if (step == Step::Pair || step == Step::Claim) {
-    gopro::SetupPacket packet;
-    const auto op = step == Step::Pair ? gopro::SetupOperation::PairingFinish
-                                       : gopro::SetupOperation::ClaimExternalControl;
-    if (!gopro::encodeSetup(op, packet))
-      return false;
-    route = packet.channel;
-    id = packet.feature;
-    length = packet.size;
-    std::memcpy(bytes, packet.bytes, length);
-  } else {
-    gopro::Request request = gopro::Request::HardwareInfo;
-    switch (step) {
-    case Step::Hardware:
-      request = gopro::Request::HardwareInfo;
-      break;
-    case Step::Api:
-      request = gopro::Request::ApiVersion;
-      break;
-    case Step::RegisterBusy:
-      request = gopro::Request::RegisterBusy;
-      status = 8;
-      break;
-    case Step::RegisterEncoding:
-      request = gopro::Request::RegisterEncoding;
-      status = 10;
-      break;
-    case Step::RegisterReady:
-      request = gopro::Request::RegisterReady;
-      status = 82;
-      break;
-    case Step::GetBusy:
-      request = gopro::Request::GetBusy;
-      status = 8;
-      break;
-    case Step::GetEncoding:
-    case Step::QueryEncoding:
-    case Step::ConfirmEncoding:
-      request = gopro::Request::GetEncoding;
-      status = 10;
-      break;
-    case Step::GetReady:
-      request = gopro::Request::GetReady;
-      status = 82;
-      break;
-    case Step::Video:
-      request = gopro::Request::Video;
-      break;
-    case Step::Shutter:
-      request = p.target_encoding ? gopro::Request::ShutterOn : gopro::Request::ShutterOff;
-      break;
-    case Step::KeepAlive:
-      request = gopro::Request::KeepAlive;
-      break;
-    default:
-      return false;
-    }
-    gopro::Packet packet;
-    if (!gopro::encode(request, packet))
-      return false;
-    route = packet.channel;
-    id = packet.id;
-    length = packet.size;
-    std::memcpy(bytes, packet.bytes, length);
-  }
-  const uint8_t endpoint = channelEndpoint(route, true);
+  OutgoingPacket out;
+  if (!preparePacket(i, step, out))
+    return false;
+  const uint8_t endpoint = channelEndpoint(out.route, true);
   if (step == Step::Hardware && p.hardware_attempts >= kHardwarePolls)
     return false;
-  if (!central_.write(i, endpoint, bytes, length, clock_.now()))
+  if (!central_.write(i, endpoint, out.bytes, out.length, clock_.now()))
     return false;
   if (step == Step::Hardware)
     ++p.hardware_attempts;
   p.step = step;
-  p.route = route;
-  p.expected_id = id;
-  p.expected_status = status;
+  p.route = out.route;
+  p.expected_id = out.id;
+  p.expected_status = out.status;
   p.write_endpoint = endpoint;
   p.deadline = clock_.now() + kCameraResponseMs;
   p.att_done = p.camera_done = false;
@@ -455,20 +457,58 @@ void Hero12Adapter::observe(uint8_t i, bool value, bool command) {
   e.recording = value ? RecordingState::Recording : RecordingState::Stopped;
   enqueue(e);
 }
-void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::Message &message) {
-  auto &p = peers_[i];
-  // Central dispatches queued notifications before service() checks deadlines.
-  // Retire the expired transaction before any status mutation or wire-ACK hook.
-  if (p.step != Step::None && reached(clock_.now(), p.deadline)) {
-    retire(i, Hero12Fault::Timeout);
-    return;
+bool Hero12Adapter::requestedStatusPresent(const Peer &p, const gopro::Response &r) {
+  switch (p.step) {
+  case Step::GetBusy:
+    return r.busy_known;
+  case Step::GetEncoding:
+  case Step::QueryEncoding:
+  case Step::ConfirmEncoding:
+    return r.encoding_known;
+  case Step::GetReady:
+    return r.ready_known;
+  case Step::RegisterBusy:
+  case Step::RegisterEncoding:
+  case Step::RegisterReady:
+    return registrationStatusPresent(p.expected_status, r);
+  default:
+    return true;
   }
-  if (route == gopro::Channel::Query && message.size >= 2 && message.bytes[0] == 0x93) {
-    const auto r = gopro::decode(route, message);
-    if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
-      retire(i, Hero12Fault::Protocol);
-      return;
-    }
+}
+bool Hero12Adapter::registrationStatusPresent(uint8_t expected, const gopro::Response &r) {
+  const unsigned known = static_cast<unsigned>(r.busy_known) |
+                         (static_cast<unsigned>(r.encoding_known) << 1) |
+                         (static_cast<unsigned>(r.ready_known) << 2);
+  switch (expected) {
+  case 8:
+    return known == 1;
+  case 10:
+    return known == 2;
+  case 82:
+    return known == 4;
+  default:
+    return known == 0;
+  }
+}
+bool Hero12Adapter::setupStep(Step step) { return step == Step::Pair || step == Step::Claim; }
+bool Hero12Adapter::matchesCameraResponse(const Peer &p, gopro::Channel route,
+                                          const gopro::Message &message) {
+  return p.step != Step::None && !p.camera_done && route == p.route && message.size >= 2 &&
+         message.bytes[0] == p.expected_id;
+}
+bool Hero12Adapter::classicResponse(uint8_t i, gopro::Channel route,
+                                    const gopro::Message &message) {
+  auto &p = peers_[i];
+
+  const auto r = gopro::decode(route, message);
+  if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
+    retire(i, r.outcome == gopro::Outcome::Complete ? Hero12Fault::CameraRejected
+                                                    : Hero12Fault::Protocol);
+    return false;
+  }
+  if (p.expected_status) {
+    if (!requestedStatusPresent(p, r))
+      return false;
     if (r.busy_known) {
       p.busy_known = true;
       p.busy = r.busy;
@@ -478,238 +518,125 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
       p.camera_ready = r.ready;
     }
     if (r.encoding_known)
-      observe(i, r.encoding, false);
+      observe(i, r.encoding, p.step == Step::ConfirmEncoding);
+  }
+
+  return true;
+}
+bool Hero12Adapter::completeCameraResponse(uint8_t i, gopro::Channel route,
+                                           const gopro::Message &message) {
+  auto &p = peers_[i];
+  if (setupStep(p.step)) {
+    if (!setupResponse(i, route, message))
+      return false;
+  } else if (p.step == Step::Hardware || p.step == Step::Api) {
+    if (!identityResponse(i, route, message))
+      return false;
+  } else {
+    if (!classicResponse(i, route, message))
+      return false;
+  }
+  return true;
+}
+void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::Message &message) {
+  auto &p = peers_[i];
+  // Central dispatches queued notifications before service() checks deadlines.
+  // Retire the expired transaction before any status mutation or wire-ACK hook.
+  if (p.step != Step::None && reached(clock_.now(), p.deadline)) {
+    retire(i, Hero12Fault::Timeout);
     return;
   }
-  if (p.step == Step::None || p.camera_done || route != p.route || message.size < 2 ||
-      message.bytes[0] != p.expected_id)
+  if (route == gopro::Channel::Query && message.size >= 2 && message.bytes[0] == 0x93) {
+    unsolicitedStatus(i, route, message);
+    return;
+  }
+  if (!matchesCameraResponse(p, route, message))
     return; // Unrelated notification is never a transaction completion.
-  if (p.step == Step::Pair || p.step == Step::Claim) {
-    const auto expected = p.step == Step::Pair ? gopro::SetupOperation::PairingFinish
-                                               : gopro::SetupOperation::ClaimExternalControl;
-    const auto r = gopro::decodeSetup(route, message, expected);
-    if (r.outcome != gopro::Outcome::Complete ||
-        r.domain != gopro::SetupResultDomain::GenericProtobuf || !r.result_present ||
-        !r.known_result || !r.success) {
-      retire(i, r.outcome == gopro::Outcome::Complete ? Hero12Fault::SetupRejected
-                                                      : Hero12Fault::Protocol);
-      return;
-    }
-  } else if (p.step == Step::Hardware || p.step == Step::Api) {
-    const auto r = gopro::decodeIdentity(route, message);
-    if (r.outcome != gopro::Outcome::Complete) {
-      retire(i, Hero12Fault::Protocol);
-      return;
-    }
-    if (p.step == Step::Hardware && r.classic_result != 0) {
-      p.hardware_not_ready = true;
-      p.camera_done = true;
-      return;
-    }
-    if (r.classic_result != 0) {
-      retire(i, Hero12Fault::CameraRejected);
-      return;
-    }
-    if (p.step == Step::Hardware) {
-      const auto f = r.fields[3];
-      if (!r.model_known || r.model != 62 || f.size != p.qualification.firmware_size ||
-          std::memcmp(r.raw.bytes + f.offset, p.qualification.firmware.data(), f.size) != 0) {
-        retire(i, Hero12Fault::IdentityMismatch);
-        return;
-      }
-    } else if (!r.api_known || r.api_major != p.qualification.api_major ||
-               r.api_minor != p.qualification.api_minor) {
-      retire(i, Hero12Fault::IdentityMismatch);
-      return;
-    }
-  } else {
-    const auto r = gopro::decode(route, message);
-    if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
-      retire(i, r.outcome == gopro::Outcome::Complete ? Hero12Fault::CameraRejected
-                                                      : Hero12Fault::Protocol);
-      return;
-    }
-    if (p.expected_status) {
-      if ((p.step == Step::GetBusy && !r.busy_known) ||
-          ((p.step == Step::GetEncoding || p.step == Step::QueryEncoding ||
-            p.step == Step::ConfirmEncoding) &&
-           !r.encoding_known) ||
-          (p.step == Step::GetReady && !r.ready_known))
-        return; // A same-ID query without its requested status cannot complete.
-      if (p.step == Step::RegisterBusy || p.step == Step::RegisterEncoding ||
-          p.step == Step::RegisterReady) {
-        if ((p.expected_status == 8 && !r.busy_known) ||
-            (p.expected_status == 10 && !r.encoding_known) ||
-            (p.expected_status == 82 && !r.ready_known))
-          return; // Successful Register must echo the requested status element.
-        if ((r.busy_known && p.expected_status != 8) ||
-            (r.encoding_known && p.expected_status != 10) ||
-            (r.ready_known && p.expected_status != 82))
-          return;
-      }
-      if (r.busy_known) {
-        p.busy_known = true;
-        p.busy = r.busy;
-      }
-      if (r.ready_known) {
-        p.ready_known = true;
-        p.camera_ready = r.ready;
-      }
-      if (r.encoding_known)
-        observe(i, r.encoding, p.step == Step::ConfirmEncoding);
-    }
-  }
-  if (manager_ && p.step != Step::KeepAlive) {
-    CameraAckDomain domain = (p.step == Step::Pair || p.step == Step::Claim)
-                                 ? CameraAckDomain::Protobuf
-                                 : CameraAckDomain::Classic;
-    CameraAckAction action = CameraAckAction::None;
-    switch (p.step) {
-    case Step::Pair:
-      action = CameraAckAction::Pair;
-      break;
-    case Step::Claim:
-      action = CameraAckAction::Claim;
-      break;
-    case Step::Hardware:
-      action = CameraAckAction::Hardware;
-      break;
-    case Step::Api:
-      action = CameraAckAction::Api;
-      break;
-    case Step::RegisterBusy:
-      action = CameraAckAction::RegisterBusy;
-      break;
-    case Step::RegisterEncoding:
-      action = CameraAckAction::RegisterEncoding;
-      break;
-    case Step::RegisterReady:
-      action = CameraAckAction::RegisterReady;
-      break;
-    case Step::GetBusy:
-      action = CameraAckAction::GetBusy;
-      break;
-    case Step::GetEncoding:
-      action = CameraAckAction::GetEncoding;
-      break;
-    case Step::GetReady:
-      action = CameraAckAction::GetReady;
-      break;
-    case Step::Video:
-      action = CameraAckAction::Video;
-      break;
-    case Step::Shutter:
-      action = p.target_encoding ? CameraAckAction::ShutterOn : CameraAckAction::ShutterOff;
-      break;
-    case Step::ConfirmEncoding:
-      action = CameraAckAction::ConfirmEncoding;
-      break;
-    case Step::QueryEncoding:
-      action = CameraAckAction::QueryEncoding;
-      break;
-    default:
-      break;
-    }
-    manager_->wireAck(i, p.token, domain, action);
-  }
+  if (!completeCameraResponse(i, route, message))
+    return;
+  publishWireAck(i);
   p.camera_done = true;
 }
-void Hero12Adapter::advance(uint8_t i) {
+Hero12Adapter::Step Hero12Adapter::advanceHardware(uint8_t i) {
   auto &p = peers_[i];
-  if (p.sealed || p.step == Step::None || !p.att_done || !p.camera_done ||
-      !central_.admissionOpen(i))
-    return;
-  const Step done = p.step;
-  p.step = Step::None;
-  Step next = Step::None;
-  switch (done) {
-  case Step::Pair:
-    next = Step::Claim;
-    break;
-  case Step::Claim:
-    next = Step::Hardware;
-    break;
-  case Step::Hardware:
-    if (p.hardware_not_ready) {
-      p.hardware_not_ready = false;
-      if (p.hardware_attempts == kHardwarePolls) {
-        retire(i, Hero12Fault::Timeout);
-        return;
-      }
-      p.hardware_retry_due = clock_.now() + kHardwarePollMs;
-      return;
+  if (p.hardware_not_ready) {
+    p.hardware_not_ready = false;
+    if (p.hardware_attempts == kHardwarePolls) {
+      retire(i, Hero12Fault::Timeout);
+      return Step::None;
     }
-    next = Step::Api;
-    break;
-  case Step::Api:
-    next = Step::RegisterBusy;
-    break;
-  case Step::RegisterBusy:
-    next = Step::RegisterEncoding;
-    break;
-  case Step::RegisterEncoding:
-    next = Step::RegisterReady;
-    break;
-  case Step::RegisterReady:
-    next = Step::GetBusy;
-    break;
+    p.hardware_retry_due = clock_.now() + kHardwarePollMs;
+    return Step::None;
+  }
+  return Step::Api;
+  return Step::None;
+}
+Hero12Adapter::Step Hero12Adapter::advanceReady(uint8_t i) {
+  auto &p = peers_[i];
+  if (p.connecting) {
+    if (!p.busy_known || !p.encoding_known || !p.ready_known) {
+      retire(i, Hero12Fault::Protocol);
+      return Step::None;
+    }
+    p.connecting = false;
+    p.ready = true;
+    p.keepalive_due = clock_.now() + kKeepAliveMs;
+    Event e(i, p.token, EventKind::Completed);
+    e.capabilities.start = e.capabilities.stop = e.capabilities.query = CapabilityState::Supported;
+    enqueue(e);
+    // Publish initial state only after the manager accepts Connect completion.
+    Event observed(i, p.connection, EventKind::RecordingObserved);
+    observed.recording = p.encoding ? RecordingState::Recording : RecordingState::Stopped;
+    enqueue(observed);
+    return Step::None;
+  }
+  if (p.operation == Operation::Start) {
+    if (p.busy || !p.camera_ready || p.encoding) {
+      retire(i, Hero12Fault::CameraRejected);
+      return Step::None;
+    }
+    return Step::Video;
+  }
+  return Step::None;
+}
+Hero12Adapter::Step Hero12Adapter::advanceQuery(uint8_t i) {
+  auto &p = peers_[i];
+  if (p.operation == Operation::Query) {
+    enqueue(Event(i, p.token, EventKind::Completed));
+    return Step::None;
+  }
+  if (p.encoding == p.target_encoding) {
+    enqueue(Event(i, p.token, EventKind::Completed));
+    return Step::None;
+  }
+  return p.operation == Operation::Start ? Step::GetBusy : Step::Shutter;
+  return Step::None;
+}
+Hero12Adapter::Step Hero12Adapter::advanceConfirmation(uint8_t i) {
+  auto &p = peers_[i];
+  if (p.encoding != p.target_encoding) {
+    retire(i, Hero12Fault::CameraRejected);
+    return Step::None;
+  }
+  enqueue(Event(i, p.token, EventKind::Completed));
+  return Step::None;
+  return Step::None;
+}
+Hero12Adapter::Step Hero12Adapter::nextStep(uint8_t i, Step done) {
+  auto &p = peers_[i];
+  Step next = stepSpec(done).next;
+  switch (done) {
+  case Step::Hardware:
+    return advanceHardware(i);
   case Step::GetBusy:
     next = p.connecting ? Step::GetEncoding : Step::GetReady;
     break;
-  case Step::GetEncoding:
-    next = Step::GetReady;
-    break;
   case Step::GetReady:
-    if (p.connecting) {
-      if (!p.busy_known || !p.encoding_known || !p.ready_known) {
-        retire(i, Hero12Fault::Protocol);
-        return;
-      }
-      p.connecting = false;
-      p.ready = true;
-      p.keepalive_due = clock_.now() + kKeepAliveMs;
-      Event e(i, p.token, EventKind::Completed);
-      e.capabilities.start = e.capabilities.stop = e.capabilities.query =
-          CapabilityState::Supported;
-      enqueue(e);
-      // Publish initial state only after the manager accepts Connect completion.
-      Event observed(i, p.connection, EventKind::RecordingObserved);
-      observed.recording = p.encoding ? RecordingState::Recording : RecordingState::Stopped;
-      enqueue(observed);
-      return;
-    }
-    if (p.operation == Operation::Start) {
-      if (p.busy || !p.camera_ready || p.encoding) {
-        retire(i, Hero12Fault::CameraRejected);
-        return;
-      }
-      next = Step::Video;
-    }
-    break;
+    return advanceReady(i);
   case Step::QueryEncoding:
-    if (p.operation == Operation::Query) {
-      enqueue(Event(i, p.token, EventKind::Completed));
-      return;
-    }
-    if (p.encoding == p.target_encoding) {
-      enqueue(Event(i, p.token, EventKind::Completed));
-      return;
-    }
-    next = p.operation == Operation::Start ? Step::GetBusy : Step::Shutter;
-    break;
-  case Step::Video:
-    next = Step::Shutter;
-    break;
-  case Step::Shutter:
-    next = Step::ConfirmEncoding;
-    break;
+    return advanceQuery(i);
   case Step::ConfirmEncoding:
-    if (p.encoding != p.target_encoding) {
-      retire(i, Hero12Fault::CameraRejected);
-      return;
-    }
-    enqueue(Event(i, p.token, EventKind::Completed));
-    return;
+    return advanceConfirmation(i);
   case Step::KeepAlive:
     p.keepalive_due = clock_.now() + kKeepAliveMs;
     next = p.resume;
@@ -718,37 +645,322 @@ void Hero12Adapter::advance(uint8_t i) {
   default:
     break;
   }
+  return next;
+}
+void Hero12Adapter::advance(uint8_t i) {
+  auto &p = peers_[i];
+  if (!acknowledged(i))
+    return;
+  const auto done = p.step;
+  p.step = Step::None;
+  const auto next = nextStep(i, done);
   if (next != Step::None && !send(i, next))
     retire(i, Hero12Fault::DeliveryUncertain);
 }
-void Hero12Adapter::result(const BleResult &r) {
-  if (r.kind == BleResultKind::Advertisement && scan_owner_ < kBlePeers &&
-      r.event.generation == scan_generation_) {
-    auto &recovery = recovery_[scan_owner_];
-    const auto &identity = peers_[scan_owner_].qualification.identity;
-    if (recovery.state.phase == Hero12RecoveryPhase::Scanning &&
-        (r.event.advertisement_type == BleAdvertisementType::ConnectableUndirected ||
-         r.event.advertisement_type == BleAdvertisementType::ConnectableDirected) &&
-        r.event.identity.type == identity.type && r.event.identity.address == identity.address &&
-        hasFea6(r.event)) {
-      recovery.observed_advertisement = true;
-      central_.cancelScan();
-    }
+bool Hero12Adapter::acknowledged(uint8_t i) const {
+  const auto &p = peers_[i];
+  return !p.sealed && p.step != Step::None && p.att_done && p.camera_done &&
+         central_.admissionOpen(i);
+}
+
+void Hero12Adapter::notification(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+
+  gopro::Channel route;
+  switch (r.endpoint) {
+  case 1:
+    route = gopro::Channel::Command;
+    break;
+  case 3:
+    route = gopro::Channel::Settings;
+    break;
+  case 5:
+    route = gopro::Channel::Query;
+    break;
+  case 7:
+    route = gopro::Channel::Management;
+    break;
+  default:
+    retire(i, Hero12Fault::Protocol);
     return;
   }
-  if (r.kind == BleResultKind::ScanComplete && scan_owner_ < kBlePeers &&
-      r.event.generation == scan_generation_) {
-    auto &recovery = recovery_[scan_owner_];
-    scan_owner_ = kBlePeers;
-    if (recovery.state.phase == Hero12RecoveryPhase::Scanning) {
-      if (recovery.observed_advertisement)
-        recovery.state.phase = Hero12RecoveryPhase::Connecting;
-      else if (r.fault == BleFault::Host || r.fault == BleFault::Overflow)
-        recovery.state.phase = Hero12RecoveryPhase::Failed;
-      else
-        recovery.state.phase = recovery.state.scans == 2 ? Hero12RecoveryPhase::Unavailable
-                                                         : Hero12RecoveryPhase::Pending;
+  gopro::Message message;
+  const auto outcome =
+      reassembler_.feed(i, route, r.event.bytes.data(), r.event.size, clock_.now(), message);
+  if (outcome == gopro::Outcome::Pending) {
+    if (p.fragment && p.fragment_route != route) {
+      retire(i, Hero12Fault::Protocol);
+      return;
     }
+    if (!p.fragment) {
+      p.fragment_started = clock_.now();
+      p.fragment_route = route;
+    }
+    p.fragment = true;
+  } else if (outcome == gopro::Outcome::Complete) {
+    if (p.fragment && p.fragment_route == route)
+      p.fragment = false;
+    cameraMessage(i, route, message);
+  } else {
+    retire(i, Hero12Fault::Protocol);
+  }
+}
+void Hero12Adapter::writeComplete(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+
+  if (p.waiting_write && r.endpoint == p.write_endpoint && p.step != Step::None) {
+    p.att_done = true;
+    p.waiting_write = false;
+  }
+}
+bool Hero12Adapter::setupResponse(uint8_t i, gopro::Channel route, const gopro::Message &message) {
+  auto &p = peers_[i];
+
+  const auto expected = p.step == Step::Pair ? gopro::SetupOperation::PairingFinish
+                                             : gopro::SetupOperation::ClaimExternalControl;
+  const auto r = gopro::decodeSetup(route, message, expected);
+  if (r.outcome != gopro::Outcome::Complete ||
+      r.domain != gopro::SetupResultDomain::GenericProtobuf || !r.result_present ||
+      !r.known_result || !r.success) {
+    retire(i, r.outcome == gopro::Outcome::Complete ? Hero12Fault::SetupRejected
+                                                    : Hero12Fault::Protocol);
+    return false;
+  }
+
+  return true;
+}
+bool Hero12Adapter::identityResponse(uint8_t i, gopro::Channel route,
+                                     const gopro::Message &message) {
+  auto &p = peers_[i];
+
+  const auto r = gopro::decodeIdentity(route, message);
+  if (r.outcome != gopro::Outcome::Complete) {
+    retire(i, Hero12Fault::Protocol);
+    return false;
+  }
+  if (p.step == Step::Hardware && r.classic_result != 0) {
+    p.hardware_not_ready = true;
+    p.camera_done = true;
+    return false;
+  }
+  if (r.classic_result != 0) {
+    retire(i, Hero12Fault::CameraRejected);
+    return false;
+  }
+  if (p.step == Step::Hardware) {
+    const auto f = r.fields[3];
+    if (!r.model_known || r.model != 62 || f.size != p.qualification.firmware_size ||
+        std::memcmp(r.raw.bytes + f.offset, p.qualification.firmware.data(), f.size) != 0) {
+      retire(i, Hero12Fault::IdentityMismatch);
+      return false;
+    }
+  } else if (!r.api_known || r.api_major != p.qualification.api_major ||
+             r.api_minor != p.qualification.api_minor) {
+    retire(i, Hero12Fault::IdentityMismatch);
+    return false;
+  }
+
+  return true;
+}
+void Hero12Adapter::publishWireAck(uint8_t i) {
+  auto &p = peers_[i];
+  if (!manager_ || p.step == Step::KeepAlive)
+    return;
+
+  CameraAckDomain domain =
+      (setupStep(p.step)) ? CameraAckDomain::Protobuf : CameraAckDomain::Classic;
+  const auto action = p.step == Step::Shutter && !p.target_encoding ? CameraAckAction::ShutterOff
+                                                                    : stepSpec(p.step).ack;
+  manager_->wireAck(i, p.token, domain, action);
+}
+void Hero12Adapter::unsolicitedStatus(uint8_t i, gopro::Channel route,
+                                      const gopro::Message &message) {
+  auto &p = peers_[i];
+
+  const auto r = gopro::decode(route, message);
+  if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
+    retire(i, Hero12Fault::Protocol);
+    return;
+  }
+  if (r.busy_known) {
+    p.busy_known = true;
+    p.busy = r.busy;
+  }
+  if (r.ready_known) {
+    p.ready_known = true;
+    p.camera_ready = r.ready;
+  }
+  if (r.encoding_known)
+    observe(i, r.encoding, false);
+  return;
+}
+bool Hero12Adapter::failedRecoveryOperation(uint8_t i) {
+  auto &r = recovery_[i];
+  const auto *state = manager_->state(i);
+  if (state->token.connection == r.connection && state->token.operation == r.operation &&
+      state->lifecycle != Lifecycle::Idle && state->lifecycle != Lifecycle::Failed)
+    return false;
+  r.state.phase = peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
+                      ? Hero12RecoveryPhase::Timeout
+                      : Hero12RecoveryPhase::Failed;
+  return true;
+}
+void Hero12Adapter::requestRecoveryOperation(uint8_t i, Operation operation) {
+  auto &r = recovery_[i];
+  const auto *state = manager_->state(i);
+  if (operation != Operation::Connect) {
+    if (state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed ||
+        peers_[i].sealed || !peers_[i].ready) {
+      r.state.phase = Hero12RecoveryPhase::Failed;
+      return;
+    }
+    // Never queue behind a competing owner or overlap serialized keepalive.
+    if (state->lifecycle != Lifecycle::Ready || peers_[i].step != Step::None ||
+        !central_.admissionOpen(i))
+      return;
+  }
+  if (manager_->request(i, operation) != CameraError::None) {
+    r.state.phase = Hero12RecoveryPhase::Failed;
+    return;
+  }
+  state = manager_->state(i);
+  r.operation = state->token.operation;
+  r.connection = state->token.connection;
+}
+void Hero12Adapter::finishRecoveryObservation(uint8_t i, bool require_known) {
+  auto &r = recovery_[i];
+  const auto *state = manager_->state(i);
+  if (!state->has_observation || (require_known && state->observed == RecordingState::Unknown))
+    r.state.phase = Hero12RecoveryPhase::Unavailable;
+  else if (!r.ensure_recording)
+    r.state.phase = Hero12RecoveryPhase::Ready;
+  else if (state->observed == RecordingState::Recording)
+    r.state.phase = Hero12RecoveryPhase::Recording;
+  else {
+    r.state.phase = Hero12RecoveryPhase::Starting;
+    r.operation = 0;
+  }
+}
+void Hero12Adapter::recoveryConnect(uint8_t i) {
+  auto &r = recovery_[i];
+  const auto *state = manager_->state(i);
+  if (!r.operation) {
+    requestRecoveryOperation(i, Operation::Connect);
+    return;
+  }
+  if (failedRecoveryOperation(i))
+    return;
+  if (state->lifecycle == Lifecycle::Ready) {
+    finishRecoveryObservation(i, false);
+  }
+}
+void Hero12Adapter::recoveryObserve(uint8_t i) {
+  auto &r = recovery_[i];
+  const auto *state = manager_->state(i);
+  if (!r.operation) {
+    requestRecoveryOperation(i, Operation::Query);
+    return;
+  }
+  if (failedRecoveryOperation(i))
+    return;
+  if (state->lifecycle == Lifecycle::Ready && state->token.operation == r.operation) {
+    finishRecoveryObservation(i, true);
+  }
+}
+void Hero12Adapter::recoveryStart(uint8_t i) {
+  auto &r = recovery_[i];
+  const auto *state = manager_->state(i);
+  if (!r.operation) {
+    requestRecoveryOperation(i, Operation::Start);
+    return;
+  }
+  if (failedRecoveryOperation(i))
+    return;
+  if (state->lifecycle == Lifecycle::Ready && state->token.operation == r.operation) {
+    r.state.phase = state->has_observation && state->observed == RecordingState::Recording
+                        ? Hero12RecoveryPhase::Recording
+                        : Hero12RecoveryPhase::Unavailable;
+  }
+}
+void Hero12Adapter::recoveryAdvertisement(const BleResult &r) {
+
+  auto &recovery = recovery_[scan_owner_];
+  const auto &identity = peers_[scan_owner_].qualification.identity;
+  if (recovery.state.phase == Hero12RecoveryPhase::Scanning &&
+      (r.event.advertisement_type == BleAdvertisementType::ConnectableUndirected ||
+       r.event.advertisement_type == BleAdvertisementType::ConnectableDirected) &&
+      r.event.identity.type == identity.type && r.event.identity.address == identity.address &&
+      hasFea6(r.event)) {
+    recovery.observed_advertisement = true;
+    central_.cancelScan();
+  }
+  return;
+}
+void Hero12Adapter::recoveryScanComplete(const BleResult &r) {
+
+  auto &recovery = recovery_[scan_owner_];
+  scan_owner_ = kBlePeers;
+  if (recovery.state.phase == Hero12RecoveryPhase::Scanning) {
+    if (recovery.observed_advertisement)
+      recovery.state.phase = Hero12RecoveryPhase::Connecting;
+    else if (r.fault == BleFault::Host || r.fault == BleFault::Overflow)
+      recovery.state.phase = Hero12RecoveryPhase::Failed;
+    else
+      recovery.state.phase = recovery.state.scans == 2 ? Hero12RecoveryPhase::Unavailable
+                                                       : Hero12RecoveryPhase::Pending;
+  }
+  return;
+}
+void Hero12Adapter::transportClosed(const BleResult &r) {
+  const auto i = r.event.peer;
+
+  Hero12Fault fault = Hero12Fault::Transport;
+  switch (r.fault) {
+  case BleFault::Store:
+    fault = Hero12Fault::Store;
+    break;
+  case BleFault::MissingService:
+    fault = Hero12Fault::MissingService;
+    break;
+  case BleFault::MissingProperty:
+    fault = Hero12Fault::MissingProperty;
+    break;
+  case BleFault::MissingCccd:
+    fault = Hero12Fault::MissingCccd;
+    break;
+  case BleFault::Att:
+    fault = Hero12Fault::Att;
+    break;
+  case BleFault::Timeout:
+    fault = Hero12Fault::Timeout;
+    break;
+  default:
+    break;
+  }
+  retire(i, fault);
+  return;
+}
+void Hero12Adapter::transportEvent(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+  if (r.kind == BleResultKind::TransportReady) {
+    if (!p.connecting || !send(i, Step::Pair))
+      retire(i, Hero12Fault::DeliveryUncertain);
+  } else if (r.kind == BleResultKind::WriteComplete) {
+    writeComplete(i, r);
+  } else if (r.kind == BleResultKind::Notification) {
+    notification(i, r);
+  }
+}
+bool Hero12Adapter::ownsScanResult(const BleResult &r) const {
+  return scan_owner_ < kBlePeers && r.event.generation == scan_generation_;
+}
+void Hero12Adapter::result(const BleResult &r) {
+  if (r.kind == BleResultKind::Advertisement && ownsScanResult(r)) {
+    recoveryAdvertisement(r);
+    return;
+  }
+  if (r.kind == BleResultKind::ScanComplete && ownsScanResult(r)) {
+    recoveryScanComplete(r);
     return;
   }
   const uint8_t i = r.event.peer;
@@ -758,224 +970,102 @@ void Hero12Adapter::result(const BleResult &r) {
   if (r.event.generation != p.connection)
     return;
   if (r.kind == BleResultKind::Retired || r.kind == BleResultKind::LinkClosed) {
-    Hero12Fault fault = Hero12Fault::Transport;
-    switch (r.fault) {
-    case BleFault::Store:
-      fault = Hero12Fault::Store;
-      break;
-    case BleFault::MissingService:
-      fault = Hero12Fault::MissingService;
-      break;
-    case BleFault::MissingProperty:
-      fault = Hero12Fault::MissingProperty;
-      break;
-    case BleFault::MissingCccd:
-      fault = Hero12Fault::MissingCccd;
-      break;
-    case BleFault::Att:
-      fault = Hero12Fault::Att;
-      break;
-    case BleFault::Timeout:
-      fault = Hero12Fault::Timeout;
-      break;
-    default:
-      break;
-    }
-    retire(i, fault);
+    transportClosed(r);
     return;
   }
   if (p.sealed)
     return;
-  if (r.kind == BleResultKind::TransportReady) {
-    if (!p.connecting || !send(i, Step::Pair))
-      retire(i, Hero12Fault::DeliveryUncertain);
-  } else if (r.kind == BleResultKind::WriteComplete) {
-    if (p.waiting_write && r.endpoint == p.write_endpoint && p.step != Step::None) {
-      p.att_done = true;
-      p.waiting_write = false;
-    }
-  } else if (r.kind == BleResultKind::Notification) {
-    gopro::Channel route;
-    switch (r.endpoint) {
-    case 1:
-      route = gopro::Channel::Command;
-      break;
-    case 3:
-      route = gopro::Channel::Settings;
-      break;
-    case 5:
-      route = gopro::Channel::Query;
-      break;
-    case 7:
-      route = gopro::Channel::Management;
-      break;
-    default:
-      retire(i, Hero12Fault::Protocol);
-      return;
-    }
-    gopro::Message message;
-    const auto outcome =
-        reassembler_.feed(i, route, r.event.bytes.data(), r.event.size, clock_.now(), message);
-    if (outcome == gopro::Outcome::Pending) {
-      if (p.fragment && p.fragment_route != route) {
-        retire(i, Hero12Fault::Protocol);
-        return;
+  transportEvent(i, r);
+}
+void Hero12Adapter::advanceRecoveryPeer(uint8_t i) {
+
+  auto &r = recovery_[i];
+  const auto phase = r.state.phase;
+  if (!activeRecoveryPhase(phase))
+    return;
+  if (reached(clock_.now(), r.deadline)) {
+    cancelRecovery(i);
+    r.state.phase = Hero12RecoveryPhase::Timeout;
+    return;
+  }
+  const auto *state = manager_->state(i);
+  if (!r.operation && phase != Hero12RecoveryPhase::Starting &&
+      state->token.connection != r.source_connection) {
+    cancelRecovery(i);
+    r.state.phase = Hero12RecoveryPhase::Failed;
+    return;
+  }
+  if (phase == Hero12RecoveryPhase::Connecting) {
+    recoveryConnect(i);
+  } else if (phase == Hero12RecoveryPhase::Observing) {
+    recoveryObserve(i);
+  } else if (phase == Hero12RecoveryPhase::Starting) {
+    recoveryStart(i);
+  }
+}
+void Hero12Adapter::beginRecoveryScan() {
+  if (maintenance_scan_ || scan_owner_ != kBlePeers)
+    return;
+  for (uint8_t n = 0; n < kBlePeers; ++n) {
+    const uint8_t i = (scan_cursor_ + n) % kBlePeers;
+    auto &r = recovery_[i];
+    if (r.state.phase != Hero12RecoveryPhase::Pending)
+      continue;
+    const auto link = central_.phase(i);
+    if (link != BlePhase::Empty && link != BlePhase::Closed)
+      continue; // A retired connection must release its host lease before rediscovery.
+    const uint32_t before = central_.scanGeneration();
+    const bool admitted = central_.scan(3000, clock_.now());
+    if (central_.scanGeneration() != before) {
+      ++r.state.scans;
+      scan_cursor_ = (i + 1) % kBlePeers;
+      if (admitted) {
+        r.state.phase = Hero12RecoveryPhase::Scanning;
+        r.observed_advertisement = false;
+        scan_owner_ = i;
+        scan_generation_ = central_.scanGeneration();
+      } else {
+        // submit() owned a generation even when it failed synchronously. The
+        // central keeps that context until its host barrier; never retry it.
+        r.state.phase = Hero12RecoveryPhase::Failed;
       }
-      if (!p.fragment) {
-        p.fragment_started = clock_.now();
-        p.fragment_route = route;
-      }
-      p.fragment = true;
-    } else if (outcome == gopro::Outcome::Complete) {
-      if (p.fragment && p.fragment_route == route)
-        p.fragment = false;
-      cameraMessage(i, route, message);
-    } else {
-      retire(i, Hero12Fault::Protocol);
     }
+    break;
   }
 }
 void Hero12Adapter::advanceRecovery() {
   for (uint8_t i = 0; i < kBlePeers; ++i) {
-    auto &r = recovery_[i];
-    const auto phase = r.state.phase;
-    if (phase != Hero12RecoveryPhase::Pending && phase != Hero12RecoveryPhase::Scanning &&
-        phase != Hero12RecoveryPhase::Connecting && phase != Hero12RecoveryPhase::Observing &&
-        phase != Hero12RecoveryPhase::Starting)
-      continue;
-    if (reached(clock_.now(), r.deadline)) {
-      cancelRecovery(i);
-      r.state.phase = Hero12RecoveryPhase::Timeout;
-      continue;
-    }
-    const auto *state = manager_->state(i);
-    if (!r.operation && phase != Hero12RecoveryPhase::Starting &&
-        state->token.connection != r.source_connection) {
-      cancelRecovery(i);
-      r.state.phase = Hero12RecoveryPhase::Failed;
-      continue;
-    }
-    if (phase == Hero12RecoveryPhase::Connecting) {
-      if (!r.operation) {
-        if (manager_->request(i, Operation::Connect) != CameraError::None) {
-          r.state.phase = Hero12RecoveryPhase::Failed;
-          continue;
-        }
-        state = manager_->state(i);
-        r.operation = state->token.operation;
-        r.connection = state->token.connection;
-      } else if (state->token.connection != r.connection || state->token.operation != r.operation ||
-                 state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed) {
-        r.state.phase =
-            peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
-                ? Hero12RecoveryPhase::Timeout
-                : Hero12RecoveryPhase::Failed;
-      } else if (state->lifecycle == Lifecycle::Ready) {
-        if (!state->has_observation) {
-          r.state.phase = Hero12RecoveryPhase::Unavailable;
-        } else if (!r.ensure_recording) {
-          r.state.phase = Hero12RecoveryPhase::Ready;
-        } else if (state->observed == RecordingState::Recording) {
-          r.state.phase = Hero12RecoveryPhase::Recording;
-        } else {
-          r.state.phase = Hero12RecoveryPhase::Starting;
-          r.operation = 0;
-        }
-      }
-    } else if (phase == Hero12RecoveryPhase::Observing) {
-      if (!r.operation) {
-        if (state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed ||
-            peers_[i].sealed || !peers_[i].ready) {
-          r.state.phase = Hero12RecoveryPhase::Failed;
-          continue;
-        }
-        // CameraManager::request queues behind an active operation. Never take
-        // that path or overlap the profile's serialized keepalive transaction.
-        if (state->lifecycle != Lifecycle::Ready || peers_[i].step != Step::None ||
-            !central_.admissionOpen(i))
-          continue;
-        if (manager_->request(i, Operation::Query) != CameraError::None) {
-          r.state.phase = Hero12RecoveryPhase::Failed;
-          continue;
-        }
-        r.operation = manager_->state(i)->token.operation;
-        r.connection = manager_->state(i)->token.connection;
-      } else if (state->token.connection != r.connection || state->token.operation != r.operation ||
-                 state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed) {
-        r.state.phase =
-            peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
-                ? Hero12RecoveryPhase::Timeout
-                : Hero12RecoveryPhase::Failed;
-      } else if (state->lifecycle == Lifecycle::Ready && state->token.operation == r.operation) {
-        if (!state->has_observation || state->observed == RecordingState::Unknown)
-          r.state.phase = Hero12RecoveryPhase::Unavailable;
-        else if (!r.ensure_recording)
-          r.state.phase = Hero12RecoveryPhase::Ready;
-        else if (state->observed == RecordingState::Recording)
-          r.state.phase = Hero12RecoveryPhase::Recording;
-        else {
-          r.state.phase = Hero12RecoveryPhase::Starting;
-          r.operation = 0;
-        }
-      }
-    } else if (phase == Hero12RecoveryPhase::Starting) {
-      if (!r.operation) {
-        if (state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed ||
-            peers_[i].sealed || !peers_[i].ready) {
-          r.state.phase = Hero12RecoveryPhase::Failed;
-          continue;
-        }
-        // If another owner operated between observe and Start, wait for its
-        // completion. Start itself always re-queries Encoding before shutter.
-        if (state->lifecycle != Lifecycle::Ready || peers_[i].step != Step::None ||
-            !central_.admissionOpen(i))
-          continue;
-        if (manager_->request(i, Operation::Start) != CameraError::None) {
-          r.state.phase = Hero12RecoveryPhase::Failed;
-          continue;
-        }
-        r.operation = manager_->state(i)->token.operation;
-        r.connection = manager_->state(i)->token.connection;
-      } else if (state->token.connection != r.connection || state->token.operation != r.operation ||
-                 state->lifecycle == Lifecycle::Idle || state->lifecycle == Lifecycle::Failed) {
-        r.state.phase =
-            peers_[i].fault == Hero12Fault::Timeout || state->error == CameraError::Timeout
-                ? Hero12RecoveryPhase::Timeout
-                : Hero12RecoveryPhase::Failed;
-      } else if (state->lifecycle == Lifecycle::Ready && state->token.operation == r.operation) {
-        r.state.phase = state->has_observation && state->observed == RecordingState::Recording
-                            ? Hero12RecoveryPhase::Recording
-                            : Hero12RecoveryPhase::Unavailable;
-      }
-    }
+    advanceRecoveryPeer(i);
   }
-  if (!maintenance_scan_ && scan_owner_ == kBlePeers)
-    for (uint8_t n = 0; n < kBlePeers; ++n) {
-      const uint8_t i = (scan_cursor_ + n) % kBlePeers;
-      auto &r = recovery_[i];
-      if (r.state.phase != Hero12RecoveryPhase::Pending)
-        continue;
-      const auto link = central_.phase(i);
-      if (link != BlePhase::Empty && link != BlePhase::Closed)
-        continue; // A retired connection must release its host lease before rediscovery.
-      const uint32_t before = central_.scanGeneration();
-      const bool admitted = central_.scan(3000, clock_.now());
-      if (central_.scanGeneration() != before) {
-        ++r.state.scans;
-        scan_cursor_ = (i + 1) % kBlePeers;
-        if (admitted) {
-          r.state.phase = Hero12RecoveryPhase::Scanning;
-          r.observed_advertisement = false;
-          scan_owner_ = i;
-          scan_generation_ = central_.scanGeneration();
-        } else {
-          // submit() owned a generation even when it failed synchronously. The
-          // central keeps that context until its host barrier; never retry it.
-          r.state.phase = Hero12RecoveryPhase::Failed;
-        }
-      }
-      break;
-    }
+  beginRecoveryScan();
+}
+bool Hero12Adapter::hardwareRetryReady(uint8_t i) const {
+  const auto &p = peers_[i];
+  return p.connecting && p.hardware_retry_due && reached(clock_.now(), p.hardware_retry_due) &&
+         central_.admissionOpen(i);
+}
+void Hero12Adapter::servicePeer(uint8_t i) {
+  auto &p = peers_[i];
+  if (p.sealed)
+    return;
+  if ((p.fragment && reached(clock_.now(), p.fragment_started + 1000)) ||
+      (p.step != Step::None && reached(clock_.now(), p.deadline))) {
+    retire(i, Hero12Fault::Timeout);
+    return;
+  }
+  if (p.step != Step::None) {
+    advance(i);
+    return;
+  }
+  if (hardwareRetryReady(i)) {
+    p.hardware_retry_due = 0;
+    if (!send(i, Step::Hardware))
+      retire(i, Hero12Fault::DeliveryUncertain);
+    return;
+  }
+  if (p.ready && reached(clock_.now(), p.keepalive_due) && central_.admissionOpen(i) &&
+      !send(i, Step::KeepAlive))
+    retire(i, Hero12Fault::DeliveryUncertain);
 }
 void Hero12Adapter::service(CameraServiceAction *action, bool advance_managers) {
   if (servicing_)
@@ -986,24 +1076,7 @@ void Hero12Adapter::service(CameraServiceAction *action, bool advance_managers) 
   central_.service(clock_.now());
   for (uint8_t n = 0; n < kBlePeers; ++n) {
     const uint8_t i = (cursor_ + n) % kBlePeers;
-    auto &p = peers_[i];
-    if (p.sealed)
-      continue;
-    if ((p.fragment && reached(clock_.now(), p.fragment_started + 1000)) ||
-        (p.step != Step::None && reached(clock_.now(), p.deadline))) {
-      retire(i, Hero12Fault::Timeout);
-      continue;
-    }
-    if (p.step != Step::None)
-      advance(i);
-    else if (p.connecting && p.hardware_retry_due && reached(clock_.now(), p.hardware_retry_due) &&
-             central_.admissionOpen(i)) {
-      p.hardware_retry_due = 0;
-      if (!send(i, Step::Hardware))
-        retire(i, Hero12Fault::DeliveryUncertain);
-    } else if (p.ready && reached(clock_.now(), p.keepalive_due) && central_.admissionOpen(i) &&
-               !send(i, Step::KeepAlive))
-      retire(i, Hero12Fault::DeliveryUncertain);
+    servicePeer(i);
   }
   cursor_ = (cursor_ + 1) % kBlePeers;
   drain(); // Connection-scoped Disconnected precedes every manager tick.

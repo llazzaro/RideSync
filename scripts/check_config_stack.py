@@ -20,15 +20,22 @@ for artifact in (build / "firmware.elf", build / "src/config_storage.cpp.o", bui
             if name.startswith("_Z") and "$" in name:
                 base, suffix = name.split("$", 1)
                 name = subprocess.check_output([str(objdump.with_name("xtensa-esp32-elf-c++filt")), base], text=True).strip() + "$" + suffix
-            frames[name] = int(entry.group(1), 0)
+            # Retained object code can differ from the linked copy. Keep the
+            # larger frame so either artifact remains a conservative bound.
+            frames[name] = max(frames.get(name, 0), int(entry.group(1), 0))
 
 def frame(fragment):
-    values = [size for name, size in frames.items() if fragment in name and "lambda" not in name]
-    if not values:
+    matching = [(name, size) for name, size in frames.items()
+                if fragment in name and "lambda" not in name]
+    if not matching:
         raise RuntimeError("Missing compiled function: " + fragment)
     # GCC's $part$ split helpers execute under their public wrapper frame.
-    normal = [size for name, size in frames.items() if fragment in name and "lambda" not in name and "$part$" not in name]
-    parts = [size for name, size in frames.items() if fragment in name and "$part$" in name]
+    normal, parts = [], []
+    for name, size in matching:
+        if "$part$" in name:
+            parts.append(size)
+        else:
+            normal.append(size)
     return max(normal or [0]) + sum(parts)
 
 # 1 KiB conservative application-helper/standard-library allowance on top of
@@ -37,32 +44,39 @@ def frame(fragment):
 helper_reserve = 1024
 budget = 4096
 worker = frame("configTask(void*)")
-scan_name = "scan("
 startup = worker + frame("ConfigBootstrap::start(")
 service = worker + frame("ConfigBootstrap::service(")
+# These helpers retain separate call frames in the pinned build. Include them
+# explicitly; the fixed allowance remains for inlined/helper/library work.
+request_service = service + frame("ConfigBootstrap::serviceRequest(")
+persistence_service = service + frame("ConfigBootstrap::servicePersistence(")
+load_scan = startup + frame("ConfigPersistence::load(") + frame("ConfigPersistence::scan(") + frame("ConfigPersistence::scanSlot(")
+service_scan = persistence_service + frame("ConfigPersistence::service(") + frame("ConfigPersistence::scan(") + frame("ConfigPersistence::scanSlot(")
+proof_service = worker + frame("PairingProofMaintenance::service(") + frame("PairingProofMaintenance::perform(")
 paths = {
-    "load/decode": startup + frame("ConfigPersistence::load(") + frame(scan_name) + frame("decodeConfig("),
-    "load/scan/encode": startup + frame("ConfigPersistence::load(") + frame(scan_name) + frame("encodeConfig("),
+    "load/decode": load_scan + frame("decodeConfig("),
+    "load/scan/encode": load_scan + frame("ConfigPersistence::mergeSlot(") + frame("encodeConfig("),
     "startup/canonical copy": startup + frame("copySettings("),
-    "service/scan/encode": service + frame("ConfigPersistence::service(") + frame(scan_name) + frame("encodeConfig("),
-    "service/decode": service + frame("ConfigPersistence::service(") + frame(scan_name) + frame("decodeConfig("),
-    "service/expand request": service + frame("expandSettings("),
-    "service/canonical copy": service + frame("copySettings("),
-    "service/refusal": service + frame("ConfigBootstrap::refuse("),
-    "request/encode": service + frame("ConfigPersistence::request(") + frame("encodeConfig("),
+    "service/scan/encode": service_scan + frame("ConfigPersistence::mergeSlot(") + frame("encodeConfig("),
+    "service/decode": service_scan + frame("decodeConfig("),
+    "service/expand request": request_service + frame("expandSettings("),
+    "service/canonical copy": persistence_service + frame("ConfigBootstrap::adoptSaved(") + frame("copySettings("),
+    "service/refusal": max(request_service, persistence_service) + frame("ConfigBootstrap::refuse("),
+    "request/encode": request_service + frame("ConfigPersistence::request(") + frame("encodeConfig("),
     # Reset/retry are persistence API budgets only: the bootstrap exposes neither.
     "reset/request/encode": worker + frame("ConfigPersistence::reset(") + frame("ConfigPersistence::request(") + frame("encodeConfig("),
     "proof boot read": worker + frame("PairingProofMaintenance::beginOwner(") + frame("readFloor("),
-    "proof service read": worker + frame("PairingProofMaintenance::service(") + frame("PairingProofMaintenance::perform(") + frame("readFloor("),
-    "proof service write": worker + frame("PairingProofMaintenance::service(") + frame("PairingProofMaintenance::perform("),
+    "proof service read": proof_service + frame("readFloor("),
+    "proof service write": proof_service + frame("PairingProofMaintenance::writeFloor("),
     "retry": worker + frame("ConfigPersistence::retry("),
-    "service/read SDK boundary": service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::read("),
-    "service/write SDK boundary": service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::write("),
-    "load/scan/read SDK boundary": startup + frame("ConfigPersistence::load(") + frame(scan_name) + frame("NvsConfigStore::read("),
+    "service/scan/read SDK boundary": service_scan + frame("NvsConfigStore::read("),
+    "service/verify/read SDK boundary": persistence_service + frame("ConfigPersistence::service(") + frame("ConfigPersistence::verifyWrite(") + frame("NvsConfigStore::read("),
+    "service/write SDK boundary": persistence_service + frame("ConfigPersistence::service(") + frame("NvsConfigStore::write("),
+    "load/scan/read SDK boundary": load_scan + frame("NvsConfigStore::read("),
 }
 for name, size in paths.items():
     print(f"{name}: nested={size}, application allowance={size + helper_reserve}, limit={budget}")
-for fragment in ("configTask(void*)", "ConfigBootstrap::", "copySettings(", "expandSettings(", "ConfigPersistence::", "scan(", "decodeConfig(", "encodeConfig(", "NvsConfigStore::", "nvs_open", "nvs_commit", "nvs_set_blob", "nvs_get_blob"):
+for fragment in ("configTask(void*)", "ConfigBootstrap::", "copySettings(", "expandSettings(", "ConfigPersistence::", "decodeConfig(", "encodeConfig(", "PairingProofMaintenance::", "readFloor(", "NvsConfigStore::", "nvs_open", "nvs_commit", "nvs_set_blob", "nvs_get_blob"):
     for name, size in sorted(frames.items()):
         if fragment in name and "lambda" not in name:
             print(f"frame {size}: {name}")

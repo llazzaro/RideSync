@@ -41,6 +41,7 @@ public:
   ControlStatus status() const { return status_; }
 
 private:
+  void observeDevices(const LocalTelemetryStatus &);
   Clock &clock_;
   CameraRuntimePort &adapter_;
   CameraManager &manager_;

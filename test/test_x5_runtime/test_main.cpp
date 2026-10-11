@@ -1,4 +1,5 @@
 #include "../fixtures/insta360/ce80_display.h"
+#include "../fixtures/insta360/x5_harness.h"
 #include "x5_runtime.h"
 #include <cstring>
 #include <deque>
@@ -51,35 +52,9 @@ struct Harness {
   X5Runtime runtime;
   X5Qualification q;
   SourceConfig source;
-  Harness() : runtime(port, clock) {
-    q.enabled = true;
-    q.identity.verified = true;
-    q.identity.type = IdentityType::Public;
-    q.identity.address = {{1, 2, 3, 4, 5, 6}};
-    q.store.qualification_record = 1;
-    q.display.profile = insta360::Ce80DisplayProfile::X5CapturedDisplayV1;
-    std::memcpy(q.firmware.data(), "1.11.10", 7);
-    q.firmware_size = 7;
-    source.count = 1;
-    auto &c = source.cameras[0];
-    c.name = "Synthetic X5";
-    c.model = CameraModel::X5;
-    c.family = CameraFamily::Insta360;
-    c.identifier = "06:05:04:03:02:01";
-    c.address_type = AddressType::Public;
-  }
+  Harness() : runtime(port, clock) { x5_fixture::configure(q, source); }
   void configure() { TEST_ASSERT_TRUE(runtime.configure(q, source)); }
-  void event(X5InputKind kind) {
-    X5Input e;
-    e.kind = kind;
-    e.connection = port.token.connection;
-    e.operation = port.token.operation;
-    e.handle = 7;
-    e.sequence = ++port.seq;
-    e.received_ms = clock.time;
-    e.identity = q.identity;
-    port.events.push_back(e);
-  }
+  void event(X5InputKind kind) { x5_fixture::event(*this, kind); }
   template <size_t N> void frame(const uint8_t (&b)[N]) {
     event(X5InputKind::Display);
     auto &e = port.events.back();

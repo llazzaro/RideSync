@@ -102,6 +102,11 @@ private:
   size_t owner_ = kWakePeers, cursor_ = 0;
   void seal(Slot &, WakePhase, CameraError);
   void recover(Slot &);
+  bool validRequest(const WakeOperation &, const WakePolicy &) const;
+  void submitQueued(size_t, uint32_t);
+  void serviceRadio(uint32_t);
+  void serviceRecovery(Slot &, uint32_t);
+  void admitRadio(uint32_t);
   void updateReleaseOnly(Slot &);
 };
 } // namespace ridesync

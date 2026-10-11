@@ -1,18 +1,10 @@
+#include "../fixtures/motion/evidence.h"
 #include "motion_estimator.h"
 #include <cmath>
 #include <limits>
 #include <unity.h>
 using namespace ridesync;
-MotionEstimatorConfig qualifiedConfig() {
-  MotionEstimatorConfig c;
-  c.mount_qualified = true;
-  c.mount_id = 7;
-  c.calibration_id = 9;
-  c.residual_calibration_qualified = true;
-  c.convention = MotionCalibrationConvention::ResidualCountsOffsetThenGain;
-  c.accel_compensation = c.gyro_compensation = 1;
-  return c;
-}
+MotionEstimatorConfig qualifiedConfig() { return motion_fixture::config(); }
 ImuEvidence sample() {
   ImuEvidence e;
   e.session_id = 11;

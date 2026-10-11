@@ -17,7 +17,7 @@ void SessionStorageOwner::cancel() {
   control_cancelled_ = true;
   cancelled_.store(true, std::memory_order_release);
 }
-bool SessionStorageOwner::workerStep() {
+void SessionStorageOwner::allocateSession() {
   if (phase_ == Phase::Allocate) {
     if (cancelled_.load(std::memory_order_acquire)) {
       allocation_.status = IdentityStatus::IdentityUnavailable;
@@ -30,6 +30,8 @@ bool SessionStorageOwner::workerStep() {
     published_.store(true, std::memory_order_release);
     phase_ = allocation_.status == IdentityStatus::Committed ? Phase::WaitBind : Phase::Done;
   }
+}
+void SessionStorageOwner::acquireBinding() {
   if (phase_ == Phase::WaitBind) {
     // Acquire the pointer before cancellation: control publishes bind before
     // cancel, and cancellation then drains the bound Storage rather than leaving
@@ -43,6 +45,10 @@ bool SessionStorageOwner::workerStep() {
       phase_ = storage_ ? Phase::Storage : Phase::Done;
     }
   }
+}
+bool SessionStorageOwner::workerStep() {
+  allocateSession();
+  acquireBinding();
   if (phase_ == Phase::Storage) {
     if (cancelled_.load(std::memory_order_acquire))
       storage_->requestStop();

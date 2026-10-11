@@ -79,6 +79,11 @@ public:
   bool wakeSecurityAllowed(uint16_t);
 
 private:
+  bool gapSetupBusy(std::memory_order) const;
+  bool wakeStoreAddressAllowed(const ble_addr_t &) const;
+  bool establishedIdentity(const ble_addr_t &) const;
+  bool wakeStoreRecordAllowed(const void *) const;
+  bool wakeStoreObjectAllowed(int, const void *, const void *);
   Esp32BleHost() = default;
   void *peripheral_owner_ = nullptr;
   int (*peripheral_registration_)(void *) = nullptr;

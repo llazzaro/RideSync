@@ -60,6 +60,7 @@ public:
   const DynamicMotionEstimate &estimate() const { return estimate_; }
 
 private:
+  bool integrate(const MotionVector &, uint64_t);
   DynamicMotionConfig config_;
   DynamicMotionEstimate estimate_;
   DynamicMotionInput previous_;

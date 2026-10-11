@@ -5,6 +5,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 namespace ridesync {
+namespace {
+bool volumeConfigValid(const QualifiedSdConfig &config) {
+  return config.namespace_commissioned && config.commissioned_namespace &&
+         config.chip_select >= 0 && config.chip_select <= 33 && config.frequency_hz &&
+         config.frequency_hz <= 20000000;
+}
+} // namespace
+
 ArduinoSdStorage::ArduinoSdStorage(SPIClass &spi, const QualifiedSdConfig &config)
     : sink_(spi, config), ledger_(sink_), config_(config),
       owner_(sink_, ledger_, config.commissioned_namespace) {}
@@ -129,9 +137,7 @@ bool ArduinoSdStorage::Sink::closeLedger() {
 }
 bool ArduinoSdStorage::start() {
   if (started_ || !config_.opt_in || !config_.wiring_card_qualified || !config_.exclusive_volume ||
-      !config_.namespace_commissioned || !config_.commissioned_namespace ||
-      config_.chip_select < 0 || config_.chip_select > 33 || !config_.frequency_hz ||
-      config_.frequency_hz > 20000000)
+      !volumeConfigValid(config_))
     return false;
   started_ = xTaskCreate(run, "gps_sd", 8192, this, 1, &task_) == pdPASS;
   return started_;

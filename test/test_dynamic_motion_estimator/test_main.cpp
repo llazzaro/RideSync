@@ -64,30 +64,33 @@ void tilted_stationary_anchor_and_disabled_refusal() {
   TEST_ASSERT_FLOAT_WITHIN(.00001f, .25f, out.quaternion_wxyz[2]);
   TEST_ASSERT_FLOAT_WITHIN(.00001f, -.0669872981f, out.quaternion_wxyz[3]);
 }
+void signedAxisRotation(unsigned axis, int sign) {
+  DynamicMotionEstimator e(config());
+  auto i = input();
+  unreliable(e.initialize(i, reference()));
+  i.sample_time_us += 20000;
+  ++i.sequence;
+  if (axis == 0)
+    i.angular_rate_rad_s.x = sign * 25;
+  if (axis == 1)
+    i.angular_rate_rad_s.y = sign * 25;
+  if (axis == 2)
+    i.angular_rate_rad_s.z = sign * 25;
+  auto out = e.update(i);
+  unreliable(out);
+  TEST_ASSERT_FLOAT_WITHIN(.00001f, .9689124217f, out.quaternion_wxyz[0]);
+  TEST_ASSERT_FLOAT_WITHIN(.00001f, sign * .2474039593f, out.quaternion_wxyz[axis + 1]);
+  if (axis == 0)
+    TEST_ASSERT_FLOAT_WITHIN(.00001f, sign * g * .4794255386f, out.gravity_body_mps2.y);
+  if (axis == 1)
+    TEST_ASSERT_FLOAT_WITHIN(.00001f, -sign * g * .4794255386f, out.gravity_body_mps2.x);
+  if (axis == 2)
+    TEST_ASSERT_FLOAT_WITHIN(.00001f, g, out.gravity_body_mps2.z);
+}
 void signed_axes_and_noncommuting_body_rotation() {
   for (unsigned axis = 0; axis < 3; ++axis)
     for (int sign : {-1, 1}) {
-      DynamicMotionEstimator e(config());
-      auto i = input();
-      unreliable(e.initialize(i, reference()));
-      i.sample_time_us += 20000;
-      ++i.sequence;
-      if (axis == 0)
-        i.angular_rate_rad_s.x = sign * 25;
-      if (axis == 1)
-        i.angular_rate_rad_s.y = sign * 25;
-      if (axis == 2)
-        i.angular_rate_rad_s.z = sign * 25;
-      auto out = e.update(i);
-      unreliable(out);
-      TEST_ASSERT_FLOAT_WITHIN(.00001f, .9689124217f, out.quaternion_wxyz[0]);
-      TEST_ASSERT_FLOAT_WITHIN(.00001f, sign * .2474039593f, out.quaternion_wxyz[axis + 1]);
-      if (axis == 0)
-        TEST_ASSERT_FLOAT_WITHIN(.00001f, sign * g * .4794255386f, out.gravity_body_mps2.y);
-      if (axis == 1)
-        TEST_ASSERT_FLOAT_WITHIN(.00001f, -sign * g * .4794255386f, out.gravity_body_mps2.x);
-      if (axis == 2)
-        TEST_ASSERT_FLOAT_WITHIN(.00001f, g, out.gravity_body_mps2.z);
+      signedAxisRotation(axis, sign);
     }
   DynamicMotionEstimator e(config());
   auto i = input();
@@ -135,44 +138,37 @@ void translation_turn_ambiguity_and_euler_singularity() {
   TEST_ASSERT_FLOAT_WITHIN(.00002f, -g, out.gravity_body_mps2.x);
 }
 void invalid_inputs_reset_and_nonce_cannot_be_reused() {
-  for (unsigned mode = 0; mode < 16; ++mode) {
+  void (*mutations[])(DynamicMotionInput &) = {
+      [](DynamicMotionInput &i) { i.session_id = 2; },
+      [](DynamicMotionInput &i) { i.sensor_id = 2; },
+      [](DynamicMotionInput &i) { i.config_generation = 2; },
+      [](DynamicMotionInput &i) { i.mount_id = 2; },
+      [](DynamicMotionInput &i) { i.calibration_id = 2; },
+      [](DynamicMotionInput &i) { i.sensor_epoch = 2; },
+      [](DynamicMotionInput &i) { i.timing_source = DynamicTimingSource::ModelledCadence; },
+      [](DynamicMotionInput &i) {
+        i.measurements_valid = false;
+      }, // Caller marks saturated/unqualified samples.
+      [](DynamicMotionInput &i) { i.discontinuity = true; },
+      [](DynamicMotionInput &i) { i.sample_time_us = 1000000; },
+      [](DynamicMotionInput &i) { i.sample_time_us = 999999; },
+      [](DynamicMotionInput &i) { i.sample_time_us = 1020001; },
+      [](DynamicMotionInput &i) { i.sequence = 0; },
+      [](DynamicMotionInput &i) { i.sequence = 2; },
+      [](DynamicMotionInput &i) {
+        i.specific_force_mps2.x = std::numeric_limits<float>::infinity();
+      },
+      [](DynamicMotionInput &i) {
+        i.angular_rate_rad_s.z = std::numeric_limits<float>::quiet_NaN();
+      },
+  };
+  for (const auto mutate : mutations) {
     DynamicMotionEstimator e(config());
     auto i = input();
     e.initialize(i, reference());
     ++i.sequence;
     i.sample_time_us += 10000;
-    if (mode == 0)
-      i.session_id = 2;
-    if (mode == 1)
-      i.sensor_id = 2;
-    if (mode == 2)
-      i.config_generation = 2;
-    if (mode == 3)
-      i.mount_id = 2;
-    if (mode == 4)
-      i.calibration_id = 2;
-    if (mode == 5)
-      i.sensor_epoch = 2;
-    if (mode == 6)
-      i.timing_source = DynamicTimingSource::ModelledCadence;
-    if (mode == 7)
-      i.measurements_valid = false; // Caller marks saturated/unqualified samples.
-    if (mode == 8)
-      i.discontinuity = true;
-    if (mode == 9)
-      i.sample_time_us = 1000000;
-    if (mode == 10)
-      i.sample_time_us = 999999;
-    if (mode == 11)
-      i.sample_time_us = 1020001;
-    if (mode == 12)
-      i.sequence = 0;
-    if (mode == 13)
-      i.sequence = 2;
-    if (mode == 14)
-      i.specific_force_mps2.x = std::numeric_limits<float>::infinity();
-    if (mode == 15)
-      i.angular_rate_rad_s.z = std::numeric_limits<float>::quiet_NaN();
+    mutate(i);
     invalid(e.update(i));
     auto fresh = input();
     fresh.sample_time_us = 1030000;
@@ -185,38 +181,39 @@ void invalid_inputs_reset_and_nonce_cannot_be_reused() {
   }
 }
 void initialization_vetoes_and_required_identities() {
-  for (unsigned mode = 0; mode < 13; ++mode) {
+  struct InitializationCase {
+    void (*mutate)(DynamicMotionInput &, DynamicMotionReference &);
+    uint32_t consumed_declaration;
+  };
+  const InitializationCase cases[] = {
+      {[](DynamicMotionInput &, DynamicMotionReference &r) { r.externally_stationary = false; }, 1},
+      {[](DynamicMotionInput &, DynamicMotionReference &r) { r.declaration = 0; }, 0},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.specific_force_mps2.z = g * 1.11f; },
+       1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.angular_rate_rad_s.x = .051f; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) {
+         i.specific_force_mps2 = vector(g, 0, 0);
+       },
+       1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.session_id = 0; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.sensor_id = 0; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.config_generation = 0; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.mount_id = 0; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.calibration_id = 0; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.sensor_epoch = 0; }, 1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) {
+         i.timing_source = DynamicTimingSource::Unknown;
+       },
+       1},
+      {[](DynamicMotionInput &i, DynamicMotionReference &) { i.discontinuity = true; }, 1},
+  };
+  for (const auto &scenario : cases) {
     DynamicMotionEstimator e(config());
     auto i = input();
     auto r = reference();
-    if (mode == 0)
-      r.externally_stationary = false;
-    if (mode == 1)
-      r.declaration = 0;
-    if (mode == 2)
-      i.specific_force_mps2.z = g * 1.11f;
-    if (mode == 3)
-      i.angular_rate_rad_s.x = .051f;
-    if (mode == 4)
-      i.specific_force_mps2 = vector(g, 0, 0);
-    if (mode == 5)
-      i.session_id = 0;
-    if (mode == 6)
-      i.sensor_id = 0;
-    if (mode == 7)
-      i.config_generation = 0;
-    if (mode == 8)
-      i.mount_id = 0;
-    if (mode == 9)
-      i.calibration_id = 0;
-    if (mode == 10)
-      i.sensor_epoch = 0;
-    if (mode == 11)
-      i.timing_source = DynamicTimingSource::Unknown;
-    if (mode == 12)
-      i.discontinuity = true;
+    scenario.mutate(i, r);
     invalid(e.initialize(i, r));
-    invalid(e.initialize(input(), reference(mode == 1 ? 0 : 1)));
+    invalid(e.initialize(input(), reference(scenario.consumed_declaration)));
     unreliable(e.initialize(input(), reference(2)));
   }
 }

@@ -17,6 +17,9 @@ public:
   const ImuCodecHealth &health() const { return health_; }
 
 private:
+  void decodeSensorTime(const uint8_t *p, ImuEvidence &e);
+  bool decodeControl(uint8_t header, uint8_t n, const uint8_t *p, ImuEvidence &e, ImuEmitter &out);
+  bool decodeSample(const uint8_t *p, ImuEvidence &e, ImuEmitter &out);
   ImuCodecHealth health_;
   uint32_t receipt_ = 0;
   uint32_t frame_ = 0, tick_ = 0;
@@ -46,6 +49,11 @@ public:
   void stop() { stop_.store(true, std::memory_order_release); }
 
 private:
+  void decodeDrain(uint16_t, uint8_t);
+  bool sequenceExhausted() const;
+  void drainSensor();
+  void flushRecovery();
+  void initializeSensor();
   void emit(const ImuEvidence &) override;
   void publish();
   ImuPort &port_;

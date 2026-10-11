@@ -80,6 +80,15 @@ private:
     uint8_t offset = 0, chunk = 0;
     bool waiting = false, sent = false, retire_pending = false;
   };
+  bool packetEligible(uint8_t i, const RecordTimestamp &t, uint8_t controls);
+  bool admitPacket(uint8_t i, const RecordTimestamp &t);
+  void submitChunk(uint8_t i, const RecordTimestamp &t);
+  void transportReady(uint8_t i, const BleResult &r);
+  bool chunkCompleted(const Peer &p, const BleResult &r);
+  void completeChunk(uint8_t i, const BleResult &r);
+  bool sequenceAvailable(uint8_t i, const Be80CommandSequence &sequence);
+  bool activePacketValid(uint8_t i, const RecordTimestamp &t);
+  bool pendingPacketValid(uint8_t i, const RecordTimestamp &t);
   BleCentral &central_;
   std::array<Peer, kBlePeers> peers_{};
   uint8_t cursor_ = 0;

@@ -1,3 +1,4 @@
+#include "../fixtures/ble/adapter_host.h"
 #include "profiles/insta360_one_rs.h"
 #include "recording_manager.h"
 #include <algorithm>
@@ -82,15 +83,7 @@ struct Host : BleHost {
     deliver(*contexts[n], e, true);
   }
   void notify(uint8_t peer, const std::vector<uint8_t> &p, size_t from = 0, size_t size = 0) {
-    BleEvent e;
-    e.kind = BleEventKind::Notification;
-    e.connection = 10 + peer;
-    e.handle = 6;
-    if (!size)
-      size = p.size() - from;
-    e.size = size;
-    std::copy(p.begin() + from, p.begin() + from + size, e.bytes.begin());
-    deliver(*links[peer], e);
+    adapter_fixture::notify(*this, peer, p, from, size);
   }
 };
 struct Rig {
@@ -131,56 +124,29 @@ struct Rig {
       adapter.service();
     TEST_ASSERT_TRUE(adapter.canDestroy());
   }
-  void handle(size_t n) {
-    const auto c = host.commands[n];
-    auto &x = *host.contexts[n];
-    BleEvent e;
-    e.connection = 10 + x.peer;
-    if (c.phase == BlePhase::Connect) {
-      host.links[x.peer] = &x;
-      e.kind = BleEventKind::Connected;
-      host.deliver(x, e);
-    } else if (c.phase == BlePhase::Security) {
-      e.kind = BleEventKind::Security;
-      e.encrypted = e.bonded = host.security;
-      e.identity.verified = true;
-      e.identity.type = IdentityType::Public;
-      e.identity.address[0] = x.peer + 1;
-      host.deliver(x, e);
-    } else if (c.phase == BlePhase::Services) {
-      if (!host.missing) {
-        e.kind = BleEventKind::Service;
-        e.uuid = c.uuid;
-        e.start = 1;
-        e.end = 12;
-        host.deliver(x, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Characteristics) {
-      for (unsigned j = 0; j < 2; ++j) {
-        e.kind = BleEventKind::Characteristic;
-        e.uuid = BleUuid::shortUuid(j ? 0xbe82 : 0xbe81);
-        e.start = 2 + j * 3;
-        e.handle = e.start + 1;
-        e.properties = j ? 0x10 : (host.property ? 8 : 4);
-        host.deliver(x, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Descriptors) {
-      if (host.cccd) {
-        e.kind = BleEventKind::Descriptor;
-        e.uuid = BleUuid::shortUuid(0x2902);
-        e.handle = c.start + 1;
-        host.deliver(x, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Subscribe || c.phase == BlePhase::VerifySubscription) {
-      host.complete(n);
-    } else if (c.phase == BlePhase::Write) {
-      if (!host.drop)
-        host.complete(n);
-    }
+  void connected(size_t, const BleCommand &, BleContext &x, BleEvent &e) {
+    host.links[x.peer] = &x;
+    e.kind = BleEventKind::Connected;
+    host.deliver(x, e);
   }
+  void secured(size_t, const BleCommand &, BleContext &x, BleEvent &e) {
+    e.kind = BleEventKind::Security;
+    e.encrypted = e.bonded = host.security;
+    e.identity.verified = true;
+    e.identity.type = IdentityType::Public;
+    e.identity.address[0] = x.peer + 1;
+    host.deliver(x, e);
+  }
+  void characteristics(size_t n, const BleCommand &, BleContext &x, BleEvent &e) {
+    adapter_fixture::characteristics(host, n, x, e, BleUuid::shortUuid(0xbe81),
+                                     BleUuid::shortUuid(0xbe82), 8, 4);
+  }
+  void subscribedPhase(size_t n, const BleCommand &, BleContext &, BleEvent &) { host.complete(n); }
+  void writeResponse(size_t n, const BleCommand &, BleContext &, BleEvent &) {
+    if (!host.drop)
+      host.complete(n);
+  }
+  void handle(size_t n) { adapter_fixture::handle(*this, n, BlePhase::Write); }
   void pump() {
     for (unsigned n = 0; n < 100; ++n) {
       adapter.service();
@@ -354,6 +320,40 @@ void declaration_identity_binding_and_disabled_start() {
   TEST_ASSERT_TRUE(mismatch.host.commands.empty());
 }
 
+void badQualification(unsigned mode, OneRsQualification &bad) {
+  switch (mode) {
+  case 0:
+    bad.source_qualified = false;
+    break;
+  case 1:
+    bad.core_one_rs = false;
+    break;
+  case 2:
+    bad.ordinary_360_lens = false;
+    break;
+  case 3:
+    bad.video_mode_declared = false;
+    break;
+  case 4:
+    bad.identity.verified = false;
+    break;
+  case 5:
+    bad.identity.type = IdentityType::UnresolvedPrivate;
+    break;
+  case 6:
+    bad.firmware_size = 0;
+    break;
+  case 7:
+    bad.firmware_size = 33;
+    break;
+  case 8:
+    bad.firmware[0] = '\n';
+    break;
+  case 9:
+    bad.identity.type = IdentityType::RandomStatic;
+    break;
+  }
+}
 void qualification_each_guard_and_pending_cleanup_are_enforced() {
   Host h;
   Time c;
@@ -370,26 +370,7 @@ void qualification_each_guard_and_pending_cleanup_are_enforced() {
   TEST_ASSERT_TRUE(a.configurePeer(0, q));
   for (unsigned mode = 0; mode < 10; ++mode) {
     auto bad = q;
-    if (mode == 0)
-      bad.source_qualified = false;
-    if (mode == 1)
-      bad.core_one_rs = false;
-    if (mode == 2)
-      bad.ordinary_360_lens = false;
-    if (mode == 3)
-      bad.video_mode_declared = false;
-    if (mode == 4)
-      bad.identity.verified = false;
-    if (mode == 5)
-      bad.identity.type = IdentityType::UnresolvedPrivate;
-    if (mode == 6)
-      bad.firmware_size = 0;
-    if (mode == 7)
-      bad.firmware_size = 33;
-    if (mode == 8)
-      bad.firmware[0] = '\n';
-    if (mode == 9)
-      bad.identity.type = IdentityType::RandomStatic;
+    badQualification(mode, bad);
     TEST_ASSERT_FALSE(a.configurePeer(0, bad));
   }
   a.stop();

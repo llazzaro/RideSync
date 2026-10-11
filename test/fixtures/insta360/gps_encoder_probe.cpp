@@ -9,6 +9,36 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+using namespace ridesync;
+using namespace ridesync::insta360;
+bool prepareScenario(const char *scenario, GnssFix &f) {
+  if (std::strcmp(scenario, "south-east") == 0) {
+    f.latitude_degrees = -1;
+    f.longitude_degrees = 2;
+    return true;
+  }
+  if (std::strcmp(scenario, "zero") == 0) {
+    f.latitude_degrees = f.longitude_degrees = f.speed_metres_per_second.value =
+        f.course_degrees.value = f.altitude_msl_metres.value = -0.0;
+    return true;
+  }
+  if (std::strcmp(scenario, "subnormal") == 0) {
+    f.speed_metres_per_second.value = f.altitude_msl_metres.value = std::ldexp(1.0, -149);
+    return true;
+  }
+  if (std::strcmp(scenario, "precision") == 0) {
+    f.latitude_degrees = 1.1;
+    f.longitude_degrees = -2.2;
+    f.speed_metres_per_second.value = 3.3;
+    f.course_degrees.value = 90.1;
+    f.altitude_msl_metres.value = 4.4;
+    return true;
+  }
+  if (std::strcmp(scenario, "ordinary") != 0) {
+    return false;
+  }
+  return true;
+}
 int main(int argc, char **argv) {
   using namespace ridesync;
   using namespace ridesync::insta360;
@@ -39,23 +69,8 @@ int main(int argc, char **argv) {
   f.speed_metres_per_second.value = 3;
   f.course_degrees.value = 90;
   f.altitude_msl_metres.value = 4;
-  if (std::strcmp(argv[1], "south-east") == 0) {
-    f.latitude_degrees = -1;
-    f.longitude_degrees = 2;
-  } else if (std::strcmp(argv[1], "zero") == 0) {
-    f.latitude_degrees = f.longitude_degrees = f.speed_metres_per_second.value =
-        f.course_degrees.value = f.altitude_msl_metres.value = -0.0;
-  } else if (std::strcmp(argv[1], "subnormal") == 0) {
-    f.speed_metres_per_second.value = f.altitude_msl_metres.value = std::ldexp(1.0, -149);
-  } else if (std::strcmp(argv[1], "precision") == 0) {
-    f.latitude_degrees = 1.1;
-    f.longitude_degrees = -2.2;
-    f.speed_metres_per_second.value = 3.3;
-    f.course_degrees.value = 90.1;
-    f.altitude_msl_metres.value = 4.4;
-  } else if (std::strcmp(argv[1], "ordinary") != 0) {
+  if (!prepareScenario(argv[1], f))
     return 2;
-  }
   const auto result = encodeGps(config, now, snapshot, 1);
   if (result.error != GpsEncodingError::None || result.size != 71)
     return 1;

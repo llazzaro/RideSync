@@ -11,6 +11,18 @@ import unittest
 from telemetry_parser import CAMERA, COMMON, IMU, parse
 ROOT = Path(__file__).resolve().parents[1]
 
+
+def camera_variant(data, changes):
+    """Mutate one serialized row while retaining every unrelated field."""
+    columns = ['kind'] + COMMON + CAMERA
+    lines = data.splitlines()
+    index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
+    values = next(csv.reader([lines[index]]))
+    for field, value in changes.items():
+        values[columns.index(field)] = value
+    lines[index] = ','.join(values)
+    return '\n'.join(lines) + '\n'
+
 SOURCE = r'''
 #include "telemetry_admission.h"
 #include <cassert>
@@ -295,7 +307,6 @@ int main() {
         self.assertEqual('0',rows[2]['peer_slot'])
         self.assertEqual('4',rows[2]['intent_id'])
         self.assertEqual('10',rows[3]['error'])
-        camera_columns = ['kind'] + COMMON + CAMERA
         for field, invalid in [('session_id','18446744073709551616'),
                                ('monotonic_ms','-1'), ('monotonic_ms','31536000001'),
                                ('has_utc_estimate','2'), ('uncertainty_known','2'),
@@ -306,12 +317,7 @@ int main() {
                                ('event_receipt_age_ms','5'),
                                ('intent_id','0')]:
             with self.subTest(field=field, invalid=invalid):
-                lines = data.splitlines()
-                index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
-                values = next(csv.reader([lines[index]]))
-                values[camera_columns.index(field)] = invalid
-                lines[index] = ','.join(values)
-                with self.assertRaises(ValueError): parse('\n'.join(lines) + '\n')
+                with self.assertRaises(ValueError): parse(camera_variant(data, {field: invalid}))
         for changes in [
             {'anchor_quality':'0', 'anchor_sequence':'1', 'anchor_receipt_ms':'0',
              'anchor_utc_ms':'946684800000', 'anchor_age_ms':'12'},
@@ -324,13 +330,7 @@ int main() {
              'delivery_admitted':'0'},
         ]:
             with self.subTest(changes=changes):
-                lines = data.splitlines()
-                index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
-                values = next(csv.reader([lines[index]]))
-                for field, invalid in changes.items():
-                    values[camera_columns.index(field)] = invalid
-                lines[index] = ','.join(values)
-                with self.assertRaises(ValueError): parse('\n'.join(lines) + '\n')
+                with self.assertRaises(ValueError): parse(camera_variant(data, changes))
         for changes in [
             {'anchor_quality':'1', 'anchor_sequence':'1', 'anchor_receipt_ms':'10',
              'anchor_utc_ms':'1767225600000', 'anchor_age_ms':'2',
@@ -340,13 +340,7 @@ int main() {
              'delivery_admitted':'0'},
         ]:
             with self.subTest(valid_changes=changes):
-                lines = data.splitlines()
-                index = next(i for i, line in enumerate(lines) if line.startswith('camera,'))
-                values = next(csv.reader([lines[index]]))
-                for field, value in changes.items():
-                    values[camera_columns.index(field)] = value
-                lines[index] = ','.join(values)
-                self.assertEqual(4, len(parse('\n'.join(lines) + '\n')))
+                self.assertEqual(4, len(parse(camera_variant(data, changes))))
         with self.assertRaises(ValueError): parse(data.replace('#ridesync_telemetry,3',
                                                                   '#ridesync_telemetry,4'))
         with self.assertRaises(ValueError): parse(data[:-1])

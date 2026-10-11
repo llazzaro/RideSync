@@ -50,10 +50,7 @@ public:
     if (!reserved_ || !sameWakeOperation(operation_, op))
       return result;
     if (delegated_) {
-      result = insta360WakeRadio().poll(op, now);
-      if (sameWakeOperation(result.operation, op) && result.terminal && result.released)
-        reserved_ = false;
-      return result;
+      return pollDelegated(op, now);
     }
     const auto phase = phase_.load(std::memory_order_acquire);
     const bool expired = uint32_t(now - advertising_deadline_) < 0x80000000u;
@@ -70,10 +67,7 @@ public:
     const auto submit = insta360WakeRadio().begin(op, bytes_, advertising_deadline_, now);
     if (submit == WakeSubmit::Accepted) {
       delegated_ = true;
-      result = insta360WakeRadio().poll(op, now);
-      if (sameWakeOperation(result.operation, op) && result.terminal && result.released)
-        reserved_ = false;
-      return result;
+      return pollDelegated(op, now);
     }
     if (submit != WakeSubmit::Busy) {
       result.terminal = result.released = true;
@@ -84,6 +78,12 @@ public:
   }
 
 private:
+  WakeRadioResult pollDelegated(const WakeOperation &op, uint32_t now) {
+    auto result = insta360WakeRadio().poll(op, now);
+    if (sameWakeOperation(result.operation, op) && result.terminal && result.released)
+      reserved_ = false;
+    return result;
+  }
   std::atomic<unsigned> phase_{0};
   uint32_t deadline_ = 0, advertising_deadline_ = 0;
   WakeOperation operation_;

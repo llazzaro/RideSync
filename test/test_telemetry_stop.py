@@ -13,10 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 class TelemetryStopTest(unittest.TestCase):
     def test_finish_acquire_rechecks_final_publication(self):
         source = (ROOT/'src/telemetry_admission.cpp').read_text()
-        boundary = 'stopping_ && inbox_.finished_.load(std::memory_order_acquire)'
-        self.assertEqual(1,source.count(boundary))
-        source = 'void beforeFinish();\n' + source.replace(boundary,
-                    'stopping_ && (beforeFinish(), inbox_.finished_.load(std::memory_order_acquire))')
+        # tick calls this helper only after its bounded drain observes no work.
+        # Pause immediately before finish's acquire; the following queue acquire
+        # must then discover the producer's final publication.
+        boundary = ('bool TelemetryAdmission::inboxesDrained() {\n'
+                    '  return inbox_.finished_.load(std::memory_order_acquire)')
+        self.assertEqual(1, source.count(boundary))
+        instrumented = ('bool TelemetryAdmission::inboxesDrained() {\n'
+                        '  return (beforeFinish(), '
+                        'inbox_.finished_.load(std::memory_order_acquire))')
+        source = 'void beforeFinish();\n' + source.replace(boundary, instrumented)
         main = r'''
 #include "telemetry_admission.h"
 #include <cassert>

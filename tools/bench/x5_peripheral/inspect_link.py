@@ -8,6 +8,10 @@ import argparse
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from link_audit import callers_from_disassembly
 
 BENCH = Path(__file__).resolve().parent
 BUILD = BENCH / '.pio/build/x5_peripheral'
@@ -15,19 +19,6 @@ BUILD = BENCH / '.pio/build/x5_peripheral'
 
 def run(tool, *args):
     return subprocess.check_output([tool, *map(str, args)], text=True)
-
-
-def callers_from_disassembly(disassembly):
-    callers = {}
-    owner = None
-    for line in disassembly.splitlines():
-        label = re.match(r'[0-9a-f]+ <(.+)>:', line)
-        if label:
-            owner = label.group(1)
-        call = re.search(r'\bcall\w*\s+[0-9a-f]+ <([^>]+)>', line)
-        if call:
-            callers.setdefault(call.group(1), set()).add(owner)
-    return callers
 
 
 def _symbol_names(symbols):

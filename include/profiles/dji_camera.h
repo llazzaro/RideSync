@@ -60,6 +60,16 @@ public:
   void result(const BleResult &) override;
 
 private:
+  void advanceAcknowledged(uint8_t i);
+  bool beginCommand(uint8_t i, Operation op, Token t);
+  bool transactionExpired(uint8_t i) const;
+  void servicePeer(uint8_t i);
+  bool beginConnection(uint8_t i, Token t);
+  bool recordResponse(uint8_t i, const dji::Decoded &d);
+  bool connectionResponse(uint8_t i, const dji::Decoded &d);
+  bool connectionRequest(uint8_t i, const dji::Decoded &d);
+  void writeComplete(uint8_t i, const BleResult &r);
+  void notification(uint8_t i, const BleResult &r);
   enum class Step : uint8_t { None, Pair, Authorize, Subscribe, Query, Poll, Start, Stop };
   struct Peer {
     DjiQualification qualification;
@@ -100,6 +110,11 @@ private:
   static uint32_t deviceId(CameraModel);
   static bool reached(uint32_t, uint32_t);
   bool videoReady(uint8_t) const;
+  static bool awaitingResponse(const Peer &, dji::Kind);
+  static bool acceptsStatus(const Peer &);
+  bool cameraResponse(uint8_t i, const dji::Decoded &);
+  dji::Packet packetForStep(uint8_t i, Step step, uint16_t sequence) const;
+  void admitPacket(uint8_t i, Step step, uint16_t seq);
   void retire(uint8_t, DjiFault);
   bool send(uint8_t, Step);
   void advance(uint8_t);

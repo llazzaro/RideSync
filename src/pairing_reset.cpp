@@ -1,13 +1,19 @@
 #include "pairing_reset.h"
 namespace ridesync {
-BondOutcome resetPairing(BondResetPort &port, const BondIdentity &identity) {
+namespace {
+bool resetIdentityValid(const BondIdentity &identity) {
   bool nonzero = false;
   for (auto b : identity.address)
     nonzero = nonzero || b != 0;
   if (!identity.verified || !nonzero ||
       (identity.type != IdentityType::Public && identity.type != IdentityType::RandomStatic) ||
-      (identity.type == IdentityType::RandomStatic && (identity.address[5] & 0xc0) != 0xc0) ||
-      !port.admitted())
+      (identity.type == IdentityType::RandomStatic && (identity.address[5] & 0xc0) != 0xc0))
+    return false;
+  return true;
+}
+} // namespace
+BondOutcome resetPairing(BondResetPort &port, const BondIdentity &identity) {
+  if (!resetIdentityValid(identity) || !port.admitted())
     return BondOutcome::Refused;
   auto result = port.remove(identity);
   if (result == BondOutcome::Busy) {

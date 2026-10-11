@@ -449,43 +449,46 @@ void terminal_disconnect_needs_procedure_barrier_before_slot_reuse() {
   owner.stop();
   closed(h, owner, 0);
 }
-void invalid_identity_capacity_restore_and_refusal_are_fail_closed() {
-  for (int scenario = 0; scenario < 7; ++scenario) {
-    FakeHost h;
-    Sink sink;
-    BleCentral owner(h, sink);
-    owner.begin(true, true, 0);
-    auto id = identity();
-    if (scenario == 0)
-      id.verified = false;
-    if (scenario == 1)
-      id.type = IdentityType::UnresolvedPrivate;
-    if (scenario < 2) {
-      TEST_ASSERT_FALSE(owner.connect(0, 1, id, profile()));
-      TEST_ASSERT_EQUAL(0, h.commands.size());
-      continue;
-    }
-    if (scenario == 2)
-      h.bond.restore_verified = false;
-    if (scenario == 3)
-      h.bond.refusal_installed = false;
-    if (scenario == 4)
-      h.bond.persistence_allowed = false;
-    if (scenario == 5)
-      h.bond.existing_verified_identity = false;
-    if (scenario == 6)
-      h.bond.identity_matches = false;
-    owner.connect(0, 1, id, profile());
-    owner.service(0);
-    BleEvent e;
-    e.kind = BleEventKind::Connected;
-    e.connection = 10;
-    h.deliver(*h.contexts[0], e, false);
-    owner.service(1);
-    TEST_ASSERT_EQUAL(1, h.commands.size()); // No security procedure may escape admission.
-    TEST_ASSERT_EQUAL((int)BleFault::Store, (int)sink.results.back().fault);
-    closed(h, owner, 0);
+static void invalidIdentityScenario(int scenario) {
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  auto id = identity();
+  if (scenario == 0)
+    id.verified = false;
+  if (scenario == 1)
+    id.type = IdentityType::UnresolvedPrivate;
+  if (scenario < 2) {
+    TEST_ASSERT_FALSE(owner.connect(0, 1, id, profile()));
+    TEST_ASSERT_EQUAL(0, h.commands.size());
+    return;
   }
+  if (scenario == 2)
+    h.bond.restore_verified = false;
+  if (scenario == 3)
+    h.bond.refusal_installed = false;
+  if (scenario == 4)
+    h.bond.persistence_allowed = false;
+  if (scenario == 5)
+    h.bond.existing_verified_identity = false;
+  if (scenario == 6)
+    h.bond.identity_matches = false;
+  owner.connect(0, 1, id, profile());
+  owner.service(0);
+  BleEvent e;
+  e.kind = BleEventKind::Connected;
+  e.connection = 10;
+  h.deliver(*h.contexts[0], e, false);
+  owner.service(1);
+  TEST_ASSERT_EQUAL(1, h.commands.size()); // No security procedure may escape admission.
+  TEST_ASSERT_EQUAL((int)BleFault::Store, (int)sink.results.back().fault);
+  closed(h, owner, 0);
+}
+
+void invalid_identity_capacity_restore_and_refusal_are_fail_closed() {
+  for (int scenario = 0; scenario < 7; ++scenario)
+    invalidIdentityScenario(scenario);
 }
 void startup_sync_deadline_and_source_failure_never_activate_peers() {
   FakeHost h;
@@ -547,6 +550,22 @@ void final_access_boundary_waits_for_backend_routing_detachment() {
   TEST_ASSERT_EQUAL(2, h.releases);
 }
 
+static void emitServiceCharacteristics(FakeHost &h, const BleProfileSpec &spec, uint8_t service,
+                                       size_t current) {
+  for (uint8_t endpoint = 0; endpoint < 3; ++endpoint) {
+    if (spec.endpoints[endpoint].service != service)
+      continue;
+    BleEvent e;
+    e.kind = BleEventKind::Characteristic;
+    e.connection = 10;
+    e.uuid = spec.endpoints[endpoint].uuid;
+    e.start = endpoint == 0 ? 2 : endpoint == 1 ? 4 : 31;
+    e.handle = endpoint == 0 ? 3 : endpoint == 1 ? 5 : 32;
+    e.properties = spec.endpoints[endpoint].properties;
+    h.deliver(*h.contexts[current], e, false);
+  }
+}
+
 void multiple_services_map_required_endpoints_without_global_characteristic_pointers() {
   FakeHost h;
   Sink sink;
@@ -581,18 +600,7 @@ void multiple_services_map_required_endpoints_without_global_characteristic_poin
     const auto current = command(h, 0, BlePhase::Characteristics);
     TEST_ASSERT_EQUAL(service == 0 ? 1 : 30, h.commands[current].start);
     TEST_ASSERT_EQUAL(service == 0 ? 20 : 40, h.commands[current].end);
-    for (uint8_t endpoint = 0; endpoint < 3; ++endpoint) {
-      if (spec.endpoints[endpoint].service != service)
-        continue;
-      BleEvent e;
-      e.kind = BleEventKind::Characteristic;
-      e.connection = 10;
-      e.uuid = spec.endpoints[endpoint].uuid;
-      e.start = endpoint == 0 ? 2 : endpoint == 1 ? 4 : 31;
-      e.handle = endpoint == 0 ? 3 : endpoint == 1 ? 5 : 32;
-      e.properties = spec.endpoints[endpoint].properties;
-      h.deliver(*h.contexts[current], e, false);
-    }
+    emitServiceCharacteristics(h, spec, service, current);
     h.done(current);
     owner.service(now++);
   }
@@ -675,68 +683,74 @@ void peer_failure_reports_device_health_only_after_a_completed_owner_pass() {
   owner.stop();
   owner.service(101);
 }
-void later_security_loss_retires_ready_and_active_links_without_restarting_discovery() {
-  for (unsigned failure = 0; failure < 9; ++failure) {
-    FakeHost h;
-    Sink sink;
-    BleCentral owner(h, sink);
-    owner.begin(true, true, 0);
-    if (failure == 7) {
-      auto spec = profile();
-      spec.require_authenticated = true;
-      owner.connect(0, 1, identity(), spec);
-      owner.service(0);
-      secure(h, owner, 0);
-    } else {
-      ready(h, owner, 0, 1, true);
-    }
-    if (failure == 5 || failure == 8)
-      TEST_ASSERT_TRUE(owner.read(0, 0, 20));
-    BleEvent security;
-    security.kind = BleEventKind::Security;
-    security.connection = 10;
-    security.identity = identity();
-    security.encrypted = security.bonded = security.authenticated = true;
-    if (failure == 0)
-      security.status = 71;
-    if (failure == 1 || failure == 5 || failure == 7)
-      security.encrypted = false;
-    if (failure == 2)
-      security.identity = identity(2);
-    if (failure == 3)
-      security.authenticated = false;
-    if (failure == 4)
-      security.bonded = false;
-    const auto before = h.commands.size();
-    h.deliver(*h.contexts[command(h, 0, BlePhase::Connect)], security, false);
-    owner.service(21);
-    const bool still_open = owner.admissionOpen(0);
-    const auto phase = owner.phase(0);
-    const auto retired = sink.count(BleResultKind::Retired);
-    const auto calls = h.retirements;
-    const auto after = h.commands.size();
-    const auto status = retired ? sink.results.back().event.status : 0;
-    if (failure == 8) {
-      h.done(command(h, 0, BlePhase::Read));
-      owner.service(22);
-    }
-    const auto reads = sink.count(BleResultKind::ReadComplete);
-    owner.stop();
-    closed(h, owner, 0);
-    if (failure == 6 || failure == 8) {
-      TEST_ASSERT_EQUAL(failure == 6, still_open);
-      TEST_ASSERT_EQUAL((int)(failure == 6 ? BlePhase::ReadyForProfile : BlePhase::Read),
-                        (int)phase);
-      TEST_ASSERT_EQUAL(failure == 8 ? 1 : 0, reads);
-      TEST_ASSERT_EQUAL(before, after);
-      TEST_ASSERT_EQUAL(0, retired);
-    } else {
-      TEST_ASSERT_FALSE(still_open);
-      TEST_ASSERT_EQUAL(1, retired);
-      TEST_ASSERT_EQUAL(1, calls);
-      TEST_ASSERT_EQUAL(failure == 0 ? 71 : 0, status);
-    }
+static void alterSecurity(BleEvent &security, unsigned failure) {
+  if (failure == 0)
+    security.status = 71;
+  if (failure == 1 || failure == 5 || failure == 7)
+    security.encrypted = false;
+  if (failure == 2)
+    security.identity = identity(2);
+  if (failure == 3)
+    security.authenticated = false;
+  if (failure == 4)
+    security.bonded = false;
+}
+
+static void securityLossScenario(unsigned failure) {
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  if (failure == 7) {
+    auto spec = profile();
+    spec.require_authenticated = true;
+    owner.connect(0, 1, identity(), spec);
+    owner.service(0);
+    secure(h, owner, 0);
+  } else {
+    ready(h, owner, 0, 1, true);
   }
+  if (failure == 5 || failure == 8)
+    TEST_ASSERT_TRUE(owner.read(0, 0, 20));
+  BleEvent security;
+  security.kind = BleEventKind::Security;
+  security.connection = 10;
+  security.identity = identity();
+  security.encrypted = security.bonded = security.authenticated = true;
+  alterSecurity(security, failure);
+  const auto before = h.commands.size();
+  h.deliver(*h.contexts[command(h, 0, BlePhase::Connect)], security, false);
+  owner.service(21);
+  const bool still_open = owner.admissionOpen(0);
+  const auto phase = owner.phase(0);
+  const auto retired = sink.count(BleResultKind::Retired);
+  const auto calls = h.retirements;
+  const auto after = h.commands.size();
+  const auto status = retired ? sink.results.back().event.status : 0;
+  if (failure == 8) {
+    h.done(command(h, 0, BlePhase::Read));
+    owner.service(22);
+  }
+  const auto reads = sink.count(BleResultKind::ReadComplete);
+  owner.stop();
+  closed(h, owner, 0);
+  if (failure == 6 || failure == 8) {
+    TEST_ASSERT_EQUAL(failure == 6, still_open);
+    TEST_ASSERT_EQUAL((int)(failure == 6 ? BlePhase::ReadyForProfile : BlePhase::Read), (int)phase);
+    TEST_ASSERT_EQUAL(failure == 8 ? 1 : 0, reads);
+    TEST_ASSERT_EQUAL(before, after);
+    TEST_ASSERT_EQUAL(0, retired);
+  } else {
+    TEST_ASSERT_FALSE(still_open);
+    TEST_ASSERT_EQUAL(1, retired);
+    TEST_ASSERT_EQUAL(1, calls);
+    TEST_ASSERT_EQUAL(failure == 0 ? 71 : 0, status);
+  }
+}
+
+void later_security_loss_retires_ready_and_active_links_without_restarting_discovery() {
+  for (unsigned failure = 0; failure < 9; ++failure)
+    securityLossScenario(failure);
 }
 void failed_scan_cancellation_is_submitted_once_and_cleanup_stays_quarantined() {
   for (unsigned cause = 0; cause < 3; ++cause) {

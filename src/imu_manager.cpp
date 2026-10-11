@@ -9,7 +9,144 @@ int16_t signedLe(const uint8_t *p) {
   const uint16_t u = uint16_t(p[0]) | (uint16_t(p[1]) << 8);
   return u < 32768 ? int16_t(u) : int16_t(int32_t(u) - 65536);
 }
+uint8_t payloadLength(uint8_t header) {
+  switch (header) {
+  case 0x8c:
+    return 12;
+  case 0x44:
+    return 3;
+  case 0x40:
+    return 1;
+  case 0x48:
+    return 4;
+  default:
+    return 0;
+  }
+}
+bool endpoint(int16_t value) { return value == 32767 || value == -32767; }
 } // namespace
+bool ImuFifoCodec::decodeSample(const uint8_t *p, ImuEvidence &e, ImuEmitter &out) {
+
+  if (frame_ == UINT32_MAX) {
+    e.event_code = 1;
+    e.timing_flags |= 5;
+    out.emit(e);
+    return false;
+  }
+  e.kind = RecordKind::ImuSample;
+  e.frame_sequence = ++frame_;
+  add(health_.samples);
+  for (unsigned axis = 0; axis < 3; ++axis) {
+    e.gyro[axis] = signedLe(p + 2 * axis);
+    e.accel[axis] = signedLe(p + 6 + 2 * axis);
+    if (endpoint(e.gyro[axis]) || endpoint(e.accel[axis]))
+      e.timing_flags |= 8;
+  }
+  return true;
+}
+bool ImuFifoCodec::decodeControl(uint8_t header, uint8_t n, const uint8_t *p, ImuEvidence &e,
+                                 ImuEmitter &out) {
+
+  e.event_length = n;
+  for (unsigned j = 0; j < n; ++j)
+    e.event_bytes[j] = p[j];
+  if (header == 0x44) {
+    decodeSensorTime(p, e);
+  } else if (header == 0x40) {
+    e.event_code = 4;
+    e.event_count = p[0];
+    add(health_.skipped_lower_bound, p[0]);
+    add(health_.discontinuities);
+    e.event_count_lower_bound = p[0] == 255;
+    e.timing_flags |= 1;
+  } else {
+    add(health_.discontinuities);
+    e.event_code = 6;
+    e.timing_flags |= 1;
+    out.emit(e);
+    return false;
+  }
+  return true;
+}
+void ImuFifoCodec::decodeSensorTime(const uint8_t *p, ImuEvidence &e) {
+  e.event_code = 5;
+  e.sensor_time_present = true;
+  e.sensor_time_ticks24 = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16);
+  if (time_ && e.sensor_time_ticks24 == tick_)
+    e.timing_flags |= 2;
+  if (time_ && (e.sensor_time_ticks24 < tick_ || !e.receipt_known ||
+                uint32_t(e.receipt_millis32 - receipt_) >= 655360))
+    e.timing_flags |= 4;
+  receipt_ = e.receipt_millis32;
+  tick_ = e.sensor_time_ticks24;
+  time_ = true;
+}
+void ImuManager::initializeSensor() {
+
+  bool ok = port_.begin(base_.config);
+  if (!ok)
+    add(health_.init_errors);
+  state_ = ok ? State::Ready : State::Failed;
+  ImuEvidence e = base_;
+  e.kind = ok ? RecordKind::ImuConfig : RecordKind::ImuHealth;
+  e.event_code = ok ? 0 : 2;
+  emit(e);
+  publish();
+  progress_.completed(ok ? DeviceHealth::Ok : DeviceHealth::Missing);
+}
+void ImuManager::flushRecovery() {
+
+  const bool ok = port_.flush();
+  if (ok)
+    add(health_.recovery_flushes);
+  else
+    add(health_.recovery_errors);
+  ImuEvidence e = base_;
+  e.kind = RecordKind::ImuControl;
+  e.event_code = ok ? 9 : 2;
+  e.timing_flags |= 1;
+  emit(e);
+  publish();
+  if (ok) {
+    ++base_.sensor_epoch;
+    codec_.barrier();
+    state_ = State::Ready;
+  } else
+    state_ = State::Failed;
+  progress_.completed(ok ? DeviceHealth::Ok : DeviceHealth::IoError);
+}
+void ImuManager::decodeDrain(uint16_t n, uint8_t flags) {
+  if (flags) {
+    ImuEvidence e = base_;
+    e.kind = RecordKind::ImuHealth;
+    e.event_length = 1;
+    e.event_bytes[0] = flags;
+    emit(e);
+  }
+  if (!codec_.decode(bytes_, n, base_, *this))
+    state_ = ++failures_ >= 3 || profile_unknown_ ? State::Failed : State::Barrier;
+  else if (n)
+    failures_ = 0;
+}
+void ImuManager::drainSensor() {
+  uint16_t n = 0;
+  uint8_t flags = 0;
+  const bool ok = port_.read(bytes_, kBytes, n, flags);
+  base_.drain_known = port_.drainTimes(base_.drain_start_millis32, base_.drain_end_millis32);
+  if (!ok || n > kBytes) {
+    add(health_.read_errors);
+    ImuEvidence e = base_;
+    e.kind = RecordKind::ImuHealth;
+    port_.describeReadFailure(e);
+    e.timing_flags |= 1;
+    emit(e);
+    state_ = ++failures_ >= 3 || profile_unknown_ ? State::Failed : State::Barrier;
+  } else {
+    decodeDrain(n, flags);
+  }
+  publish();
+  progress_.completed(ok ? DeviceHealth::Ok : DeviceHealth::IoError);
+}
 bool ImuFifoCodec::decode(const uint8_t *bytes, uint16_t length, ImuEvidence base,
                           ImuEmitter &out) {
   if (length > 112 || (!bytes && length)) {
@@ -34,20 +171,9 @@ bool ImuFifoCodec::decode(const uint8_t *bytes, uint16_t length, ImuEvidence bas
       out.emit(e);
       return true;
     }
-    switch (header) {
-    case 0x8c:
-      n = 12;
-      break;
-    case 0x44:
-      n = 3;
-      break;
-    case 0x40:
-      n = 1;
-      break;
-    case 0x48:
-      n = 4;
-      break;
-    default:
+    n = payloadLength(header);
+    if (!n) {
+
       add(health_.unsupported);
       add(health_.discontinuities);
       e.event_code = 1;
@@ -66,54 +192,10 @@ bool ImuFifoCodec::decode(const uint8_t *bytes, uint16_t length, ImuEvidence bas
       return false;
     }
     const uint8_t *p = bytes + pos;
-    if (header == 0x8c) {
-      if (frame_ == UINT32_MAX) {
-        e.event_code = 1;
-        e.timing_flags |= 5;
-        out.emit(e);
-        return false;
-      }
-      e.kind = RecordKind::ImuSample;
-      e.frame_sequence = ++frame_;
-      add(health_.samples);
-      for (unsigned axis = 0; axis < 3; ++axis) {
-        e.gyro[axis] = signedLe(p + 2 * axis);
-        e.accel[axis] = signedLe(p + 6 + 2 * axis);
-        if (e.gyro[axis] == 32767 || e.gyro[axis] == -32767 || e.accel[axis] == 32767 ||
-            e.accel[axis] == -32767)
-          e.timing_flags |= 8;
-      }
-    } else {
-      e.event_length = n;
-      for (unsigned j = 0; j < n; ++j)
-        e.event_bytes[j] = p[j];
-      if (header == 0x44) {
-        e.event_code = 5;
-        e.sensor_time_present = true;
-        e.sensor_time_ticks24 = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16);
-        if (time_ && e.sensor_time_ticks24 == tick_)
-          e.timing_flags |= 2;
-        if (time_ && (e.sensor_time_ticks24 < tick_ || !base.receipt_known ||
-                      uint32_t(base.receipt_millis32 - receipt_) >= 655360))
-          e.timing_flags |= 4;
-        receipt_ = base.receipt_millis32;
-        tick_ = e.sensor_time_ticks24;
-        time_ = true;
-      } else if (header == 0x40) {
-        e.event_code = 4;
-        e.event_count = p[0];
-        add(health_.skipped_lower_bound, p[0]);
-        add(health_.discontinuities);
-        e.event_count_lower_bound = p[0] == 255;
-        e.timing_flags |= 1;
-      } else {
-        add(health_.discontinuities);
-        e.event_code = 6;
-        e.timing_flags |= 1;
-        out.emit(e);
-        return false;
-      }
-    }
+    const bool decoded =
+        header == 0x8c ? decodeSample(p, e, out) : decodeControl(header, n, p, e, out);
+    if (!decoded)
+      return false;
     out.emit(e);
     pos += n;
   }
@@ -139,6 +221,9 @@ void ImuManager::publish() {
     batch_.count = 0;
   }
 }
+bool ImuManager::sequenceExhausted() const {
+  return base_.batch_sequence == UINT32_MAX || base_.sensor_epoch == UINT32_MAX;
+}
 void ImuManager::step(uint32_t now) {
   if (state_ == State::Finished)
     return;
@@ -156,7 +241,7 @@ void ImuManager::step(uint32_t now) {
     progress_.completed(DeviceHealth::RetryExhausted);
     return;
   }
-  if (base_.batch_sequence == UINT32_MAX || base_.sensor_epoch == UINT32_MAX) {
+  if (sequenceExhausted()) {
     state_ = State::Failed;
     return;
   }
@@ -165,65 +250,13 @@ void ImuManager::step(uint32_t now) {
   previous_ = now;
   receipt_ = true;
   if (state_ == State::Initial) {
-    bool ok = port_.begin(base_.config);
-    if (!ok)
-      add(health_.init_errors);
-    state_ = ok ? State::Ready : State::Failed;
-    ImuEvidence e = base_;
-    e.kind = ok ? RecordKind::ImuConfig : RecordKind::ImuHealth;
-    e.event_code = ok ? 0 : 2;
-    emit(e);
-    publish();
-    progress_.completed(ok ? DeviceHealth::Ok : DeviceHealth::Missing);
+    initializeSensor();
     return;
   }
   if (state_ == State::Barrier) {
-    const bool ok = port_.flush();
-    if (ok)
-      add(health_.recovery_flushes);
-    else
-      add(health_.recovery_errors);
-    ImuEvidence e = base_;
-    e.kind = RecordKind::ImuControl;
-    e.event_code = ok ? 9 : 2;
-    e.timing_flags |= 1;
-    emit(e);
-    publish();
-    if (ok) {
-      ++base_.sensor_epoch;
-      codec_.barrier();
-      state_ = State::Ready;
-    } else
-      state_ = State::Failed;
-    progress_.completed(ok ? DeviceHealth::Ok : DeviceHealth::IoError);
+    flushRecovery();
     return;
   }
-  uint16_t n = 0;
-  uint8_t flags = 0;
-  const bool ok = port_.read(bytes_, kBytes, n, flags);
-  base_.drain_known = port_.drainTimes(base_.drain_start_millis32, base_.drain_end_millis32);
-  if (!ok || n > kBytes) {
-    add(health_.read_errors);
-    ImuEvidence e = base_;
-    e.kind = RecordKind::ImuHealth;
-    port_.describeReadFailure(e);
-    e.timing_flags |= 1;
-    emit(e);
-    state_ = ++failures_ >= 3 || profile_unknown_ ? State::Failed : State::Barrier;
-  } else {
-    if (flags) {
-      ImuEvidence e = base_;
-      e.kind = RecordKind::ImuHealth;
-      e.event_length = 1;
-      e.event_bytes[0] = flags;
-      emit(e);
-    }
-    if (!codec_.decode(bytes_, n, base_, *this))
-      state_ = ++failures_ >= 3 || profile_unknown_ ? State::Failed : State::Barrier;
-    else if (n)
-      failures_ = 0;
-  }
-  publish();
-  progress_.completed(ok ? DeviceHealth::Ok : DeviceHealth::IoError);
+  drainSensor();
 }
 } // namespace ridesync

@@ -81,11 +81,7 @@ void setup() {
   emit("SD_LOGGING: bench only; modem/BLE/IMU disabled; send W (4 rows) or P (60 rows, "
        "power-cut window) once; missing GNSS\n");
 }
-void loop() {
-  const uint32_t now = millis(), gap = now - last_loop;
-  last_loop = now;
-  if (gap > max_gap)
-    max_gap = gap;
+void readCommand(uint32_t now) {
   // At most one serial byte per control pass; W/P share one allocation per boot.
   if (Serial.available()) {
     const int command = Serial.read();
@@ -103,7 +99,9 @@ void loop() {
       }
     }
   }
-  run.service(now);
+}
+
+void reportAllocation() {
   if (run.workerStarted() && !reported_allocation) {
     const auto a = owner.allocation(); // Copy only; no worker-owned filesystem access.
     if (a.status != ridesync::IdentityStatus::Pending)
@@ -111,17 +109,29 @@ void loop() {
           emit("SD_LOGGING: allocation_status=%u counter=%lu identity_error=%d\n",
                unsigned(a.status), static_cast<unsigned long>(uint32_t(a.id)), a.error);
   }
+}
+
+void reportRows() {
   if (run.rows() != reported_rows && emit("SD_LOGGING: ROW accepted=%lu monotonic_ms=%llu\n",
                                           static_cast<unsigned long>(run.rows()),
                                           static_cast<unsigned long long>(run.lastRowMs())))
     reported_rows = run.rows();
+}
+
+void reportFinal() {
   if ((run.done() || run.failed()) && !reported_final) {
     const bool finished = run.workerStarted() && owner.workerFinished();
     reported_final = emit("SD_LOGGING: %s reason=%s worker_finished=%u io=%d\n", state(),
                           run.reason(), finished, owner.ioError());
   }
+}
+
+void reportCleanup() {
   if (run.failed() && run.workerStarted() && owner.workerFinished() && !reported_cleanup)
     reported_cleanup = emit("SD_LOGGING: cleanup_finished; FAILED remains; reset required\n");
+}
+
+void reportHealth(uint32_t now, uint32_t gap) {
   if (uint32_t(now - last_report) >= 1000) {
     last_report = now;
     const auto h = run.health();
@@ -139,5 +149,19 @@ void loop() {
          h.stopped, static_cast<unsigned long>(generation), unsigned(outcome), owner.ioError(),
          finished);
   }
+}
+
+void loop() {
+  const uint32_t now = millis(), gap = now - last_loop;
+  last_loop = now;
+  if (gap > max_gap)
+    max_gap = gap;
+  readCommand(now);
+  run.service(now);
+  reportAllocation();
+  reportRows();
+  reportFinal();
+  reportCleanup();
+  reportHealth(now, gap);
   delay(1); // Yield while the independent production worker owns all SD IO.
 }

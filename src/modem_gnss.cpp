@@ -7,14 +7,23 @@ bool duration(uint32_t n) { return n > 0 && n < 0x80000000UL; }
 bool starts(const char *s, const char *prefix) {
   return std::strncmp(s, prefix, std::strlen(prefix)) == 0;
 }
+bool ioBudgetValid(const ModemConfig &config) {
+  return config.rx_bytes_per_tick > 0 && config.rx_bytes_per_tick <= 256 &&
+         config.tx_bytes_per_tick > 0 && config.tx_bytes_per_tick <= 32;
+}
+bool configBoundsValid(const ModemConfig &config) {
+  return duration(config.command_ms) && duration(config.ready_ms) && duration(config.poll_ms) &&
+         duration(config.stale_ms) && ioBudgetValid(config) && config.max_attempts > 0 &&
+         config.max_attempts <= 8 && config.max_restarts <= 8;
+}
+bool terminalError(const char *line_) {
+  return std::strcmp(line_, "ERROR") == 0 || starts(line_, "+CME ERROR:") ||
+         starts(line_, "+CMS ERROR:");
+}
 } // namespace
 ModemGnss::ModemGnss(ModemUart &uart, const ModemConfig &config) : uart_(uart), config_(config) {
   if (config.documentary_profile_opt_in && config.terminal_retires_transaction &&
-      duration(config.command_ms) && duration(config.ready_ms) && duration(config.poll_ms) &&
-      duration(config.stale_ms) && config.rx_bytes_per_tick > 0 &&
-      config.rx_bytes_per_tick <= 256 && config.tx_bytes_per_tick > 0 &&
-      config.tx_bytes_per_tick <= 32 && config.max_attempts > 0 && config.max_attempts <= 8 &&
-      config.max_restarts <= 8) {
+      configBoundsValid(config)) {
     status_.state = ModemState::Startup;
     status_.health = UartHealth::Healthy;
   }
@@ -65,6 +74,140 @@ void ModemGnss::terminal(bool ok, uint64_t now) {
     poll_start_ = now - config_.poll_ms;
     return;
   }
+  completeCommand(now);
+}
+bool ModemGnss::pollCandidateExpected() const {
+  return outstanding_ && status_.state == ModemState::Poll && tx_offset_ == std::strlen(command_) &&
+         (starts(line_, "+CGPSINFO:") || starts(line_, "+CGNSSINFO:"));
+}
+void ModemGnss::line(uint64_t now) {
+  line_[line_size_] = 0;
+  if (std::strcmp(line_, "+CGNSSPWR: READY!") == 0) {
+    if (status_.gnss_power_enabled || (outstanding_ && status_.state == ModemState::Power))
+      status_.receiver_ready = true;
+    return;
+  }
+  if (std::strcmp(line_, "RDY") == 0) {
+    receiverRestarted();
+    return;
+  }
+  if (std::strcmp(line_, "OK") == 0) {
+    terminal(true, now);
+    return;
+  }
+  if (terminalError(line_)) {
+    terminal(false, now);
+    return;
+  }
+  if (pollCandidateExpected()) {
+    receivePollCandidate(now);
+  }
+}
+bool ModemGnss::checkIdleDeadlines(const RecordTimestamp &now) {
+  if (!outstanding_ &&
+      (((status_.state == ModemState::Startup || status_.state == ModemState::Power) &&
+        now.monotonic_ms - deadline_start_ >= config_.command_ms) ||
+       (status_.state == ModemState::Poll &&
+        now.monotonic_ms - poll_start_ >= uint64_t(config_.poll_ms) + config_.command_ms))) {
+    status_.state = ModemState::Failed;
+    status_.health = UartHealth::Timeout;
+    status_.fix = GnssFix{};
+    status_.validity = FixValidity::Invalid;
+    return false;
+  }
+  if (status_.state == ModemState::WaitReady && !status_.receiver_ready &&
+      now.monotonic_ms - deadline_start_ >= config_.ready_ms) {
+    status_.state = ModemState::Failed;
+    status_.health = UartHealth::Timeout;
+    return false;
+  }
+  return true;
+}
+void ModemGnss::receiveByte(int c, uint64_t now) {
+  if (c == '\r' || c == '\n') {
+    if (!dropping_ && line_size_)
+      line(now);
+    dropping_ = false;
+    line_size_ = 0;
+  } else if (!dropping_) {
+    if (c < 32 || c > 126 || line_size_ == kGnssMaxLineBytes) {
+      dropping_ = true;
+      line_size_ = 0;
+      desynchronize(UartHealth::Overflow);
+    } else
+      line_[line_size_++] = static_cast<char>(c);
+  }
+}
+void ModemGnss::receiveLines(uint64_t now) {
+  for (size_t n = 0; n < config_.rx_bytes_per_tick && uart_.available(); ++n) {
+    const int c = uart_.read();
+    if (c < 0)
+      break;
+    receiveByte(c, now);
+  }
+}
+bool ModemGnss::advanceReadiness(const RecordTimestamp &now) {
+  if (status_.state == ModemState::WaitReady) {
+    if (status_.receiver_ready) {
+      status_.state = ModemState::Poll;
+      poll_start_ = now.monotonic_ms - config_.poll_ms;
+    } else if (now.monotonic_ms - deadline_start_ >= config_.ready_ms) {
+      status_.state = ModemState::Failed;
+      status_.health = UartHealth::Timeout;
+      return false;
+    }
+  }
+  return true;
+}
+void ModemGnss::scheduleNext(const RecordTimestamp &now) {
+  // No queue: do not send while old bytes/partial frames remain in receive path.
+  if (!outstanding_ && uart_.available() == 0 && line_size_ == 0 && !dropping_) {
+    if (status_.state == ModemState::Startup)
+      schedule("AT\r", now.monotonic_ms);
+    else if (status_.state == ModemState::Power)
+      schedule("AT+CGNSSPWR=1\r", now.monotonic_ms);
+    else if (status_.state == ModemState::Poll && now.monotonic_ms - poll_start_ >= config_.poll_ms)
+      schedule("AT+CGPSINFO\r", now.monotonic_ms);
+  }
+}
+void ModemGnss::transmitCommand() {
+  if (outstanding_ && tx_offset_ < std::strlen(command_)) {
+    const size_t n = std::min(std::min(uart_.writable(), config_.tx_bytes_per_tick),
+                              std::strlen(command_) - tx_offset_);
+    if (n) {
+      const size_t wrote = uart_.write(command_ + tx_offset_, n);
+      if (wrote > n)
+        desynchronize(UartHealth::ProtocolError);
+      else
+        tx_offset_ += wrote;
+    }
+  }
+}
+void ModemGnss::receiverRestarted() {
+  barrier_required_ = true;
+  status_.gnss_power_enabled = false;
+  status_.receiver_ready = false;
+  if (outstanding_)
+    desynchronize(UartHealth::ProtocolError);
+  else {
+    status_.state = ModemState::Failed;
+    status_.health = UartHealth::ProtocolError;
+    status_.fix = GnssFix{};
+    status_.validity = FixValidity::Invalid;
+  }
+}
+void ModemGnss::receivePollCandidate(uint64_t now) {
+  if (candidate_) {
+    pending_ = GnssParseResult{};
+  } else {
+    pending_ = parseGnssLine(line_, line_size_, now);
+    candidate_ = true;
+  }
+  // A CGNSSINFO line cannot substitute for the command-specific CGPSINFO reply.
+  if (starts(line_, "+CGNSSINFO:"))
+    pending_ = GnssParseResult{};
+}
+void ModemGnss::completeCommand(uint64_t now) {
   if (status_.state == ModemState::Startup) {
     attempts_ = 0;
     status_.state = ModemState::Power;
@@ -88,128 +231,42 @@ void ModemGnss::terminal(bool ok, uint64_t now) {
   }
   status_.health = UartHealth::Healthy;
 }
-void ModemGnss::line(uint64_t now) {
-  line_[line_size_] = 0;
-  if (std::strcmp(line_, "+CGNSSPWR: READY!") == 0) {
-    if (status_.gnss_power_enabled || (outstanding_ && status_.state == ModemState::Power))
-      status_.receiver_ready = true;
-  } else if (std::strcmp(line_, "RDY") == 0) {
-    barrier_required_ = true;
-    status_.gnss_power_enabled = false;
-    status_.receiver_ready = false;
-    if (outstanding_)
-      desynchronize(UartHealth::ProtocolError);
-    else {
-      status_.state = ModemState::Failed;
-      status_.health = UartHealth::ProtocolError;
-      status_.fix = GnssFix{};
-      status_.validity = FixValidity::Invalid;
-    }
-  } else if (std::strcmp(line_, "OK") == 0)
-    terminal(true, now);
-  else if (std::strcmp(line_, "ERROR") == 0 || starts(line_, "+CME ERROR:") ||
-           starts(line_, "+CMS ERROR:"))
-    terminal(false, now);
-  else if (outstanding_ && status_.state == ModemState::Poll &&
-           tx_offset_ == std::strlen(command_) &&
-           (starts(line_, "+CGPSINFO:") || starts(line_, "+CGNSSINFO:"))) {
-    if (candidate_) {
-      pending_ = GnssParseResult{};
-    } else {
-      pending_ = parseGnssLine(line_, line_size_, now);
-      candidate_ = true;
-    }
-    // A CGNSSINFO line cannot substitute for the command-specific CGPSINFO reply.
-    if (starts(line_, "+CGNSSINFO:"))
-      pending_ = GnssParseResult{};
-  }
-}
-void ModemGnss::tick(const RecordTimestamp &now) {
-  if (status_.state == ModemState::Disabled)
-    return;
+bool ModemGnss::admitTime(const RecordTimestamp &now) {
   if (!validTime(now)) {
     barrier_required_ = true;
     desynchronize(UartHealth::InvalidClock);
-    return;
+    return false;
   }
   if (!initialized_)
     deadline_start_ = now.monotonic_ms;
   initialized_ = true;
   status_.session_id = now.session_id;
   last_ms_ = now.monotonic_ms;
+  return true;
+}
+bool ModemGnss::receiveTerminated() const {
+  return status_.state == ModemState::Desynchronized || status_.state == ModemState::Failed;
+}
+void ModemGnss::tick(const RecordTimestamp &now) {
+  if (status_.state == ModemState::Disabled)
+    return;
+  if (!admitTime(now))
+    return;
   if (status_.state == ModemState::Failed)
     return;
-  if (!outstanding_ &&
-      (((status_.state == ModemState::Startup || status_.state == ModemState::Power) &&
-        now.monotonic_ms - deadline_start_ >= config_.command_ms) ||
-       (status_.state == ModemState::Poll &&
-        now.monotonic_ms - poll_start_ >= uint64_t(config_.poll_ms) + config_.command_ms))) {
-    status_.state = ModemState::Failed;
-    status_.health = UartHealth::Timeout;
-    status_.fix = GnssFix{};
-    status_.validity = FixValidity::Invalid;
+  if (!checkIdleDeadlines(now))
     return;
-  }
-  if (status_.state == ModemState::WaitReady && !status_.receiver_ready &&
-      now.monotonic_ms - deadline_start_ >= config_.ready_ms) {
-    status_.state = ModemState::Failed;
-    status_.health = UartHealth::Timeout;
-    return;
-  }
   // Expiry precedes input: a terminal arriving in a late tick cannot rescue data.
   if (outstanding_ && status_.state != ModemState::Desynchronized &&
       now.monotonic_ms - deadline_start_ >= config_.command_ms)
     desynchronize(UartHealth::Timeout);
-  for (size_t n = 0; n < config_.rx_bytes_per_tick && uart_.available(); ++n) {
-    const int c = uart_.read();
-    if (c < 0)
-      break;
-    if (c == '\r' || c == '\n') {
-      if (!dropping_ && line_size_)
-        line(now.monotonic_ms);
-      dropping_ = false;
-      line_size_ = 0;
-    } else if (!dropping_) {
-      if (c < 32 || c > 126 || line_size_ == kGnssMaxLineBytes) {
-        dropping_ = true;
-        line_size_ = 0;
-        desynchronize(UartHealth::Overflow);
-      } else
-        line_[line_size_++] = static_cast<char>(c);
-    }
-  }
-  if (status_.state == ModemState::Desynchronized || status_.state == ModemState::Failed)
+  receiveLines(now.monotonic_ms);
+  if (receiveTerminated())
     return;
-  if (status_.state == ModemState::WaitReady) {
-    if (status_.receiver_ready) {
-      status_.state = ModemState::Poll;
-      poll_start_ = now.monotonic_ms - config_.poll_ms;
-    } else if (now.monotonic_ms - deadline_start_ >= config_.ready_ms) {
-      status_.state = ModemState::Failed;
-      status_.health = UartHealth::Timeout;
-      return;
-    }
-  }
-  // No queue: do not send while old bytes/partial frames remain in receive path.
-  if (!outstanding_ && uart_.available() == 0 && line_size_ == 0 && !dropping_) {
-    if (status_.state == ModemState::Startup)
-      schedule("AT\r", now.monotonic_ms);
-    else if (status_.state == ModemState::Power)
-      schedule("AT+CGNSSPWR=1\r", now.monotonic_ms);
-    else if (status_.state == ModemState::Poll && now.monotonic_ms - poll_start_ >= config_.poll_ms)
-      schedule("AT+CGPSINFO\r", now.monotonic_ms);
-  }
-  if (outstanding_ && tx_offset_ < std::strlen(command_)) {
-    const size_t n = std::min(std::min(uart_.writable(), config_.tx_bytes_per_tick),
-                              std::strlen(command_) - tx_offset_);
-    if (n) {
-      const size_t wrote = uart_.write(command_ + tx_offset_, n);
-      if (wrote > n)
-        desynchronize(UartHealth::ProtocolError);
-      else
-        tx_offset_ += wrote;
-    }
-  }
+  if (!advanceReadiness(now))
+    return;
+  scheduleNext(now);
+  transmitCommand();
 }
 ModemSnapshot ModemGnss::snapshot(const RecordTimestamp &now) const {
   ModemSnapshot result = status_;

@@ -38,6 +38,59 @@ bool video(uint8_t mode) {
   // Deliberately narrow: other status modes can contain still/submode ambiguity.
   return mode == 1 || mode == 0x38 || mode == 0x41;
 }
+Decoded decodeConnectionPayload(Decoded d, const uint8_t *payload, size_t n) {
+  if (d.response) {
+    if (n != 9)
+      return {};
+    d.kind = Kind::ConnectionResponse;
+    d.device_id = le32(payload);
+    d.return_code = payload[4];
+  } else {
+    if (n != 33 || payload[4] > 16)
+      return {};
+    d.kind = Kind::ConnectionRequest;
+    d.device_id = le32(payload);
+    d.verify_mode = payload[26];
+    d.verify_data = le16(payload + 27);
+  }
+
+  return d;
+}
+Decoded decodeAckPayload(Decoded d, const uint8_t *payload, size_t n) {
+  // Record ACK: one-byte demo structure and five-byte documented structure.
+  if (n != 5 && !(d.cmd_id == 3 && n == 1))
+    return {};
+  d.kind = d.cmd_id == 3 ? Kind::RecordResponse : Kind::ModeResponse;
+  d.return_code = payload[0];
+
+  return d;
+}
+Decoded decodeStatusPayload(Decoded d, const uint8_t *payload, size_t n) {
+  if (d.response || n != 38)
+    return {};
+  d.kind = Kind::Status;
+  d.camera_mode = payload[0];
+  d.camera_status = payload[1];
+  d.power_mode = payload[28];
+  d.temperature = payload[30];
+  if (video(payload[0]) && payload[29] == payload[0] && payload[28] == 0 && payload[30] <= 1) {
+    if (payload[1] == 3)
+      d.recording = RecordingState::Recording;
+    else if (payload[1] <= 2)
+      d.recording = RecordingState::Stopped;
+  }
+
+  return d;
+}
+bool validHeader(const uint8_t *p) {
+  return !(p[3] & 0xc0) && p[4] == 0 && checksum(p, 10, 0xa001) == le16(p + 10);
+}
+bool validEnvelope(const uint8_t *p, size_t size) {
+  if (!p || size < 18 || size > kReceiveCapacity)
+    return false;
+  return p[0] == 0xaa && le16(p + 1) == size && validHeader(p) &&
+         checksum(p, size - 4, 0xedb88320) == le32(p + size - 4);
+}
 } // namespace
 Packet encodeConnection(uint16_t sequence, uint32_t controller_id,
                         const std::array<uint8_t, 6> &mac, uint8_t verify_mode,
@@ -80,9 +133,7 @@ Packet encodeVideoMode(uint16_t sequence, uint32_t device_id) {
   return seal(p);
 }
 Decoded decode(const uint8_t *p, size_t size) {
-  if (!p || size < 18 || size > kReceiveCapacity || p[0] != 0xaa || le16(p + 1) != size ||
-      (p[3] & 0xc0) || p[4] != 0 || checksum(p, 10, 0xa001) != le16(p + 10) ||
-      checksum(p, size - 4, 0xedb88320) != le32(p + size - 4))
+  if (!validEnvelope(p, size))
     return {};
   Decoded d;
   d.kind = Kind::Unknown;
@@ -94,42 +145,12 @@ Decoded decode(const uint8_t *p, size_t size) {
   d.reply_type = p[3] & 0x1f;
   const size_t n = size - 18;
   const uint8_t *payload = p + 14;
-  if (d.cmd_set == 0 && d.cmd_id == 0x19) {
-    if (d.response) {
-      if (n != 9)
-        return {};
-      d.kind = Kind::ConnectionResponse;
-      d.device_id = le32(payload);
-      d.return_code = payload[4];
-    } else {
-      if (n != 33 || payload[4] > 16)
-        return {};
-      d.kind = Kind::ConnectionRequest;
-      d.device_id = le32(payload);
-      d.verify_mode = payload[26];
-      d.verify_data = le16(payload + 27);
-    }
-  } else if (d.cmd_set == 0x1d && (d.cmd_id == 3 || d.cmd_id == 4) && d.response) {
-    // Record ACK: one-byte demo structure and five-byte documented structure.
-    if (n != 5 && !(d.cmd_id == 3 && n == 1))
-      return {};
-    d.kind = d.cmd_id == 3 ? Kind::RecordResponse : Kind::ModeResponse;
-    d.return_code = payload[0];
-  } else if (d.cmd_set == 0x1d && d.cmd_id == 2) {
-    if (d.response || n != 38)
-      return {};
-    d.kind = Kind::Status;
-    d.camera_mode = payload[0];
-    d.camera_status = payload[1];
-    d.power_mode = payload[28];
-    d.temperature = payload[30];
-    if (video(payload[0]) && payload[29] == payload[0] && payload[28] == 0 && payload[30] <= 1) {
-      if (payload[1] == 3)
-        d.recording = RecordingState::Recording;
-      else if (payload[1] <= 2)
-        d.recording = RecordingState::Stopped;
-    }
-  }
+  if (d.cmd_set == 0 && d.cmd_id == 0x19)
+    return decodeConnectionPayload(d, payload, n);
+  if (d.cmd_set == 0x1d && (d.cmd_id == 3 || d.cmd_id == 4) && d.response)
+    return decodeAckPayload(d, payload, n);
+  if (d.cmd_set == 0x1d && d.cmd_id == 2)
+    return decodeStatusPayload(d, payload, n);
   return d;
 }
 Decoded Receiver::push(uint8_t byte) {
@@ -143,8 +164,7 @@ Decoded Receiver::push(uint8_t byte) {
       return {};
     }
   }
-  if (used_ == 12 && ((bytes_[3] & 0xc0) || bytes_[4] != 0 ||
-                      checksum(bytes_.data(), 10, 0xa001) != le16(bytes_.data() + 10))) {
+  if (used_ == 12 && !validHeader(bytes_.data())) {
     reset();
     return {};
   }

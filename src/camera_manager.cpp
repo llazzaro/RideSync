@@ -47,39 +47,45 @@ ConfigResult CameraManager::configure(const SourceConfig &c) {
     peers_[i].state.lifecycle = config_.cameras[i].enabled ? Lifecycle::Idle : Lifecycle::Disabled;
   return result;
 }
+CameraError CameraManager::operationAdmission(size_t i, Operation op) const {
+  const auto &p = peers_[i];
+  if (op == Operation::Connect) {
+    if (p.active || connected(p.state.lifecycle))
+      return CameraError::Busy;
+  } else {
+    if (!connected(p.state.lifecycle) || (p.active && p.current == Operation::Connect))
+      return CameraError::NotConnected;
+    if (capability(p.state.capabilities, op) != CapabilityState::Supported)
+      return CameraError::Unsupported;
+  }
+  if (p.active && p.queued == kQueueDepth)
+    return CameraError::QueueFull;
+  if (!p.state.token.hasRoom() || p.next_intent_id == UINT32_MAX)
+    return CameraError::Busy;
+  // Intent identifiers never wrap into an earlier request in this manager
+  // lifetime; require an explicit new manager/session before exhaustion.
+  return CameraError::None;
+}
+CameraError CameraManager::peerAdmission(size_t i) const {
+  if (!validPolicy())
+    return CameraError::InvalidPolicy;
+  if (!config_.cameras[i].enabled)
+    return CameraError::Disabled;
+  if (sealed(i))
+    return CameraError::Cancelled;
+  return CameraError::None;
+}
 CameraError CameraManager::request(size_t i, Operation op) {
   if (i >= size())
     return CameraError::InvalidPeer;
   auto &p = peers_[i];
-  CameraError error = CameraError::None;
-  if (!validPolicy())
-    error = CameraError::InvalidPolicy;
-  else if (!config_.cameras[i].enabled)
-    error = CameraError::Disabled;
-  else if (sealed(i))
-    error = CameraError::Cancelled;
+  CameraError error = peerAdmission(i);
   if (error != CameraError::None) {
     if (audit_)
       audit_->request(i, op, error, false, 0);
     return error;
   }
-  if (op == Operation::Connect) {
-    if (p.active || connected(p.state.lifecycle))
-      error = CameraError::Busy;
-  } else {
-    if (!connected(p.state.lifecycle) || (p.active && p.current == Operation::Connect))
-      error = CameraError::NotConnected;
-    else if (capability(p.state.capabilities, op) != CapabilityState::Supported)
-      error = CameraError::Unsupported;
-  }
-  if (error == CameraError::None && p.active && p.queued == kQueueDepth)
-    error = CameraError::QueueFull;
-  if (error == CameraError::None && !p.state.token.hasRoom())
-    error = CameraError::Busy;
-  // Intent identifiers never wrap into an earlier request in this manager
-  // lifetime; require an explicit new manager/session before exhaustion.
-  if (error == CameraError::None && p.next_intent_id == UINT32_MAX)
-    error = CameraError::Busy;
+  error = operationAdmission(i, op);
   if (error != CameraError::None) {
     if (audit_)
       audit_->request(i, op, error, false, 0);
@@ -237,8 +243,7 @@ void CameraManager::tick() {
       fail(i, CameraError::Timeout);
   }
 }
-bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionEvent,
-                                  uint32_t &intent_id, Operation &operation) {
+bool CameraManager::eventEnvelope(const Event &e, Peer *&peer, bool &connectionEvent) {
   if (e.peer >= size() || sealed(e.peer))
     return false;
   peer = &peers_[e.peer];
@@ -255,6 +260,13 @@ bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionE
   if (l != Lifecycle::Connecting && l != Lifecycle::Ready && l != Lifecycle::Operating &&
       !backoffConnectionEvent)
     return false;
+  return true;
+}
+bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionEvent,
+                                  uint32_t &intent_id, Operation &operation) {
+  if (!eventEnvelope(e, peer, connectionEvent))
+    return false;
+  auto &p = *peer;
   if (!connectionEvent && p.active && reached(clock_.now(), p.state.deadline_ms)) {
     fail(e.peer, CameraError::Timeout);
     return false;

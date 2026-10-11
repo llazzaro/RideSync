@@ -121,6 +121,17 @@ void synthetic_utc_boundaries_and_missingness() {
     error(s.c_str(), GnssError::InvalidTime);
   }
 }
+void invalidMetricFields(const char *metric) {
+  for (int field = 0; field < 3; ++field) {
+    std::string s = "+CGPSINFO:0000.000000,N,00000.000000,E,,,";
+    for (int i = 0; i < 3; ++i) {
+      if (i)
+        s += ',';
+      s += i == field ? metric : "0";
+    }
+    error(s.c_str(), GnssError::InvalidMetric);
+  }
+}
 void synthetic_malformed_coordinates_and_metrics() {
   for (auto coord : {"9060.000000", "9000.000001", "9100.000000", "1260.000000", "-1230.000000",
                      "1230", "1230.00000", "1230.000000x", "NaN", "Inf", "1e3"}) {
@@ -132,15 +143,7 @@ void synthetic_malformed_coordinates_and_metrics() {
                  "+CGPSINFO:0000.000000,N,00000.000000,N,,,,,"})
     error(s, GnssError::InvalidCoordinate);
   for (auto metric : {"NaN", "inf", "1x", "1e2", "+1", "1.", ".1", "--1"}) {
-    for (int field = 0; field < 3; ++field) {
-      std::string s = "+CGPSINFO:0000.000000,N,00000.000000,E,,,";
-      for (int i = 0; i < 3; ++i) {
-        if (i)
-          s += ',';
-        s += i == field ? metric : "0";
-      }
-      error(s.c_str(), GnssError::InvalidMetric);
-    }
+    invalidMetricFields(metric);
   }
   error("+CGPSINFO:0000.000000,N,00000.000000,E,,,0,-1,0", GnssError::InvalidMetric);
   error("+CGPSINFO:0000.000000,N,00000.000000,E,,,0,1,-1", GnssError::InvalidMetric);

@@ -4,10 +4,15 @@
 namespace ridesync {
 constexpr uint64_t SessionClock::kMaxDurationMs;
 namespace {
-// POSIX milliseconds; leap seconds are deliberately rejected rather than folded.
-bool utcMilliseconds(const UtcDateTime &d, int64_t &result) {
+bool utcFieldsValid(const UtcDateTime &d) {
   if (d.year < 2000 || d.year > 2099 || d.month < 1 || d.month > 12 || d.day < 1 || d.hour > 23 ||
       d.minute > 59 || d.second > 59 || d.millisecond > 999)
+    return false;
+  return true;
+}
+// POSIX milliseconds; leap seconds are deliberately rejected rather than folded.
+bool utcMilliseconds(const UtcDateTime &d, int64_t &result) {
+  if (!utcFieldsValid(d))
     return false;
   const uint8_t monthDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
   const bool leap = d.year % 4 == 0; // The accepted range excludes century exceptions.

@@ -65,12 +65,20 @@ def _validate_motion_scalars(row):
     for field, upper in [('timing_flags', 15), ('event_code', 9),
                          ('event_length', 4), ('event_count_lower_bound', 1)]:
         _motion_integer(row, field, 0, upper)
+    _validate_optional_motion_scalars(row)
+    _validate_motion_coefficients(row)
+
+
+def _validate_optional_motion_scalars(row):
     for field in ('receipt_millis32','drain_start_millis32','drain_end_millis32'):
         if row[field]: _motion_integer(row, field)
     if row['sensor_time_ticks24']: _motion_integer(row, 'sensor_time_ticks24', 0, 0xffffff)
     if row['calibration_utc_ms']: _motion_signed(row, 'calibration_utc_ms', -(1<<63), (1<<63)-1)
     if row['calibration_temperature_millic']:
         _motion_signed(row, 'calibration_temperature_millic', -(1<<31), (1<<31)-1)
+
+
+def _validate_motion_coefficients(row):
     for prefix in ('accel','gyro'):
         for axis in ('x','y','z'):
             offset = prefix+'_offset_'+axis
@@ -122,8 +130,7 @@ def _validate_motion_result(row):
     if any(row[f] not in ('0', '1') for f in flags) or any(row[f] != '0' for f in flags[2:]):
         raise ValueError('motion result flags')
     if state != 2:
-        if any(row[f] for f in MOTION[1:] if f not in flags) or any(row[f] != '0' for f in flags):
-            raise ValueError('inactive motion presence')
+        _validate_inactive_motion(row, flags)
         return False, False, False
     _validate_motion_state(row, state)
     _validate_motion_rotation(row)
@@ -134,6 +141,12 @@ def _validate_motion_result(row):
     return True, measured, tilt
 
 
+def _validate_inactive_motion(row, flags):
+    fields = [field for field in MOTION[1:] if field not in flags]
+    if any(row[field] for field in fields) or any(row[field] != '0' for field in flags):
+        raise ValueError('inactive motion presence')
+
+
 def _validate_motion_raw(row, measured):
     if not measured: return
     for field in ('sensor_state','mount_state','calibration_state'):
@@ -142,14 +155,24 @@ def _validate_motion_raw(row, measured):
                            ('accel_offset_compensation','motion_accel_compensation'),
                            ('gyro_offset_compensation','motion_gyro_compensation')):
         if row[raw] != row[qualified]: raise ValueError('motion raw context')
-    if not _motion_integer(row, 'sensor_id', 1) or not _motion_integer(row, 'generation', 1) or \
-            row['calibration_offsets_known'] != '1' or row['calibration_gains_known'] != '1':
-        raise ValueError('missing raw calibration')
+    _validate_raw_calibration(row)
     for field in ('accel_scale_numerator','accel_scale_denominator','gyro_scale_numerator','gyro_scale_denominator'):
         _motion_integer(row, field, 1)
+    _validate_motion_saturation(row)
+
+
+def _validate_motion_saturation(row):
     if int(row['timing_flags']) & 8 or any(abs(int(row[p+'_'+axis])) >= 32767
                                              for p in ('accel','gyro') for axis in ('x','y','z')):
         raise ValueError('saturated motion')
+
+
+def _validate_raw_calibration(row):
+    _motion_integer(row, 'sensor_id', 1)
+    _motion_integer(row, 'generation', 1)
+    if any(row[field] != '1' for field in
+           ('calibration_offsets_known', 'calibration_gains_known')):
+        raise ValueError('missing raw calibration')
 
 
 def _validate_motion_reference(row, measured, tilt):
@@ -176,44 +199,60 @@ def _motion(row):
     _validate_motion_reference(row, measured, tilt)
 
 
-def _v3_timestamp(row):
-    def unsigned(field, lower, upper):
-        value = row[field]
-        if not value or not value.isascii() or not value.isdigit():
-            raise ValueError(f'invalid {field}')
-        number = int(value)
-        if not lower <= number <= upper:
-            raise ValueError(f'out-of-range {field}')
-        return number
+def _timestamp_unsigned(row, field, lower, upper):
+    value = row[field]
+    if not value or not value.isascii() or not value.isdigit():
+        raise ValueError(f'invalid {field}')
+    number = int(value)
+    if not lower <= number <= upper:
+        raise ValueError(f'out-of-range {field}')
+    return number
 
-    unsigned('session_id', 1, 0xffffffffffffffff)
-    monotonic = unsigned('monotonic_ms', 0, 31536000000)
+
+def _v3_timestamp(row):
+    _timestamp_unsigned(row, 'session_id', 1, 0xffffffffffffffff)
+    monotonic = _timestamp_unsigned(row, 'monotonic_ms', 0, 31536000000)
     if row['monotonic_quality'] != '0' or row['anchor_quality'] not in ('0', '1', '2') or \
             row['uncertainty_known'] not in ('0', '1') or \
             row['has_utc_estimate'] not in ('0', '1'):
         raise ValueError('invalid V3 timestamp flags')
     if row['anchor_quality'] == '0':
-        if any(row[field] for field in ('anchor_sequence', 'anchor_receipt_ms',
-                                        'anchor_utc_ms', 'uncertainty_ms', 'anchor_age_ms',
-                                        'utc_estimate_ms')) or row['uncertainty_known'] != '0' or \
-                row['has_utc_estimate'] != '0':
-            raise ValueError('unexpected anchor fields')
+        _validate_absent_anchor(row)
         return
-    unsigned('anchor_sequence', 1, 0xffffffff)
-    receipt = unsigned('anchor_receipt_ms', 0, monotonic)
-    utc = unsigned('anchor_utc_ms', 946684800000, 4102444799999)
-    if unsigned('anchor_age_ms', 0, 31536000000) != monotonic - receipt:
+    _validate_present_anchor(row, monotonic)
+
+
+def _validate_absent_anchor(row):
+    fields = ('anchor_sequence', 'anchor_receipt_ms', 'anchor_utc_ms',
+              'uncertainty_ms', 'anchor_age_ms', 'utc_estimate_ms')
+    if any(row[field] for field in fields) or row['uncertainty_known'] != '0' or \
+            row['has_utc_estimate'] != '0':
+        raise ValueError('unexpected anchor fields')
+
+
+def _validate_present_anchor(row, monotonic):
+    _timestamp_unsigned(row, 'anchor_sequence', 1, 0xffffffff)
+    receipt = _timestamp_unsigned(row, 'anchor_receipt_ms', 0, monotonic)
+    utc = _timestamp_unsigned(row, 'anchor_utc_ms', 946684800000, 4102444799999)
+    if _timestamp_unsigned(row, 'anchor_age_ms', 0, 31536000000) != monotonic - receipt:
         raise ValueError('anchor age')
     if row['uncertainty_known'] == '1':
-        unsigned('uncertainty_ms', 0, 0xffffffff)
+        _timestamp_unsigned(row, 'uncertainty_ms', 0, 0xffffffff)
     elif row['uncertainty_ms']:
         raise ValueError('unexpected uncertainty')
     if row['has_utc_estimate'] == '1':
-        if row['anchor_quality'] != '1' or unsigned('utc_estimate_ms', 0, 0x7fffffffffffffff) != \
+        if row['anchor_quality'] != '1' or _timestamp_unsigned(row, 'utc_estimate_ms', 0, 0x7fffffffffffffff) != \
                 utc + monotonic - receipt:
             raise ValueError('invalid UTC estimate')
     elif row['utc_estimate_ms']:
         raise ValueError('unexpected UTC estimate')
+
+
+def _validate_presence(row, flag, fields, message):
+    if row[flag] not in ('0', '1'):
+        raise ValueError(message)
+    if any(bool(row[field]) != (row[flag] == '1') for field in fields):
+        raise ValueError(message)
 
 
 def _validate_imu_presence(row):
@@ -222,36 +261,39 @@ def _validate_imu_presence(row):
                          ('sensor_time_present', ['sensor_time_ticks24']),
                          ('calibration_time_known', ['calibration_utc_ms']),
                          ('calibration_temperature_known', ['calibration_temperature_millic'])]:
-        if row[flag] not in ('0', '1') or any(bool(row[field]) != (row[flag] == '1') for field in fields):
-            raise ValueError('optional field presence')
+        _validate_presence(row, flag, fields, 'optional field presence')
     for flag, prefixes, suffixes in [
             ('calibration_offsets_known', ('accel', 'gyro'), ('offset_x','offset_y','offset_z')),
             ('calibration_gains_known', ('accel','gyro'),
              ('gain_x_numerator','gain_x_denominator','gain_y_numerator','gain_y_denominator',
               'gain_z_numerator','gain_z_denominator'))]:
-        if row[flag] not in ('0', '1'):
-            raise ValueError('coefficient presence')
-        for prefix in prefixes:
-            for suffix in suffixes:
-                if bool(row[prefix+'_'+suffix]) != (row[flag] == '1'):
-                    raise ValueError('coefficient presence')
+        fields = [prefix+'_'+suffix for prefix in prefixes for suffix in suffixes]
+        _validate_presence(row, flag, fields, 'coefficient presence')
 
 
 def _validate_imu_payload(row):
+    _validate_raw_counts(row)
+    payload = bytes.fromhex(row['event_bytes'])
+    if len(payload) != int(row['event_length']) or len(payload) > 4:
+        raise ValueError('event payload length')
+    if row['sensor_time_present'] == '1':
+        _validate_sensor_time_payload(row, payload)
+
+
+def _validate_raw_counts(row):
     channels = [row[prefix + '_' + axis] for prefix in ('accel', 'gyro') for axis in ('x', 'y', 'z')]
     if row['kind'] == 'imu':
         if any(not value or not -32768 <= int(value) <= 32767 for value in channels):
             raise ValueError('signed raw count')
     elif any(channels):
         raise ValueError('event contains fabricated sample')
-    payload = bytes.fromhex(row['event_bytes'])
-    if len(payload) != int(row['event_length']) or len(payload) > 4:
-        raise ValueError('event payload length')
-    if row['sensor_time_present'] == '1':
-        if row['kind'] != 'control' or row['event_code'] != '5' or len(payload) != 3:
-            raise ValueError('sensor time event')
-        if int.from_bytes(payload, 'little') != int(row['sensor_time_ticks24']):
-            raise ValueError('sensor time payload')
+
+
+def _validate_sensor_time_payload(row, payload):
+    if row['kind'] != 'control' or row['event_code'] != '5' or len(payload) != 3:
+        raise ValueError('sensor time event')
+    if int.from_bytes(payload, 'little') != int(row['sensor_time_ticks24']):
+        raise ValueError('sensor time payload')
 
 
 def _parse_imu_row(values, version):
@@ -268,18 +310,21 @@ def _parse_imu_row(values, version):
 
 
 def _validate_camera_time(row):
-    if row['time_domain'] != 'owner_admission' or row['radio_receipt_known'] != '0' or \
-            row['radio_receipt_ms'] or row['acquisition_known'] != '0' or row['acquisition_ms']:
-        raise ValueError('camera time provenance')
-    if row['event_receipt_known'] not in ('0', '1') or \
-            bool(row['event_receipt_ms']) != (row['event_receipt_known'] == '1') or \
-            bool(row['event_receipt_age_ms']) != (row['event_receipt_known'] == '1'):
-        raise ValueError('camera event receipt presence')
+    _validate_camera_provenance(row)
+    _validate_presence(row, 'event_receipt_known',
+                       ('event_receipt_ms', 'event_receipt_age_ms'),
+                       'camera event receipt presence')
     if row['event_receipt_known'] == '1':
         receipt = int(row['event_receipt_ms'])
         age = int(row['event_receipt_age_ms'])
         if receipt < 0 or age < 0 or age > 60000 or receipt + age != int(row['monotonic_ms']):
             raise ValueError('camera event receipt age')
+
+
+def _validate_camera_provenance(row):
+    if row['time_domain'] != 'owner_admission' or row['radio_receipt_known'] != '0' or \
+            row['radio_receipt_ms'] or row['acquisition_known'] != '0' or row['acquisition_ms']:
+        raise ValueError('camera time provenance')
 
 
 def _validate_camera_numbers(row):
@@ -288,11 +333,13 @@ def _validate_camera_numbers(row):
                'ack_action delivery_admitted').split()
     if any(not row[field] or not 0 <= int(row[field]) <= 0xffffffff for field in numeric):
         raise ValueError('camera numeric fields')
-    if int(row['peer_slot']) not in range(8) or int(row['peer_id']) == 0 or \
-            int(row['model']) not in range(1, 9) or int(row['event_kind']) not in range(10) or \
-            int(row['operation']) not in range(5) or int(row['error']) not in range(11) or \
-            int(row['recording']) not in range(3) or int(row['ack_domain']) not in range(3) or \
-            int(row['ack_action']) not in range(16) or row['delivery_admitted'] not in ('0', '1'):
+    ranges = {'peer_slot': (0, 7), 'peer_id': (1, 0xffffffff), 'model': (1, 8),
+              'event_kind': (0, 9), 'operation': (0, 4), 'error': (0, 10),
+              'recording': (0, 2), 'ack_domain': (0, 2), 'ack_action': (0, 15)}
+    if any(not lower <= int(row[field]) <= upper
+           for field, (lower, upper) in ranges.items()):
+        raise ValueError('camera enum fields')
+    if row['delivery_admitted'] not in ('0', '1'):
         raise ValueError('camera enum fields')
 
 
@@ -317,21 +364,36 @@ def _validate_camera_observation(row, kind):
 
 
 def _validate_camera_request(row, kind):
+    if kind in (0, 1, 2):
+        _validate_camera_admission(row, kind)
+    if kind == 3:
+        _validate_camera_attempt(row)
+    elif row['delivery_admitted'] != '0':
+        raise ValueError('unexpected delivery admission')
+
+
+def _validate_camera_admission(row, kind):
+    _validate_camera_intent(row, kind)
+    if kind == 1 and int(row['operation_generation']):
+        raise ValueError('queued request borrowed operation')
+    if int(row['connection_generation']) or int(row['operation_generation']) or \
+            row['delivery_admitted'] != '0':
+        raise ValueError('request borrowed token')
+
+
+def _validate_camera_intent(row, kind):
     if kind in (0, 1) and (int(row['intent_id']) == 0 or int(row['error'])):
         raise ValueError('invalid admitted request')
     if kind == 2 and (int(row['intent_id']) or int(row['error']) == 0):
         raise ValueError('invalid refused request')
-    if kind == 1 and int(row['operation_generation']):
-        raise ValueError('queued request borrowed operation')
-    if kind in (0, 1, 2) and (int(row['connection_generation']) or
-                               int(row['operation_generation']) or row['delivery_admitted'] != '0'):
-        raise ValueError('request borrowed token')
-    if kind == 3 and (int(row['intent_id']) == 0 or int(row['connection_generation']) == 0 or
-                      int(row['operation_generation']) == 0 or
-                      row['error'] != ('0' if row['delivery_admitted'] == '1' else '8')):
+
+
+def _validate_camera_attempt(row):
+    if any(int(row[field]) == 0 for field in
+           ('intent_id', 'connection_generation', 'operation_generation')):
         raise ValueError('invalid transport attempt')
-    if kind != 3 and row['delivery_admitted'] != '0':
-        raise ValueError('unexpected delivery admission')
+    if row['error'] != ('0' if row['delivery_admitted'] == '1' else '8'):
+        raise ValueError('invalid transport attempt')
 
 
 def _validate_camera_state(row):
@@ -363,7 +425,7 @@ def _parse_record(values, version):
     raise ValueError('unsupported record kind')
 
 
-def _dynamic(row):
+def _validate_dynamic_flags(row):
     for field in DYNAMIC[:11]:
         _motion_integer(row, field)
     for field in ('dynamic_requested', 'dynamic_numeric_available', 'dynamic_angles_available'):
@@ -372,19 +434,37 @@ def _dynamic(row):
         raise ValueError('unqualified trusted dynamic output')
     if int(row['dynamic_fault']) > 10 or int(row['dynamic_quality']) > 1 or int(row['dynamic_timing_source']) > 2:
         raise ValueError('dynamic enum')
+
+
+def _dynamic(row):
+    _validate_dynamic_flags(row)
     numeric = row['dynamic_numeric_available'] == '1'
     angles = row['dynamic_angles_available'] == '1'
     if numeric:
-        if row['dynamic_requested'] != '1' or row['motion_measurements_valid'] != '1' or row['kind'] != 'imu' or not int(row['sensor_epoch']) or not int(row['dynamic_cadence_us']) or row['dynamic_quality'] != '1' or row['dynamic_fault'] != '0' or row['dynamic_timing_source'] != '1' or int(row['dynamic_elapsed_us']) > 2000000:
-            raise ValueError('dynamic evidence')
+        _validate_dynamic_evidence(row)
     elif angles or row['dynamic_quality'] != '0':
         raise ValueError('invalid dynamic presence')
-    for field in DYNAMIC[11:21]:
-        if numeric: _motion_number(row, field)
-        elif row[field]: raise ValueError('unavailable dynamic number')
-    for field in DYNAMIC[21:]:
-        if numeric and angles: _motion_number(row, field)
-        elif row[field]: raise ValueError('unavailable dynamic angle')
+    _validate_dynamic_numbers(row, DYNAMIC[11:21], numeric, 'unavailable dynamic number')
+    _validate_dynamic_numbers(row, DYNAMIC[21:], numeric and angles, 'unavailable dynamic angle')
+
+
+def _validate_dynamic_evidence(row):
+    required = {'dynamic_requested': '1', 'motion_measurements_valid': '1',
+                'kind': 'imu', 'dynamic_quality': '1', 'dynamic_fault': '0',
+                'dynamic_timing_source': '1'}
+    if any(row[field] != value for field, value in required.items()):
+        raise ValueError('dynamic evidence')
+    if not int(row['sensor_epoch']) or not int(row['dynamic_cadence_us']) or \
+            int(row['dynamic_elapsed_us']) > 2000000:
+        raise ValueError('dynamic evidence')
+
+
+def _validate_dynamic_numbers(row, fields, present, message):
+    for field in fields:
+        if present:
+            _motion_number(row, field)
+        elif row[field]:
+            raise ValueError(message)
 
 
 def _validate_record(row, version):
@@ -393,6 +473,10 @@ def _validate_record(row, version):
     if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') and row['kind'] in ('imu', 'config', 'health', 'control'):
         _motion(row)
         if version == "#ridesync_telemetry,5": _dynamic(row)
+    _validate_record_timestamp(row)
+
+
+def _validate_record_timestamp(row):
     if row['monotonic_quality'] != '0' or int(row['session_id']) <= 0:
         raise ValueError('invalid timestamp')
     if row['anchor_quality'] != '0' and \
@@ -403,18 +487,24 @@ def _validate_record(row, version):
         raise ValueError('UTC estimate')
 
 
-def parse(data):
+def _validate_layout(data):
     version = data.split('\n', 1)[0]
     if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
         raise ValueError('unsupported version')
     if not data.endswith('\n'):
         raise ValueError('partial trailing row')
-    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5') and '#camera_layout,3,see_docs/log_format.md\n' not in data:
-        raise ValueError('missing camera layout')
-    if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') and '#imu_layout,4,see_docs/motion_logging.md\n' not in data:
-        raise ValueError('missing motion layout')
-    if version == "#ridesync_telemetry,5" and "#dynamic_layout,1,see_docs/dynamic_motion_estimator.md\n" not in data:
-        raise ValueError("missing dynamic layout")
+    layouts = {'#camera_layout,3,see_docs/log_format.md\n': (3, 'camera'),
+               '#imu_layout,4,see_docs/motion_logging.md\n': (4, 'motion'),
+               '#dynamic_layout,1,see_docs/dynamic_motion_estimator.md\n': (5, 'dynamic')}
+    number = int(version.rsplit(',', 1)[1])
+    for marker, (minimum, name) in layouts.items():
+        if number >= minimum and marker not in data:
+            raise ValueError('missing '+name+' layout')
+    return version
+
+
+def parse(data):
+    version = _validate_layout(data)
     rows = []
     for line in data.splitlines()[1:]:
         if line.startswith('#') or line.startswith('session_id,'):

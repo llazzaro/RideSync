@@ -32,6 +32,8 @@ private:
   bool prepared_ = false, started_ = false, stop_attempted_ = false, terminate_attempted_ = false;
   static void worker(void *);
   void cycle();
+  bool prepareAdvertising();
+  void terminateIncoming();
   bool open(uint32_t now) const;
   void finish();
   void queueBarrier();

@@ -1,5 +1,19 @@
 #include "handlebar_control.h"
 namespace ridesync {
+namespace {
+CameraError recoveryError(Hero12RecoveryPhase phase) {
+  switch (phase) {
+  case Hero12RecoveryPhase::Timeout:
+    return CameraError::Timeout;
+  case Hero12RecoveryPhase::Unsupported:
+    return CameraError::Unsupported;
+  case Hero12RecoveryPhase::Cancelled:
+    return CameraError::Cancelled;
+  default:
+    return CameraError::NotConnected;
+  }
+}
+} // namespace
 HandlebarControl::HandlebarControl(Clock &c, CameraRuntimePort &a, CameraManager &m,
                                    RecordingManager &g, ButtonInput &i, LedSink &s)
     : clock_(c), adapter_(a), manager_(m), group_(g), input_(i), led_(s) {}
@@ -75,10 +89,7 @@ RecordingPreparationResult HandlebarControl::prepared(size_t i) {
   if (phase == Hero12RecoveryPhase::Ready && adapter_.recoveryReady(i))
     result.pending = !commandReady(i);
   else if (!result.pending) {
-    result.error = phase == Hero12RecoveryPhase::Timeout       ? CameraError::Timeout
-                   : phase == Hero12RecoveryPhase::Unsupported ? CameraError::Unsupported
-                   : phase == Hero12RecoveryPhase::Cancelled   ? CameraError::Cancelled
-                                                               : CameraError::NotConnected;
+    result.error = recoveryError(phase);
   }
   return result;
 }
@@ -114,6 +125,26 @@ void HandlebarControl::admission(const LocalTelemetryStatus &s) {
   }
   status_.local = s;
 }
+void HandlebarControl::observeDevices(const LocalTelemetryStatus &s) {
+  auto &gps = status_.health.devices[0];
+  gps.enabled = gps.qualified = gps.current = s.phase == TelemetryPhase::Running;
+  gps.severity = LedSeverity::Partial;
+  gps.outcome = s.gps.validity == FixValidity::Valid   ? DeviceHealth::Ok
+                : s.gps.validity == FixValidity::NoFix ? DeviceHealth::NoFix
+                                                       : DeviceHealth::Missing;
+  auto &imu = status_.health.devices[1];
+  imu.enabled = imu.qualified = imu.current = s.imu != SensorAdmission::Disabled;
+  imu.severity = LedSeverity::Partial;
+  imu.outcome = s.imu == SensorAdmission::Admitted ? s.imu_worker.outcome : DeviceHealth::Missing;
+  auto &storage = status_.health.devices[2];
+  storage.enabled = storage.qualified = storage.current = s.phase != TelemetryPhase::Inactive;
+  storage.severity =
+      s.storage.terminal || s.storage_error ? LedSeverity::Error : LedSeverity::Partial;
+  storage.outcome = s.storage.terminal || s.storage_error ? DeviceHealth::IoError
+                    : s.storage.dropped || s.storage.rejected || s.storage.lost
+                        ? DeviceHealth::Missing
+                        : DeviceHealth::Ok;
+}
 void HandlebarControl::observe(const LocalTelemetryStatus &s) {
   admission(s);
   status_.group = group_.status();
@@ -133,24 +164,7 @@ void HandlebarControl::observe(const LocalTelemetryStatus &s) {
         phase == Hero12RecoveryPhase::Pending || phase == Hero12RecoveryPhase::Scanning ||
         phase == Hero12RecoveryPhase::Connecting || phase == Hero12RecoveryPhase::Observing;
   }
-  auto &gps = status_.health.devices[0];
-  gps.enabled = gps.qualified = gps.current = s.phase == TelemetryPhase::Running;
-  gps.severity = LedSeverity::Partial;
-  gps.outcome = s.gps.validity == FixValidity::Valid   ? DeviceHealth::Ok
-                : s.gps.validity == FixValidity::NoFix ? DeviceHealth::NoFix
-                                                       : DeviceHealth::Missing;
-  auto &imu = status_.health.devices[1];
-  imu.enabled = imu.qualified = imu.current = s.imu != SensorAdmission::Disabled;
-  imu.severity = LedSeverity::Partial;
-  imu.outcome = s.imu == SensorAdmission::Admitted ? s.imu_worker.outcome : DeviceHealth::Missing;
-  auto &storage = status_.health.devices[2];
-  storage.enabled = storage.qualified = storage.current = s.phase != TelemetryPhase::Inactive;
-  storage.severity =
-      s.storage.terminal || s.storage_error ? LedSeverity::Error : LedSeverity::Partial;
-  storage.outcome = s.storage.terminal || s.storage_error ? DeviceHealth::IoError
-                    : s.storage.dropped || s.storage.rejected || s.storage.lost
-                        ? DeviceHealth::Missing
-                        : DeviceHealth::Ok;
+  observeDevices(s);
   status_.led = selectLedState(s.camera == CameraAdmission::Admitted ? &status_.group : nullptr,
                                status_.lifecycle, status_.health);
   const int error = led_.service(status_.led, clock_.now());

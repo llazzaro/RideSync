@@ -49,6 +49,18 @@ public:
   bool restartAfterVerifiedBarrier(const RecordTimestamp &now);
 
 private:
+  bool receiveTerminated() const;
+  bool admitTime(const RecordTimestamp &);
+  bool pollCandidateExpected() const;
+  void receiveByte(int, uint64_t);
+  void completeCommand(uint64_t);
+  void receivePollCandidate(uint64_t);
+  void receiverRestarted();
+  void transmitCommand();
+  void scheduleNext(const RecordTimestamp &now);
+  bool advanceReadiness(const RecordTimestamp &now);
+  void receiveLines(uint64_t now);
+  bool checkIdleDeadlines(const RecordTimestamp &now);
   ModemUart &uart_;
   ModemConfig config_;
   ModemSnapshot status_;

@@ -84,6 +84,14 @@ private:
   void admit(size_t peer);
   void command(size_t peer);
   void advance();
+  void advancePeer(size_t);
+  void advanceConnected(size_t);
+  void advanceConfirm(size_t);
+  void retirePrevious(size_t);
+  void peerStatus(size_t, RecordingStatus &) const;
+  void decideIntentAfterSync();
+  void advanceRetiring(size_t);
+  void advancePreparation(size_t);
   void notify();
   void expireConfirm(size_t peer);
 };

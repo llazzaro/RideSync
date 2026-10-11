@@ -66,25 +66,32 @@ void published_vectors() {
   TEST_ASSERT_TRUE(oracle(mode.data(), 10, 16, 0xa001) == 0xee57);
   TEST_ASSERT_TRUE(oracle(mode.data(), 23, 32, 0xedb88320) == 0xd0e1faf4);
 }
-void encoders() {
+void connection_encoders() {
+
   TEST_ASSERT_TRUE(encodeConnection(2, 1, {}, 2, 1).size == 0);
   auto auth = encodeAuthorizationResponse(0xffff, 0x12345678, 0, 7);
   TEST_ASSERT_TRUE(auth.bytes[19] == 7);
   auto d = decode(auth.bytes.data(), auth.size);
   TEST_ASSERT_TRUE(d.kind == Kind::ConnectionResponse && d.response && d.sequence == 0xffff &&
                    d.device_id == 0x12345678);
+}
+void record_encoders() {
   for (bool start : {false, true}) {
     auto p = encodeRecord(12, 0xff44, start);
     auto want = frame(0x1d, 3, 2, {0x44, 0xff, 0, 0, uint8_t(start ? 0 : 1), 0, 0, 0, 0}, 12);
     TEST_ASSERT_TRUE(p.size == want.size() &&
                      std::equal(want.begin(), want.end(), p.bytes.begin()));
   }
+}
+void subscription_encoders() {
   for (bool periodic : {false, true}) {
     auto p = encodeStatusSubscription(13, periodic);
     auto want = frame(0x1d, 5, 0, {uint8_t(periodic ? 3 : 1), 20, 0, 0, 0, 0}, 13);
     TEST_ASSERT_TRUE(p.size == want.size() &&
                      std::equal(want.begin(), want.end(), p.bytes.begin()));
   }
+}
+void video_encoder_and_model_ids() {
   auto video = encodeVideoMode(14, 0xff55);
   auto want = frame(0x1d, 4, 2, {0x55, 0xff, 0, 0, 1, 0, 0, 0, 0}, 14);
   TEST_ASSERT_TRUE(video.size == want.size() &&
@@ -92,7 +99,9 @@ void encoders() {
   TEST_ASSERT_TRUE(modelWireId(4) == 0xff33 && modelWireId(5) == 0xff44 &&
                    modelWireId(6) == 0xff55 && modelWireId(360) == 0xff66 && modelWireId(7) == 0);
 }
-void responses_and_validation() {
+
+void response_forms() {
+
   for (size_t n : {size_t(1), size_t(5)}) {
     auto d = read(frame(0x1d, 3, 0x20, std::vector<uint8_t>(n, 2)));
     TEST_ASSERT_TRUE(d.kind == Kind::RecordResponse && d.return_code == 2 &&
@@ -108,6 +117,8 @@ void responses_and_validation() {
   auto d = read(conn);
   TEST_ASSERT_TRUE(d.kind == Kind::ConnectionRequest && d.verify_mode == 2 && d.verify_data == 1 &&
                    d.reply_type == 2);
+}
+void envelope_validation() {
   auto valid = frame(0x99, 1, 0, {});
   TEST_ASSERT_TRUE(read(valid).kind == Kind::Unknown);
   TEST_ASSERT_TRUE(decode(nullptr, 0).kind == Kind::Invalid);
@@ -131,6 +142,7 @@ void responses_and_validation() {
   for (size_t n : {size_t(32), size_t(34)})
     TEST_ASSERT_TRUE(read(frame(0, 0x19, 2, std::vector<uint8_t>(n))).kind == Kind::Invalid);
 }
+
 void status_semantics() {
   std::vector<uint8_t> p(38);
   p[0] = 1;
@@ -171,7 +183,8 @@ void status_semantics() {
   TEST_ASSERT_TRUE(read(frame(0x1d, 2, 0, std::vector<uint8_t>(37))).kind == Kind::Invalid);
   TEST_ASSERT_TRUE(read(frame(0x1d, 2, 0x20, std::vector<uint8_t>(38))).kind == Kind::Invalid);
 }
-void streaming() {
+void streaming_fragment_boundaries() {
+
   Receiver r;
   auto v = frame(0x1d, 3, 0x20, {0});
   TEST_ASSERT_TRUE(r.push(0).kind == Kind::Invalid && !r.pending());
@@ -186,6 +199,10 @@ void streaming() {
     }
     TEST_ASSERT_TRUE(!r.pending());
   }
+}
+void streaming_recovery_and_coalescing() {
+  Receiver r;
+  auto v = frame(0x1d, 3, 0x20, {0});
   for (unsigned repeat = 0; repeat < 2; ++repeat)
     for (uint8_t b : v)
       r.push(b);
@@ -207,6 +224,7 @@ void streaming() {
     d = r.push(b);
   TEST_ASSERT_TRUE(d.kind == Kind::RecordResponse);
 }
+
 void bounded_noise_and_sequence() {
   for (uint16_t sequence : {uint16_t(0), uint16_t(1), uint16_t(65535)}) {
     auto d = read(frame(0x1d, 3, 0x20, {0}, sequence));
@@ -250,10 +268,15 @@ void tearDown() {}
 int main() {
   UNITY_BEGIN();
   RUN_TEST(published_vectors);
-  RUN_TEST(encoders);
-  RUN_TEST(responses_and_validation);
+  RUN_TEST(connection_encoders);
+  RUN_TEST(record_encoders);
+  RUN_TEST(subscription_encoders);
+  RUN_TEST(video_encoder_and_model_ids);
+  RUN_TEST(response_forms);
+  RUN_TEST(envelope_validation);
   RUN_TEST(status_semantics);
-  RUN_TEST(streaming);
+  RUN_TEST(streaming_fragment_boundaries);
+  RUN_TEST(streaming_recovery_and_coalescing);
   RUN_TEST(bounded_noise_and_sequence);
   return UNITY_END();
 }

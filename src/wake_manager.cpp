@@ -19,6 +19,11 @@ WakeManager::~WakeManager() {
   for (size_t peer = 0; peer < kWakePeers; ++peer)
     cancel(peer);
 }
+bool WakeManager::validRequest(const WakeOperation &op, const WakePolicy &policy) const {
+  return !(!op.id || op.id == UINT32_MAX || op.id <= last_ids_[op.peer] || !op.generation ||
+           op.generation == UINT32_MAX || (generation_ && generation_ != op.generation) ||
+           !validPolicy(policy));
+}
 CameraError WakeManager::request(const WakeOperation &op, const WakePeerConfig &config,
                                  const WakePolicy &policy, uint32_t now) {
   if (op.peer >= kWakePeers)
@@ -26,9 +31,7 @@ CameraError WakeManager::request(const WakeOperation &op, const WakePeerConfig &
   auto &slot = slots_[op.peer];
   if (slot.occupied && (!intentTerminal(slot.status.phase) || !slot.status.released))
     return CameraError::Busy;
-  if (!op.id || op.id == UINT32_MAX || op.id <= last_ids_[op.peer] || !op.generation ||
-      op.generation == UINT32_MAX || (generation_ && generation_ != op.generation) ||
-      !validPolicy(policy))
+  if (!validRequest(op, policy))
     return CameraError::InvalidPolicy;
   if (!config.enabled)
     return CameraError::Disabled;
@@ -103,57 +106,71 @@ void WakeManager::recover(Slot &slot) {
   slot.status.phase = WakePhase::Recovering;
   updateReleaseOnly(slot);
 }
-void WakeManager::service(uint32_t now) {
-  for (auto &slot : slots_)
-    if (slot.occupied && !intentTerminal(slot.status.phase) &&
-        uint32_t(now - slot.started) >= slot.policy.total_ms)
-      seal(slot, WakePhase::Timeout, CameraError::Timeout);
-  if (owner_ < kWakePeers) {
-    auto &slot = slots_[owner_];
-    const auto result = radio_.poll(slot.status.operation, now);
-    if (sameWakeOperation(result.operation, slot.status.operation)) {
-      if (!slot.sealed && result.sdk_error)
-        seal(slot, WakePhase::Failed, CameraError::Transport);
-      if (result.terminal) {
-        if (!slot.sealed)
-          slot.status.phase = WakePhase::Releasing;
-        if (result.released) {
-          slot.radio = false;
-          owner_ = kWakePeers;
-          updateReleaseOnly(slot);
-          if (!slot.sealed) {
-            if (result.submitted)
-              recover(slot);
-            else
-              seal(slot, WakePhase::Failed, CameraError::Transport);
-          }
-        }
-      }
-    }
+void WakeManager::serviceRadio(uint32_t now) {
+  if (owner_ >= kWakePeers)
+    return;
+  auto &slot = slots_[owner_];
+  const auto result = radio_.poll(slot.status.operation, now);
+  if (!sameWakeOperation(result.operation, slot.status.operation))
+    return;
+  if (!slot.sealed && result.sdk_error)
+    seal(slot, WakePhase::Failed, CameraError::Transport);
+  if (!result.terminal)
+    return;
+  if (!slot.sealed)
+    slot.status.phase = WakePhase::Releasing;
+  if (!result.released)
+    return;
+  slot.radio = false;
+  owner_ = kWakePeers;
+  updateReleaseOnly(slot);
+  if (slot.sealed)
+    return;
+  if (result.submitted)
+    recover(slot);
+  else
+    seal(slot, WakePhase::Failed, CameraError::Transport);
+}
+void WakeManager::serviceRecovery(Slot &slot, uint32_t now) {
+  if (!slot.recovery)
+    return;
+  const auto result = recovery_->poll(slot.status.operation, now);
+  if (!sameWakeOperation(result.operation, slot.status.operation) || !result.terminal)
+    return;
+  if (result.released)
+    slot.recovery = false;
+  updateReleaseOnly(slot);
+  if (slot.sealed)
+    return;
+  if (result.error != CameraError::None)
+    seal(slot,
+         result.error == CameraError::Unsupported ? WakePhase::Unsupported : WakePhase::Failed,
+         result.error);
+  else if (!result.fresh || (result.observed != RecordingState::Stopped &&
+                             result.observed != RecordingState::Recording))
+    seal(slot, WakePhase::Failed, CameraError::NotConnected);
+  else if (result.released) {
+    slot.status.phase = WakePhase::Ready;
+    slot.status.observed = result.observed;
   }
-  for (auto &slot : slots_) {
-    if (!slot.recovery)
-      continue;
-    const auto result = recovery_->poll(slot.status.operation, now);
-    if (!sameWakeOperation(result.operation, slot.status.operation) || !result.terminal)
-      continue;
-    if (result.released)
-      slot.recovery = false;
+}
+void WakeManager::submitQueued(size_t peer, uint32_t now) {
+  auto &slot = slots_[peer];
+  cursor_ = (peer + 1) % kWakePeers;
+  const uint32_t remaining = slot.policy.total_ms - uint32_t(now - slot.started);
+  const auto result = radio_.begin(slot.status.operation, slot.encoding,
+                                   now + std::min(remaining, slot.policy.slice_ms), now);
+  if (result == WakeSubmit::Accepted) {
+    slot.radio = true;
+    owner_ = peer;
+    slot.status.phase = WakePhase::Advertising;
     updateReleaseOnly(slot);
-    if (slot.sealed)
-      continue;
-    if (result.error != CameraError::None)
-      seal(slot,
-           result.error == CameraError::Unsupported ? WakePhase::Unsupported : WakePhase::Failed,
-           result.error);
-    else if (!result.fresh || (result.observed != RecordingState::Stopped &&
-                               result.observed != RecordingState::Recording))
-      seal(slot, WakePhase::Failed, CameraError::NotConnected);
-    else if (result.released) {
-      slot.status.phase = WakePhase::Ready;
-      slot.status.observed = result.observed;
-    }
+  } else if (result != WakeSubmit::Busy) {
+    seal(slot, result == WakeSubmit::Unsupported ? WakePhase::Unsupported : WakePhase::Failed,
+         result == WakeSubmit::Unsupported ? CameraError::Unsupported : CameraError::Transport);
   }
+}
+void WakeManager::admitRadio(uint32_t now) {
   if (owner_ != kWakePeers)
     return;
   for (size_t offset = 0; offset < kWakePeers; ++offset) {
@@ -161,21 +178,19 @@ void WakeManager::service(uint32_t now) {
     auto &slot = slots_[peer];
     if (!slot.occupied || slot.sealed || slot.status.phase != WakePhase::Queued)
       continue;
-    cursor_ = (peer + 1) % kWakePeers;
-    const uint32_t remaining = slot.policy.total_ms - uint32_t(now - slot.started);
-    const auto result = radio_.begin(slot.status.operation, slot.encoding,
-                                     now + std::min(remaining, slot.policy.slice_ms), now);
-    if (result == WakeSubmit::Accepted) {
-      slot.radio = true;
-      owner_ = peer;
-      slot.status.phase = WakePhase::Advertising;
-      updateReleaseOnly(slot);
-    } else if (result != WakeSubmit::Busy) {
-      seal(slot, result == WakeSubmit::Unsupported ? WakePhase::Unsupported : WakePhase::Failed,
-           result == WakeSubmit::Unsupported ? CameraError::Unsupported : CameraError::Transport);
-    }
+    submitQueued(peer, now);
     break;
   }
+}
+void WakeManager::service(uint32_t now) {
+  for (auto &slot : slots_)
+    if (slot.occupied && !intentTerminal(slot.status.phase) &&
+        uint32_t(now - slot.started) >= slot.policy.total_ms)
+      seal(slot, WakePhase::Timeout, CameraError::Timeout);
+  serviceRadio(now);
+  for (auto &slot : slots_)
+    serviceRecovery(slot, now);
+  admitRadio(now);
 }
 WakeStatus WakeManager::status(uint8_t peer) const {
   if (peer < kWakePeers)

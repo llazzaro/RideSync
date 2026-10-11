@@ -17,6 +17,7 @@ private:
   WakeRecoveryResult result_;
   uint32_t deadline_ = 0;
   bool used_ = false;
+  void updateResult(uint32_t);
   void fail(CameraError);
 };
 // One qualified X5, explicit WAKE followed by separately requested REC/STOP.

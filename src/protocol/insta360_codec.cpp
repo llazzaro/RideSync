@@ -33,23 +33,68 @@ bool remainingText(const uint8_t *text, size_t size) {
     ++at;
   return at > minutes && at + 1 == size && text[at] == 'm';
 }
+Ce80DisplayResult decodeSettings(const uint8_t *text, size_t text_size) {
+  Ce80DisplayResult result;
+  result.error = Ce80DisplayError::None;
+  // Exact observed X5 settings. Other resolutions/submodes remain Unknown.
+  const char video[] = "5.7K|30";
+  const char photo[] = "72MP|MEGA";
+  if (text_size == sizeof(video) - 1 && std::memcmp(text, video, text_size) == 0)
+    result.mode = Ce80CameraMode::Video;
+  else if (text_size == sizeof(photo) - 1 && std::memcmp(text, photo, text_size) == 0)
+    result.mode = Ce80CameraMode::Photo;
+  else
+    return displayError(Ce80DisplayError::UnsupportedDisplay);
+  result.kind = Ce80DisplayKind::Settings;
+  result.recording = RecordingState::Stopped;
+  return result;
+}
+bool elapsedText(const uint8_t *text, size_t size) {
+  if (size != 9 || text[0] != '.' || text[3] != ':' || text[6] != ':')
+    return false;
+  constexpr size_t positions[] = {1, 2, 4, 5, 7, 8};
+  for (auto position : positions)
+    if (!digit(text[position]))
+      return false;
+  return true;
+}
+Ce80DisplayResult decodeElapsed(const uint8_t *text) {
+  Ce80DisplayResult result;
+  result.error = Ce80DisplayError::None;
+  const uint32_t hours = (text[1] - '0') * 10 + text[2] - '0';
+  const uint32_t minutes = (text[4] - '0') * 10 + text[5] - '0';
+  const uint32_t seconds = (text[7] - '0') * 10 + text[8] - '0';
+  if (minutes >= 60 || seconds >= 60)
+    return displayError(Ce80DisplayError::UnsupportedDisplay);
+  result.kind = Ce80DisplayKind::Elapsed;
+  result.recording = RecordingState::Recording;
+  result.elapsed_seconds = hours * 3600 + minutes * 60 + seconds;
+  return result;
+}
+Ce80DisplayError validateDisplayEnvelope(const Ce80DisplayConfig &config, Ce80Direction direction,
+                                         const uint8_t *data, size_t size) {
+  if (config.profile == Ce80DisplayProfile::Disabled)
+    return Ce80DisplayError::Disabled;
+  if (config.profile != Ce80DisplayProfile::X5CapturedDisplayV1)
+    return Ce80DisplayError::UnsupportedProfile;
+  if (direction != Ce80Direction::CameraToRemote)
+    return Ce80DisplayError::WrongDirection;
+  if (size < 6 || size > 256)
+    return Ce80DisplayError::InvalidSize;
+  if (!data)
+    return Ce80DisplayError::InvalidBuffer;
+  if (data[0] != 0xfe || data[1] != 0xef || data[2] != 0xfe)
+    return Ce80DisplayError::UnsupportedHeader;
+  if (size != size_t(data[5]) + 6)
+    return Ce80DisplayError::LengthMismatch;
+  return Ce80DisplayError::None;
+}
 } // namespace
 Ce80DisplayResult decodeCe80Display(const Ce80DisplayConfig &config, Ce80Direction direction,
                                     const uint8_t *data, size_t size) {
-  if (config.profile == Ce80DisplayProfile::Disabled)
-    return displayError(Ce80DisplayError::Disabled);
-  if (config.profile != Ce80DisplayProfile::X5CapturedDisplayV1)
-    return displayError(Ce80DisplayError::UnsupportedProfile);
-  if (direction != Ce80Direction::CameraToRemote)
-    return displayError(Ce80DisplayError::WrongDirection);
-  if (size < 6 || size > 256)
-    return displayError(Ce80DisplayError::InvalidSize);
-  if (!data)
-    return displayError(Ce80DisplayError::InvalidBuffer);
-  if (data[0] != 0xfe || data[1] != 0xef || data[2] != 0xfe)
-    return displayError(Ce80DisplayError::UnsupportedHeader);
-  if (size != size_t(data[5]) + 6)
-    return displayError(Ce80DisplayError::LengthMismatch);
+  const auto error = validateDisplayEnvelope(config, direction, data, size);
+  if (error != Ce80DisplayError::None)
+    return displayError(error);
   Ce80DisplayResult result;
   result.error = Ce80DisplayError::None;
   // Opaque status/handshake/other bodies are neither ACK nor state evidence.
@@ -60,34 +105,12 @@ Ce80DisplayResult decodeCe80Display(const Ce80DisplayConfig &config, Ce80Directi
   // Byte7 is display layout, not a state/sequence/ACK field.
   const uint8_t *text = data + 10;
   const size_t text_size = size - 10;
-  if (data[8] == 0x5e && data[9] == 0) {
-    // Exact observed X5 settings. Other resolutions/submodes remain Unknown.
-    const char video[] = "5.7K|30";
-    const char photo[] = "72MP|MEGA";
-    if (text_size == sizeof(video) - 1 && std::memcmp(text, video, text_size) == 0)
-      result.mode = Ce80CameraMode::Video;
-    else if (text_size == sizeof(photo) - 1 && std::memcmp(text, photo, text_size) == 0)
-      result.mode = Ce80CameraMode::Photo;
-    else
-      return displayError(Ce80DisplayError::UnsupportedDisplay);
-    result.kind = Ce80DisplayKind::Settings;
-    result.recording = RecordingState::Stopped;
-    return result;
-  }
+  if (data[8] == 0x5e && data[9] == 0)
+    return decodeSettings(text, text_size);
   if (data[8] != 0x46 || data[9] != 1)
     return displayError(Ce80DisplayError::UnsupportedDisplay);
-  if (text_size == 9 && text[0] == '.' && text[3] == ':' && text[6] == ':' && digit(text[1]) &&
-      digit(text[2]) && digit(text[4]) && digit(text[5]) && digit(text[7]) && digit(text[8])) {
-    const uint32_t hours = (text[1] - '0') * 10 + text[2] - '0';
-    const uint32_t minutes = (text[4] - '0') * 10 + text[5] - '0';
-    const uint32_t seconds = (text[7] - '0') * 10 + text[8] - '0';
-    if (minutes >= 60 || seconds >= 60)
-      return displayError(Ce80DisplayError::UnsupportedDisplay);
-    result.kind = Ce80DisplayKind::Elapsed;
-    result.recording = RecordingState::Recording;
-    result.elapsed_seconds = hours * 3600 + minutes * 60 + seconds;
-    return result;
-  }
+  if (elapsedText(text, text_size))
+    return decodeElapsed(text);
   if (remainingText(text, text_size)) {
     result.kind = Ce80DisplayKind::Remaining;
     return result;

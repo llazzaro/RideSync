@@ -30,46 +30,53 @@ bool HealthSupervisor::begin(const std::array<WorkerPolicy, 4> &policy, uint32_t
   valid_ = true;
   return true;
 }
+void HealthSupervisor::observeWorker(size_t i, uint32_t now) {
+  const uint32_t generation = progress_[i].generation();
+  // Accept forward movement across wrap, reject repeats and backward generations.
+  const uint32_t delta = generation - seen_[i];
+  if ((!started_[i] && generation != 0) || (delta && delta < 0x80000000U)) {
+    seen_[i] = generation;
+    last_[i] = now;
+    started_[i] = true;
+  }
+}
+void HealthSupervisor::evaluateWorker(size_t i, uint32_t now, HealthDecision &d, bool &fresh,
+                                      bool &all_started) {
+  const auto &p = policy_[i];
+  if (!p.enabled)
+    return;
+  if (progress_[i].isRefused()) {
+    d.refused |= static_cast<uint8_t>(1U << i);
+    if (p.required) {
+      all_started = false;
+      fresh = false;
+    }
+    return;
+  }
+  if (progress_[i].isFinished()) {
+    if (p.required && !started_[i] && !progress_[i].generation())
+      all_started = false;
+    return;
+  }
+  observeWorker(i, now);
+  const bool live = started_[i] ? now - last_[i] < p.deadline_ms : now - boot_ < p.startup_grace_ms;
+  if (!live)
+    d.stalled |= static_cast<uint8_t>(1U << i);
+  if (!p.required)
+    return;
+  if (!started_[i])
+    all_started = false;
+  if (!live || (started_[i] && seen_[i] == fed_[i]))
+    fresh = false;
+}
 HealthDecision HealthSupervisor::evaluate(uint32_t now) {
   HealthDecision d;
   d.valid = valid_;
   if (!valid_)
     return d;
   bool fresh = true, all_started = true;
-  for (size_t i = 0; i < policy_.size(); ++i) {
-    const auto &p = policy_[i];
-    if (!p.enabled)
-      continue;
-    if (progress_[i].isRefused()) {
-      d.refused |= static_cast<uint8_t>(1U << i);
-      if (p.required) {
-        all_started = false;
-        fresh = false;
-      }
-      continue;
-    }
-    if (progress_[i].isFinished()) {
-      if (p.required && !started_[i] && !progress_[i].generation())
-        all_started = false;
-      continue;
-    }
-    const uint32_t generation = progress_[i].generation();
-    // Accept forward movement across wrap, reject repeats and backward generations.
-    const uint32_t delta = generation - seen_[i];
-    if ((!started_[i] && generation != 0) || (delta && delta < 0x80000000U)) {
-      seen_[i] = generation;
-      last_[i] = now;
-      started_[i] = true;
-    }
-    const bool live =
-        started_[i] ? now - last_[i] < p.deadline_ms : now - boot_ < p.startup_grace_ms;
-    if (!live)
-      d.stalled |= static_cast<uint8_t>(1U << i);
-    if (p.required && !started_[i])
-      all_started = false;
-    if (p.required && (!live || (started_[i] && seen_[i] == fed_[i])))
-      fresh = false;
-  }
+  for (size_t i = 0; i < policy_.size(); ++i)
+    evaluateWorker(i, now, d, fresh, all_started);
   uint8_t required_mask = 0;
   for (size_t i = 0; i < policy_.size(); ++i)
     if (policy_[i].required)
@@ -118,6 +125,16 @@ void BootRecovery::seal() {
   record_.version = kVersion;
   record_.checksum = checksum(record_);
 }
+void BootRecovery::countRetainedReset(bool watchdog, bool health) {
+  if (watchdog)
+    saturate(record_.watchdog_resets);
+  if (health)
+    saturate(record_.health_restarts);
+  if (record_.armed && (watchdog || health))
+    saturate(record_.failed_boots);
+  if (record_.failed_boots >= 3)
+    record_.safe_mode = 1;
+}
 BootStatus BootRecovery::begin(const BootRecord &retained, ResetClass reason, uint32_t now) {
   BootStatus status;
   status.retention_valid = reason != ResetClass::Cold && reason != ResetClass::Brownout &&
@@ -128,16 +145,8 @@ BootStatus BootRecovery::begin(const BootRecord &retained, ResetClass reason, ui
   const bool health =
       reason == ResetClass::HealthRestart ||
       (reason == ResetClass::Software && record_.pending == AppResetCause::RequiredWorkerStall);
-  if (status.retention_valid) {
-    if (watchdog)
-      saturate(record_.watchdog_resets);
-    if (health)
-      saturate(record_.health_restarts);
-    if (record_.armed && (watchdog || health))
-      saturate(record_.failed_boots);
-    if (record_.failed_boots >= 3)
-      record_.safe_mode = 1;
-  }
+  if (status.retention_valid)
+    countRetainedReset(watchdog, health);
   record_.armed = 1;
   record_.pending = AppResetCause::None;
   stable_since_ = now;

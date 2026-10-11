@@ -90,6 +90,10 @@ private:
   size_t length_ = 0, offset_ = 0;
   bool format(const Record &record);
   void fail();
+  void openLog();
+  void flushCached();
+  void serviceRows();
+  bool formatHeader();
   void writeChunk();
   static void add(std::atomic<uint32_t> &counter, uint32_t amount = 1);
 };

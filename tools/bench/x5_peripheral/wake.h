@@ -20,25 +20,10 @@ public:
       return WakeInput::Consumed;
     }
     if (byte != '\n') {
-      if (count_ < sizeof(pending_) && byte >= 32 && byte <= 126)
-        pending_[count_] = byte;
-      else
-        malformed_ = true;
-      if (count_ < sizeof(pending_) + 1)
-        ++count_;
+      append(byte);
       return WakeInput::Consumed;
     }
-    reading_ = false;
-    const bool accepted = accepted_idle_ && !used && !malformed_ && count_ == sizeof(pending_);
-    if (accepted_idle_ && !used) {
-      enabled_ = accepted;
-      blocked_ = !accepted;
-      std::memset(identifier_, 0, sizeof(identifier_));
-      if (accepted)
-        std::memcpy(identifier_, pending_, sizeof(identifier_));
-    }
-    std::memset(pending_, 0, sizeof(pending_));
-    return accepted ? WakeInput::Accepted : WakeInput::Refused;
+    return finish(used);
   }
   bool allowBegin() const { return !reading_ && !blocked_; }
   bool enabled() const { return enabled_; }
@@ -67,6 +52,27 @@ public:
   }
 
 private:
+  void append(uint8_t byte) {
+    if (count_ < sizeof(pending_) && byte >= 32 && byte <= 126)
+      pending_[count_] = byte;
+    else
+      malformed_ = true;
+    if (count_ < sizeof(pending_) + 1)
+      ++count_;
+  }
+  WakeInput finish(bool used) {
+    reading_ = false;
+    const bool accepted = accepted_idle_ && !used && !malformed_ && count_ == sizeof(pending_);
+    if (accepted_idle_ && !used) {
+      enabled_ = accepted;
+      blocked_ = !accepted;
+      std::memset(identifier_, 0, sizeof(identifier_));
+      if (accepted)
+        std::memcpy(identifier_, pending_, sizeof(identifier_));
+    }
+    std::memset(pending_, 0, sizeof(pending_));
+    return accepted ? WakeInput::Accepted : WakeInput::Refused;
+  }
   uint8_t identifier_[6]{}, pending_[6]{};
   unsigned count_ = 0;
   bool reading_ = false, accepted_idle_ = false, malformed_ = false;

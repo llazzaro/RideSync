@@ -1,33 +1,46 @@
 #include "status_led.h"
 namespace ridesync {
-LedState selectLedState(const RecordingStatus *group,
-                        const std::array<Lifecycle, kMaxCameras> &lifecycle,
-                        const LedHealth &health) {
-  bool error = health.application_fault || health.safe_mode || health.required_worker_stall;
-  bool partial = false, recovery = health.adapter_recovery;
+namespace {
+struct LedConditions {
+  bool error = false, partial = false, recovery = false;
+};
+void observeDevices(const LedHealth &health, LedConditions &c) {
   for (const auto &device : health.devices) {
     if (!device.enabled || !device.qualified || !device.current ||
         device.outcome == DeviceHealth::Ok)
       continue;
-    error |= device.severity == LedSeverity::Error;
-    partial |= device.severity == LedSeverity::Partial;
+    c.error |= device.severity == LedSeverity::Error;
+    c.partial |= device.severity == LedSeverity::Partial;
   }
-  if (group) {
-    for (size_t i = 0; i < kMaxCameras; ++i) {
-      const auto &peer = group->peers[i];
-      if (!peer.enabled)
-        continue;
-      error |= (peer.terminal_failure || lifecycle[i] == Lifecycle::Failed) &&
+}
+void observePeers(const RecordingStatus *group, const std::array<Lifecycle, kMaxCameras> &lifecycle,
+                  LedConditions &c) {
+  if (!group)
+    return;
+  for (size_t i = 0; i < kMaxCameras; ++i) {
+    const auto &peer = group->peers[i];
+    if (!peer.enabled)
+      continue;
+    c.error |= (peer.terminal_failure || lifecycle[i] == Lifecycle::Failed) &&
                peer.error != CameraError::Cancelled;
-      recovery |= lifecycle[i] == Lifecycle::Connecting || lifecycle[i] == Lifecycle::Backoff;
-      partial |= peer.error != CameraError::None && peer.error != CameraError::Cancelled;
-    }
+    c.recovery |= lifecycle[i] == Lifecycle::Connecting || lifecycle[i] == Lifecycle::Backoff;
+    c.partial |= peer.error != CameraError::None && peer.error != CameraError::Cancelled;
   }
-  if (error)
+}
+} // namespace
+LedState selectLedState(const RecordingStatus *group,
+                        const std::array<Lifecycle, kMaxCameras> &lifecycle,
+                        const LedHealth &health) {
+  LedConditions conditions;
+  conditions.error = health.application_fault || health.safe_mode || health.required_worker_stall;
+  conditions.recovery = health.adapter_recovery;
+  observeDevices(health, conditions);
+  observePeers(group, lifecycle, conditions);
+  if (conditions.error)
     return LedState::Error;
-  if (recovery)
+  if (conditions.recovery)
     return LedState::Recovery;
-  if (partial)
+  if (conditions.partial)
     return LedState::Partial;
   if (!group || !group->enabled)
     return LedState::Off;
@@ -84,6 +97,22 @@ namespace {
 bool allowedOutput(int pin) {
   return pin == 18 || pin == 19 || pin == 21 || pin == 22 || pin == 23 || pin == 32;
 }
+bool claimOutput(uint64_t &used, int output, LedPolarity polarity) {
+  if (!allowedOutput(output) ||
+      (polarity != LedPolarity::ActiveHigh && polarity != LedPolarity::ActiveLow))
+    return false;
+  const uint64_t pin = uint64_t(1) << output;
+  if (used & pin)
+    return false;
+  used |= pin;
+  return true;
+}
+bool unusedChannelsClear(const LedWiring &w, size_t channels) {
+  for (size_t i = channels; i < 3; ++i)
+    if (w.pins[i] != -1 || w.polarity[i] != LedPolarity::Unspecified)
+      return false;
+  return true;
+}
 } // namespace
 bool validateLedWiring(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
   if (!w.board_qualified || !w.reservations_complete || !ack ||
@@ -96,19 +125,11 @@ bool validateLedWiring(const LedWiring &w, bool ack, const ButtonGpioConfig &but
   if (button.enabled)
     used |= uint64_t(1) << button.pin;
   for (size_t i = 0; i < channels; ++i) {
-    if (!allowedOutput(w.pins[i]) ||
-        (w.polarity[i] != LedPolarity::ActiveHigh && w.polarity[i] != LedPolarity::ActiveLow))
+    if (!claimOutput(used, w.pins[i], w.polarity[i]))
       return false;
-    const uint64_t pin = uint64_t(1) << w.pins[i];
-    if (used & pin)
-      return false;
-    used |= pin;
   }
   // Mono may not hide an accidentally populated RGB configuration.
-  for (size_t i = channels; i < 3; ++i)
-    if (w.pins[i] != -1 || w.polarity[i] != LedPolarity::Unspecified)
-      return false;
-  return true;
+  return unusedChannelsClear(w, channels);
 }
 LedBackendState GpioLedSink::begin(const LedWiring &w, bool ack, const ButtonGpioConfig &button) {
   if (begun_)

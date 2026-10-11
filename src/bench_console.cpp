@@ -1,31 +1,37 @@
 #include "bench_console.h"
 #include <cstring>
 namespace ridesync {
+void BenchConsole::parseCommand() {
+  const char *names[] = {"STATUS", "CONNECT",  "REC",   "STOP",      "QUERY",
+                         "WAKE",   "SHUTDOWN", "CLEAR", "STATIONARY"};
+  for (unsigned i = 0; i < 9; ++i)
+    if (!std::strcmp(line_, names[i])) {
+      command_ = static_cast<BenchCommand>(i);
+      error_ = BenchConsoleError::None;
+      break;
+    }
+}
+void BenchConsole::finishLine() {
+  if (!size_ && !invalid_) {
+    cr_ = false;
+    return;
+  }
+  if (pending_) {
+    error_ = BenchConsoleError::LostInput;
+  } else {
+    pending_ = true;
+    error_ = BenchConsoleError::Invalid;
+    if (!invalid_)
+      parseCommand();
+  }
+  size_ = 0;
+  line_[0] = 0;
+  invalid_ = cr_ = false;
+  return;
+}
 void BenchConsole::push(uint8_t c) {
   if (c == '\n') {
-    if (!size_ && !invalid_) {
-      cr_ = false;
-      return;
-    }
-    if (pending_) {
-      error_ = BenchConsoleError::LostInput;
-    } else {
-      pending_ = true;
-      error_ = BenchConsoleError::Invalid;
-      if (!invalid_) {
-        const char *names[] = {"STATUS", "CONNECT",  "REC",   "STOP",      "QUERY",
-                               "WAKE",   "SHUTDOWN", "CLEAR", "STATIONARY"};
-        for (unsigned i = 0; i < 9; ++i)
-          if (!std::strcmp(line_, names[i])) {
-            command_ = static_cast<BenchCommand>(i);
-            error_ = BenchConsoleError::None;
-            break;
-          }
-      }
-    }
-    size_ = 0;
-    line_[0] = 0;
-    invalid_ = cr_ = false;
+    finishLine();
     return;
   }
   if (c == '\r') {

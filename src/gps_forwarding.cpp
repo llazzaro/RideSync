@@ -13,6 +13,16 @@ void count(uint32_t &value) {
   if (value != UINT32_MAX)
     ++value;
 }
+bool forwardingConfigValid(const CameraConfig &camera, const GpsForwardingConfig &c) {
+  return !(camera.family != CameraFamily::Insta360 || camera.model != CameraModel::ONE_RS ||
+           !c.source_qualified ||
+           c.encoder.profile != insta360::GpsWireProfile::GarminBe80VideoV1 ||
+           !c.encoder.max_age_ms || c.encoder.max_age_ms > 60000 || c.interval_ms < 100 ||
+           c.interval_ms > 60000 || !c.packet_deadline_ms || c.packet_deadline_ms > 5000);
+}
+bool retirementResult(const BleResult &r) {
+  return r.kind == BleResultKind::Retired || r.kind == BleResultKind::LinkClosed;
+}
 } // namespace
 bool Be80GpsForwarder::configure(uint8_t i, const CameraConfig &camera,
                                  const GpsForwardingConfig &c, Be80CommandSequence &sequence) {
@@ -25,15 +35,10 @@ bool Be80GpsForwarder::configure(uint8_t i, const CameraConfig &camera,
     p.status.enabled = false;
     return true;
   }
-  if (p.status.linked || p.status.active || camera.family != CameraFamily::Insta360 ||
-      camera.model != CameraModel::ONE_RS || !c.source_qualified ||
-      c.encoder.profile != insta360::GpsWireProfile::GarminBe80VideoV1 || !c.encoder.max_age_ms ||
-      c.encoder.max_age_ms > 60000 || c.interval_ms < 100 || c.interval_ms > 60000 ||
-      !c.packet_deadline_ms || c.packet_deadline_ms > 5000)
+  if (p.status.linked || p.status.active || !forwardingConfigValid(camera, c))
     return false;
-  for (uint8_t n = 0; n < kBlePeers; ++n)
-    if (n != i && peers_[n].status.enabled && peers_[n].sequence == &sequence)
-      return false;
+  if (!sequenceAvailable(i, sequence))
+    return false;
   p.config = c;
   p.sequence = &sequence;
   p.status.enabled = true;
@@ -110,6 +115,116 @@ void Be80GpsForwarder::cancel() {
   for (uint8_t i = 0; i < kBlePeers; ++i)
     discard(i, peers_[i].status.active, true);
 }
+bool Be80GpsForwarder::packetEligible(uint8_t i, const RecordTimestamp &t, uint8_t controls) {
+  auto &p = peers_[i];
+  if (!p.status.enabled || !p.status.linked)
+    return false;
+  if (controls & (1u << i)) {
+    discard(i, p.status.active);
+    return false;
+  }
+  if (p.status.active) {
+    return activePacketValid(i, t);
+  } else if (p.status.pending) {
+    return pendingPacketValid(i, t);
+  } else
+    return false;
+  return true;
+}
+bool Be80GpsForwarder::admitPacket(uint8_t i, const RecordTimestamp &t) {
+  auto &p = peers_[i];
+  if (!p.status.active) {
+    if (!central_.reserveWrites(i, this))
+      return false;
+    const auto sequence = p.sequence->take();
+    if (!sequence) {
+      discard(i, true);
+      return false;
+    }
+    const auto packet = encode(p, t, p.snapshot, sequence);
+    p.packet = packet.bytes;
+    p.active_snapshot = p.snapshot;
+    p.active_session = t.session_id;
+    p.started_ms = p.last_sent_ms = t.monotonic_ms;
+    p.sent = true;
+    p.status.pending = false;
+    p.status.active = true;
+    p.offset = 0;
+    count(p.status.admitted_packets);
+  }
+  return true;
+}
+void Be80GpsForwarder::submitChunk(uint8_t i, const RecordTimestamp &t) {
+  auto &p = peers_[i];
+  p.chunk = uint8_t(std::min<size_t>(20, p.packet.size() - p.offset));
+  p.waiting = true; // Before a possible synchronous failure/retirement.
+  if (!central_.write(i, 0, p.packet.data() + p.offset, p.chunk, uint32_t(t.monotonic_ms), this)) {
+    // Even local refusal consumes this observation/sequence. Never retry it.
+    discard(i, p.offset != 0 || !central_.admissionOpen(i));
+  }
+}
+void Be80GpsForwarder::transportReady(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+  if (r.fault != BleFault::None || !r.event.generation || r.event.generation <= p.generation ||
+      r.event.connection == kBleNoHandle ||
+      !central_.endpointMatches(i, 0, BleUuid::shortUuid(0xbe80), BleUuid::shortUuid(0xbe81)))
+    return;
+  discard(i, false);
+  p.generation = r.event.generation;
+  p.connection = r.event.connection;
+  p.last_completed_procedure = 0;
+  p.status.linked = true;
+  p.sent = false;
+}
+bool Be80GpsForwarder::chunkCompleted(const Peer &p, const BleResult &r) {
+  return r.kind == BleResultKind::WriteComplete && p.status.active && p.waiting &&
+         r.fault == BleFault::None && !r.event.status && r.endpoint == 0 &&
+         r.event.phase == BlePhase::Write && r.event.procedure > p.last_completed_procedure;
+}
+void Be80GpsForwarder::completeChunk(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+  p.last_completed_procedure = r.event.procedure;
+  p.waiting = false;
+  p.offset += p.chunk;
+  if (p.offset == p.packet.size()) {
+    central_.releaseWrites(i, this);
+    p.status.active = false;
+    p.packet = {};
+    p.active_snapshot = {};
+    count(p.status.att_completed_packets);
+  }
+}
+bool Be80GpsForwarder::sequenceAvailable(uint8_t i, const Be80CommandSequence &sequence) {
+  for (uint8_t n = 0; n < kBlePeers; ++n)
+    if (n != i && peers_[n].status.enabled && peers_[n].sequence == &sequence)
+      return false;
+  return true;
+}
+bool Be80GpsForwarder::activePacketValid(uint8_t i, const RecordTimestamp &t) {
+  auto &p = peers_[i];
+  const auto valid = encode(p, t, p.active_snapshot, 1);
+  p.status.encoding_error = valid.error;
+  if (valid.error != insta360::GpsEncodingError::None || t.session_id != p.active_session ||
+      t.monotonic_ms < p.started_ms ||
+      t.monotonic_ms - p.started_ms >= p.config.packet_deadline_ms) {
+    discard(i, true);
+    return false;
+  }
+  return true;
+}
+bool Be80GpsForwarder::pendingPacketValid(uint8_t i, const RecordTimestamp &t) {
+  auto &p = peers_[i];
+  const auto valid = encode(p, t, p.snapshot, 1);
+  p.status.encoding_error = valid.error;
+  if (valid.error != insta360::GpsEncodingError::None || t.session_id != p.pending_session ||
+      (p.sent && t.monotonic_ms < p.last_sent_ms)) {
+    discard(i, false);
+    return false;
+  }
+  if (p.sent && t.monotonic_ms - p.last_sent_ms < p.config.interval_ms)
+    return false;
+  return true;
+}
 void Be80GpsForwarder::service(const RecordTimestamp &t, uint8_t controls) {
   // Producer publication/cancellation never enters the BLE SDK. Drain retained
   // teardown here, even after terminal cancellation, before any command work.
@@ -122,61 +237,13 @@ void Be80GpsForwarder::service(const RecordTimestamp &t, uint8_t controls) {
   for (uint8_t n = 0; n < kBlePeers; ++n) {
     const uint8_t i = (cursor_ + n) % kBlePeers;
     auto &p = peers_[i];
-    if (!p.status.enabled || !p.status.linked)
-      continue;
-    if (controls & (1u << i)) {
-      discard(i, p.status.active);
-      continue;
-    }
-    if (p.status.active) {
-      const auto valid = encode(p, t, p.active_snapshot, 1);
-      p.status.encoding_error = valid.error;
-      if (valid.error != insta360::GpsEncodingError::None || t.session_id != p.active_session ||
-          t.monotonic_ms < p.started_ms ||
-          t.monotonic_ms - p.started_ms >= p.config.packet_deadline_ms) {
-        discard(i, true);
-        continue;
-      }
-    } else if (p.status.pending) {
-      const auto valid = encode(p, t, p.snapshot, 1);
-      p.status.encoding_error = valid.error;
-      if (valid.error != insta360::GpsEncodingError::None || t.session_id != p.pending_session ||
-          (p.sent && t.monotonic_ms < p.last_sent_ms)) {
-        discard(i, false);
-        continue;
-      }
-      if (p.sent && t.monotonic_ms - p.last_sent_ms < p.config.interval_ms)
-        continue;
-    } else
+    if (!packetEligible(i, t, controls))
       continue;
     if (submitted || p.waiting || !central_.admissionOpen(i))
       continue;
-    if (!p.status.active) {
-      if (!central_.reserveWrites(i, this))
-        continue;
-      const auto sequence = p.sequence->take();
-      if (!sequence) {
-        discard(i, true);
-        continue;
-      }
-      const auto packet = encode(p, t, p.snapshot, sequence);
-      p.packet = packet.bytes;
-      p.active_snapshot = p.snapshot;
-      p.active_session = t.session_id;
-      p.started_ms = p.last_sent_ms = t.monotonic_ms;
-      p.sent = true;
-      p.status.pending = false;
-      p.status.active = true;
-      p.offset = 0;
-      count(p.status.admitted_packets);
-    }
-    p.chunk = uint8_t(std::min<size_t>(20, p.packet.size() - p.offset));
-    p.waiting = true; // Before a possible synchronous failure/retirement.
-    if (!central_.write(i, 0, p.packet.data() + p.offset, p.chunk, uint32_t(t.monotonic_ms),
-                        this)) {
-      // Even local refusal consumes this observation/sequence. Never retry it.
-      discard(i, p.offset != 0 || !central_.admissionOpen(i));
-    }
+    if (!admitPacket(i, t))
+      continue;
+    submitChunk(i, t);
     submitted = true;
   }
   cursor_ = (cursor_ + 1) % kBlePeers;
@@ -186,41 +253,21 @@ void Be80GpsForwarder::result(const BleResult &r) {
     return;
   const uint8_t i = r.event.peer;
   auto &p = peers_[i];
-  if (cancelled_ && r.kind != BleResultKind::Retired && r.kind != BleResultKind::LinkClosed)
+  if (cancelled_ && !retirementResult(r))
     return;
   if (!p.status.enabled)
     return;
   if (r.kind == BleResultKind::TransportReady) {
-    if (r.fault != BleFault::None || !r.event.generation || r.event.generation <= p.generation ||
-        r.event.connection == kBleNoHandle ||
-        !central_.endpointMatches(i, 0, BleUuid::shortUuid(0xbe80), BleUuid::shortUuid(0xbe81)))
-      return;
-    discard(i, false);
-    p.generation = r.event.generation;
-    p.connection = r.event.connection;
-    p.last_completed_procedure = 0;
-    p.status.linked = true;
-    p.sent = false;
+    transportReady(i, r);
     return;
   }
   if (r.event.generation != p.generation || r.event.connection != p.connection)
     return;
-  if (r.kind == BleResultKind::Retired || r.kind == BleResultKind::LinkClosed) {
+  if (retirementResult(r)) {
     p.status.linked = false;
     discard(i, false);
-  } else if (r.kind == BleResultKind::WriteComplete && p.status.active && p.waiting &&
-             r.fault == BleFault::None && !r.event.status && r.endpoint == 0 &&
-             r.event.phase == BlePhase::Write && r.event.procedure > p.last_completed_procedure) {
-    p.last_completed_procedure = r.event.procedure;
-    p.waiting = false;
-    p.offset += p.chunk;
-    if (p.offset == p.packet.size()) {
-      central_.releaseWrites(i, this);
-      p.status.active = false;
-      p.packet = {};
-      p.active_snapshot = {};
-      count(p.status.att_completed_packets);
-    }
+  } else if (chunkCompleted(p, r)) {
+    completeChunk(i, r);
   }
 }
 GpsForwardingStatus Be80GpsForwarder::status(uint8_t i) const {

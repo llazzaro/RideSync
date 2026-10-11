@@ -27,5 +27,6 @@ private:
   CameraError error_ = CameraError::None;
   uint32_t rejected_ = 0;
   void reject();
+  void finishLine();
 };
 } // namespace ridesync

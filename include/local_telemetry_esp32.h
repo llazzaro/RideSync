@@ -40,6 +40,8 @@ public:
   LocalTelemetryRuntime &owner() { return runtime_; }
 
 private:
+  void releaseRoute();
+  bool startPower();
   class RawClock : public Clock {
     uint32_t now() const override;
   } clock_;

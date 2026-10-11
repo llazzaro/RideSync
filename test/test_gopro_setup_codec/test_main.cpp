@@ -199,6 +199,19 @@ void management_reassembly_remains_bounded_and_peer_isolated() {
   TEST_ASSERT_EQUAL_INT((int)Outcome::Timeout,
                         (int)a.feed(5, Channel::Management, end, sizeof(end), 2002, m));
 }
+void assertRandomSetupResponse(Channel channel, const Message &m, SetupOperation op) {
+  auto r = decodeSetup(channel, m, op);
+  TEST_ASSERT_TRUE(r.raw.size == m.size);
+  if (r.success) {
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+    TEST_ASSERT_TRUE(r.result_present && r.known_result);
+    TEST_ASSERT_EQUAL_UINT64(1, r.result);
+    TEST_ASSERT_EQUAL_INT((int)SetupResultDomain::GenericProtobuf, (int)r.domain);
+    TEST_ASSERT_EQUAL_INT(
+        (int)(op == SetupOperation::PairingFinish ? Channel::Management : Channel::Command),
+        (int)channel);
+  }
+}
 void bounded_random_inputs_never_publish_success_without_exact_route_and_result() {
   uint32_t state = 0x368f7811;
   for (size_t iteration = 0; iteration < 4096; ++iteration) {
@@ -211,17 +224,7 @@ void bounded_random_inputs_never_publish_success_without_exact_route_and_result(
     for (Channel channel : {Channel::Command, Channel::Management, Channel::Query}) {
       for (SetupOperation op :
            {SetupOperation::PairingFinish, SetupOperation::ClaimExternalControl}) {
-        auto r = decodeSetup(channel, m, op);
-        TEST_ASSERT_TRUE(r.raw.size == m.size);
-        if (r.success) {
-          TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
-          TEST_ASSERT_TRUE(r.result_present && r.known_result);
-          TEST_ASSERT_EQUAL_UINT64(1, r.result);
-          TEST_ASSERT_EQUAL_INT((int)SetupResultDomain::GenericProtobuf, (int)r.domain);
-          TEST_ASSERT_EQUAL_INT(
-              (int)(op == SetupOperation::PairingFinish ? Channel::Management : Channel::Command),
-              (int)channel);
-        }
+        assertRandomSetupResponse(channel, m, op);
       }
     }
   }

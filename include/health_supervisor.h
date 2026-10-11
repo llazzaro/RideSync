@@ -52,6 +52,8 @@ public:
 private:
   std::array<WorkerPolicy, 4> policy_{};
   std::array<HealthProgress, 4> progress_;
+  void observeWorker(size_t, uint32_t);
+  void evaluateWorker(size_t, uint32_t, HealthDecision &, bool &, bool &);
   std::array<uint32_t, 4> seen_{}, fed_{}, last_{};
   std::array<bool, 4> started_{};
   uint32_t boot_ = 0;
@@ -96,6 +98,7 @@ private:
   uint32_t stable_since_ = 0;
   bool tracking_ = false;
   void seal();
+  void countRetainedReset(bool, bool);
 };
 // All methods invoked only by the dedicated supervisor task, never by workers.
 class WatchdogPort {

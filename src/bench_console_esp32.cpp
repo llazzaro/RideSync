@@ -65,6 +65,20 @@ bool admitted(SupervisedEsp32Application *application) {
          !state.safe_mode && !state.supervision_fault && !state.worker_stalls &&
          !state.worker_refused;
 }
+void executePeers(BenchCommand command, const MixedCameraRuntime &runtime, unsigned &accepted,
+                  unsigned &refused) {
+  for (size_t i = 0; i < runtime.manager.size(); ++i) {
+    if (!runtime.manager.configuredCamera(i)->enabled)
+      continue;
+    const auto error = command == BenchCommand::Connect
+                           ? runtime.manager.request(i, Operation::Connect)
+                           : runtime.adapter.requestRecovery(i, false);
+    accepted += error == CameraError::None;
+    refused += error != CameraError::None;
+    if (error != CameraError::None)
+      Serial.printf("BENCH admission peer=%u error=%u\n", unsigned(i), unsigned(error));
+  }
+}
 void execute(BenchCommand command) {
   auto *application = benchApplicationOwner();
   if (command == BenchCommand::Status) {
@@ -110,23 +124,30 @@ void execute(BenchCommand command) {
     accepted = result == GroupError::None;
     refused = !accepted;
   } else {
-    for (size_t i = 0; i < runtime.manager.size(); ++i) {
-      if (!runtime.manager.configuredCamera(i)->enabled)
-        continue;
-      const auto error = command == BenchCommand::Connect
-                             ? runtime.manager.request(i, Operation::Connect)
-                             : runtime.adapter.requestRecovery(i, false);
-      accepted += error == CameraError::None;
-      refused += error != CameraError::None;
-      if (error != CameraError::None)
-        Serial.printf("BENCH admission peer=%u error=%u\n", unsigned(i), unsigned(error));
-    }
+    executePeers(command, runtime, accepted, refused);
   }
   Serial.printf("BENCH command=%u accepted=%u refused=%u; acceptance is not recording proof.\n",
                 unsigned(command), accepted, refused);
   waiting = accepted != 0;
   current_command = command;
   report();
+}
+bool commandsFinished(const MixedCameraRuntime &runtime) {
+  bool done;
+  done = runtime.group.status().pending == 0;
+  for (size_t i = 0; done && i < runtime.manager.size(); ++i) {
+    const auto state = runtime.manager.state(i)->lifecycle;
+    done = state != Lifecycle::Connecting && state != Lifecycle::Operating &&
+           state != Lifecycle::Backoff;
+    if (current_command == BenchCommand::Wake) {
+      const auto recovery = runtime.adapter.recoveryState(i).phase;
+      done = done && recovery != Hero12RecoveryPhase::Pending &&
+             recovery != Hero12RecoveryPhase::Scanning &&
+             recovery != Hero12RecoveryPhase::Connecting &&
+             recovery != Hero12RecoveryPhase::Observing;
+    }
+  }
+  return done;
 }
 void terminal() {
   if (!waiting)
@@ -142,19 +163,7 @@ void terminal() {
     done = status.releasable;
   else if (!done) {
     const auto runtime = mixedCameraRuntime();
-    done = runtime.group.status().pending == 0;
-    for (size_t i = 0; done && i < runtime.manager.size(); ++i) {
-      const auto state = runtime.manager.state(i)->lifecycle;
-      done = state != Lifecycle::Connecting && state != Lifecycle::Operating &&
-             state != Lifecycle::Backoff;
-      if (current_command == BenchCommand::Wake) {
-        const auto recovery = runtime.adapter.recoveryState(i).phase;
-        done = done && recovery != Hero12RecoveryPhase::Pending &&
-               recovery != Hero12RecoveryPhase::Scanning &&
-               recovery != Hero12RecoveryPhase::Connecting &&
-               recovery != Hero12RecoveryPhase::Observing;
-      }
-    }
+    done = commandsFinished(runtime);
   }
   if (done) {
     Serial.printf("BENCH terminal command=%u; inspect errors and camera observations.\n",

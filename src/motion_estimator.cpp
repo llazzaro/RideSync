@@ -5,10 +5,7 @@ namespace ridesync {
 namespace {
 constexpr double gravity = 9.80665;
 constexpr double radians_per_degree = 0.017453292519943295;
-bool rotationValid(const float *r) {
-  for (unsigned i = 0; i < 9; ++i)
-    if (!std::isfinite(r[i]))
-      return false;
+bool rotationOrthonormal(const float *r) {
   for (unsigned i = 0; i < 3; ++i)
     for (unsigned j = 0; j < 3; ++j) {
       double dot = 0;
@@ -17,6 +14,14 @@ bool rotationValid(const float *r) {
       if (std::fabs(dot - (i == j ? 1.0 : 0.0)) > 0.0001)
         return false;
     }
+  return true;
+}
+bool rotationValid(const float *r) {
+  for (unsigned i = 0; i < 9; ++i)
+    if (!std::isfinite(r[i]))
+      return false;
+  if (!rotationOrthonormal(r))
+    return false;
   const double determinant = double(r[0]) * (double(r[4]) * r[8] - double(r[5]) * r[7]) -
                              double(r[1]) * (double(r[3]) * r[8] - double(r[5]) * r[6]) +
                              double(r[2]) * (double(r[3]) * r[7] - double(r[4]) * r[6]);
@@ -55,12 +60,47 @@ bool convert(const int16_t *raw, const int16_t *offset, const uint32_t *gain_n,
 double norm(const MotionVector &v) {
   return std::sqrt(double(v.x) * v.x + double(v.y) * v.y + double(v.z) * v.z);
 }
+bool sampleQualified(const ImuEvidence &e) {
+  const auto &c = e.config;
+  return !(e.kind != RecordKind::ImuSample || !e.session_id || !c.generation || !c.sensor_id ||
+           !c.mount_id || !c.calibration_id || c.sensor_state != Qualification::Qualified ||
+           c.mount_state != Qualification::Qualified ||
+           c.calibration_state != Qualification::Qualified);
+}
+bool calibrationMatches(const ImuEvidence &e, const MotionEstimatorConfig &config) {
+  const auto &c = e.config;
+  return !(!MotionEstimator::configValid(config) || c.mount_id != config.mount_id ||
+           c.calibration_id != config.calibration_id || !c.calibration_offsets_known ||
+           !c.calibration_gains_known || c.accel_offset_compensation != config.accel_compensation ||
+           c.gyro_offset_compensation != config.gyro_compensation);
+}
+bool sampleTimingValid(const ImuEvidence &e) {
+  return !(e.timing_flags > 15 || (e.timing_flags & 8));
+}
+bool stationaryReferenceMatches(const ImuEvidence &e, const StaticMotionReference &reference) {
+  const auto &c = e.config;
+  return !(!reference.externally_stationary || reference.session_id != e.session_id ||
+           reference.config_generation != c.generation ||
+           reference.batch_sequence != e.batch_sequence || !e.receipt_known ||
+           (e.timing_flags & 7));
+}
 } // namespace
 bool MotionEstimator::configValid(const MotionEstimatorConfig &c) {
   return c.mount_qualified && c.residual_calibration_qualified && c.mount_id && c.calibration_id &&
          c.convention == MotionCalibrationConvention::ResidualCountsOffsetThenGain &&
          c.accel_compensation >= 1 && c.accel_compensation <= 2 && c.gyro_compensation >= 1 &&
          c.gyro_compensation <= 2 && rotationValid(c.sensor_to_body);
+}
+void MotionEstimator::updateStaticTilt(const MotionVector &force, const MotionVector &rate) {
+  // Sanity vetoes only: these conditions cannot establish stationarity.
+  if (std::fabs(norm(force) - gravity) > 0.1 * gravity || norm(rate) > 0.05)
+    return;
+  const double yz = std::hypot(double(force.y), double(force.z));
+  if (yz < 0.000001 * gravity)
+    return;
+  estimate_.roll_rad = float(std::atan2(double(force.y), double(force.z)));
+  estimate_.pitch_rad = float(std::atan2(-double(force.x), yz));
+  estimate_.static_tilt_valid = true;
 }
 MotionEstimate MotionEstimator::update(const ImuEvidence &e,
                                        const StaticMotionReference &reference) {
@@ -69,15 +109,7 @@ MotionEstimate MotionEstimator::update(const ImuEvidence &e,
   if (fresh)
     last_declaration_ = reference.declaration;
   const auto &c = e.config;
-  if (e.kind != RecordKind::ImuSample || !e.session_id || !c.generation || !c.sensor_id ||
-      !c.mount_id || !c.calibration_id || c.sensor_state != Qualification::Qualified ||
-      c.mount_state != Qualification::Qualified ||
-      c.calibration_state != Qualification::Qualified || !configValid(config_) ||
-      c.mount_id != config_.mount_id || c.calibration_id != config_.calibration_id ||
-      !c.calibration_offsets_known || !c.calibration_gains_known ||
-      c.accel_offset_compensation != config_.accel_compensation ||
-      c.gyro_offset_compensation != config_.gyro_compensation || e.timing_flags > 15 ||
-      (e.timing_flags & 8))
+  if (!sampleQualified(e) || !calibrationMatches(e, config_) || !sampleTimingValid(e))
     return estimate_;
   MotionVector force, rate;
   if (!convert(e.accel, c.accel_offset, c.accel_gain_numerator, c.accel_gain_denominator,
@@ -90,19 +122,9 @@ MotionEstimate MotionEstimator::update(const ImuEvidence &e,
   estimate_.specific_force_mps2 = force;
   estimate_.angular_rate_rad_s = rate;
   estimate_.measurements_valid = true;
-  if (!fresh || !reference.externally_stationary || reference.session_id != e.session_id ||
-      reference.config_generation != c.generation || reference.batch_sequence != e.batch_sequence ||
-      !e.receipt_known || (e.timing_flags & 7))
+  if (!fresh || !stationaryReferenceMatches(e, reference))
     return estimate_;
-  // Sanity vetoes only: these conditions cannot establish stationarity.
-  if (std::fabs(norm(force) - gravity) > 0.1 * gravity || norm(rate) > 0.05)
-    return estimate_;
-  const double yz = std::hypot(double(force.y), double(force.z));
-  if (yz < 0.000001 * gravity)
-    return estimate_;
-  estimate_.roll_rad = float(std::atan2(double(force.y), double(force.z)));
-  estimate_.pitch_rad = float(std::atan2(-double(force.x), yz));
-  estimate_.static_tilt_valid = true;
+  updateStaticTilt(force, rate);
   return estimate_;
 }
 } // namespace ridesync

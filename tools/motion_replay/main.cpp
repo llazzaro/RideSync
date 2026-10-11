@@ -70,6 +70,81 @@ const char *fault(ridesync::DynamicMotionFault f) {
   }
   return "unknown";
 }
+ridesync::DynamicMotionInput decodeInput(const std::vector<std::string> &cells,
+                                         ridesync::DynamicMotionReference &reference) {
+  ridesync::DynamicMotionInput input;
+  input.session_id = integer(cells[0]);
+  input.sensor_id = static_cast<uint32_t>(integer(cells[1], UINT32_MAX));
+  input.config_generation = static_cast<uint32_t>(integer(cells[2], UINT32_MAX));
+  input.mount_id = static_cast<uint32_t>(integer(cells[3], UINT32_MAX));
+  input.calibration_id = static_cast<uint32_t>(integer(cells[4], UINT32_MAX));
+  input.sensor_epoch = static_cast<uint32_t>(integer(cells[5], UINT32_MAX));
+  input.sequence = static_cast<uint32_t>(integer(cells[6], UINT32_MAX));
+  input.sample_time_us = integer(cells[7]);
+  if (cells[8] == "modelled")
+    input.timing_source = ridesync::DynamicTimingSource::ModelledCadence;
+  else if (cells[8] == "qualified")
+    input.timing_source = ridesync::DynamicTimingSource::QualifiedAcquisition;
+  else if (cells[8] != "unknown")
+    throw std::runtime_error("unknown timing source");
+  input.measurements_valid = integer(cells[9], 1) != 0;
+  input.discontinuity = integer(cells[10], 1) != 0;
+  reference.externally_stationary = integer(cells[11], 1) != 0;
+  reference.declaration = static_cast<uint32_t>(integer(cells[12], UINT32_MAX));
+  input.specific_force_mps2 = {real(cells[13]), real(cells[14]), real(cells[15])};
+  input.angular_rate_rad_s = {real(cells[16]), real(cells[17]), real(cells[18])};
+  return input;
+}
+void writeEstimate(const std::vector<std::string> &cells,
+                   const ridesync::DynamicMotionEstimate &estimate) {
+  for (size_t index = 0; index < 9; ++index)
+    std::cout << cells[index] << ',';
+  std::cout << (estimate.numeric_available ? "unreliable" : "invalid") << ','
+            << fault(estimate.fault) << ',' << estimate.numeric_available << ','
+            << estimate.angles_available << ',' << estimate.elapsed_us;
+  if (estimate.numeric_available) {
+    for (float q : estimate.quaternion_wxyz)
+      std::cout << ',' << q;
+    for (auto v : {estimate.gravity_body_mps2, estimate.linear_acceleration_body_mps2})
+      std::cout << ',' << v.x << ',' << v.y << ',' << v.z;
+  } else
+    for (int index = 0; index < 10; ++index)
+      std::cout << ',';
+  if (estimate.angles_available)
+    std::cout << ',' << estimate.roll_rad << ',' << estimate.pitch_rad;
+  else
+    std::cout << ",,";
+  std::cout << ',' << estimate.dynamic_lean_valid << ',' << estimate.dynamic_acceleration_valid
+            << '\n';
+}
+void readHeader() {
+  const std::string header =
+      "session_id,sensor_id,config_generation,mount_id,calibration_id,sensor_epoch,sequence,"
+      "sample_time_us,timing_source,measurements_valid,discontinuity,stationary,declaration,"
+      "force_x_mps2,force_y_mps2,force_z_mps2,rate_x_rad_s,rate_y_rad_s,rate_z_rad_s";
+  std::string line;
+  if (!std::getline(std::cin, line))
+    throw std::runtime_error("missing header");
+  if (!line.empty() && line.back() == '\r')
+    line.pop_back();
+  if (line != header)
+    throw std::runtime_error("unexpected CSV header");
+}
+void replayLine(std::string &line, ridesync::DynamicMotionEstimator &estimator) {
+  if (!line.empty() && line.back() == '\r')
+    line.pop_back();
+  if (line.size() > 2048)
+    throw std::runtime_error("row too long");
+  auto cells = fields(line);
+  if (cells.size() != 19)
+    throw std::runtime_error("expected 19 fields");
+  ridesync::DynamicMotionReference reference;
+  const auto input = decodeInput(cells, reference);
+  auto estimate = reference.externally_stationary || reference.declaration
+                      ? estimator.initialize(input, reference)
+                      : estimator.update(input);
+  writeEstimate(cells, estimate);
+}
 } // namespace
 int main(int argc, char **argv) {
   size_t row = 0;
@@ -83,17 +158,8 @@ int main(int argc, char **argv) {
     if (!ridesync::DynamicMotionEstimator::configValid(config))
       throw std::runtime_error("invalid configuration");
     ridesync::DynamicMotionEstimator estimator(config);
-    const std::string header =
-        "session_id,sensor_id,config_generation,mount_id,calibration_id,sensor_epoch,sequence,"
-        "sample_time_us,timing_source,measurements_valid,discontinuity,stationary,declaration,"
-        "force_x_mps2,force_y_mps2,force_z_mps2,rate_x_rad_s,rate_y_rad_s,rate_z_rad_s";
+    readHeader();
     std::string line;
-    if (!std::getline(std::cin, line))
-      throw std::runtime_error("missing header");
-    if (!line.empty() && line.back() == '\r')
-      line.pop_back();
-    if (line != header)
-      throw std::runtime_error("unexpected CSV header");
     std::cout
         << "session_id,sensor_id,config_generation,mount_id,calibration_id,sensor_epoch,sequence,"
            "sample_time_us,timing_source,quality,fault,numeric_available,angles_available,elapsed_"
@@ -102,57 +168,7 @@ int main(int argc, char **argv) {
     std::cout << std::setprecision(9);
     while (std::getline(std::cin, line)) {
       ++row;
-      if (!line.empty() && line.back() == '\r')
-        line.pop_back();
-      if (line.size() > 2048)
-        throw std::runtime_error("row too long");
-      auto cells = fields(line);
-      if (cells.size() != 19)
-        throw std::runtime_error("expected 19 fields");
-      ridesync::DynamicMotionInput input;
-      input.session_id = integer(cells[0]);
-      input.sensor_id = static_cast<uint32_t>(integer(cells[1], UINT32_MAX));
-      input.config_generation = static_cast<uint32_t>(integer(cells[2], UINT32_MAX));
-      input.mount_id = static_cast<uint32_t>(integer(cells[3], UINT32_MAX));
-      input.calibration_id = static_cast<uint32_t>(integer(cells[4], UINT32_MAX));
-      input.sensor_epoch = static_cast<uint32_t>(integer(cells[5], UINT32_MAX));
-      input.sequence = static_cast<uint32_t>(integer(cells[6], UINT32_MAX));
-      input.sample_time_us = integer(cells[7]);
-      if (cells[8] == "modelled")
-        input.timing_source = ridesync::DynamicTimingSource::ModelledCadence;
-      else if (cells[8] == "qualified")
-        input.timing_source = ridesync::DynamicTimingSource::QualifiedAcquisition;
-      else if (cells[8] != "unknown")
-        throw std::runtime_error("unknown timing source");
-      input.measurements_valid = integer(cells[9], 1) != 0;
-      input.discontinuity = integer(cells[10], 1) != 0;
-      ridesync::DynamicMotionReference reference;
-      reference.externally_stationary = integer(cells[11], 1) != 0;
-      reference.declaration = static_cast<uint32_t>(integer(cells[12], UINT32_MAX));
-      input.specific_force_mps2 = {real(cells[13]), real(cells[14]), real(cells[15])};
-      input.angular_rate_rad_s = {real(cells[16]), real(cells[17]), real(cells[18])};
-      auto estimate = reference.externally_stationary || reference.declaration
-                          ? estimator.initialize(input, reference)
-                          : estimator.update(input);
-      for (size_t index = 0; index < 9; ++index)
-        std::cout << cells[index] << ',';
-      std::cout << (estimate.numeric_available ? "unreliable" : "invalid") << ','
-                << fault(estimate.fault) << ',' << estimate.numeric_available << ','
-                << estimate.angles_available << ',' << estimate.elapsed_us;
-      if (estimate.numeric_available) {
-        for (float q : estimate.quaternion_wxyz)
-          std::cout << ',' << q;
-        for (auto v : {estimate.gravity_body_mps2, estimate.linear_acceleration_body_mps2})
-          std::cout << ',' << v.x << ',' << v.y << ',' << v.z;
-      } else
-        for (int index = 0; index < 10; ++index)
-          std::cout << ',';
-      if (estimate.angles_available)
-        std::cout << ',' << estimate.roll_rad << ',' << estimate.pitch_rad;
-      else
-        std::cout << ",,";
-      std::cout << ',' << estimate.dynamic_lean_valid << ',' << estimate.dynamic_acceleration_valid
-                << '\n';
+      replayLine(line, estimator);
     }
     if (std::cin.bad() || !row)
       throw std::runtime_error("empty input or input read failure");

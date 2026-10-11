@@ -84,6 +84,11 @@ private:
     bool blocked = false, migration = false;
   };
   void scan();
+  bool scanSlot(unsigned, bool &, bool &);
+  bool mergeSlot(unsigned, SourceConfig &, uint64_t, PersistResult);
+  PersistResult failedWrite();
+  bool unchangedPayload() const;
+  bool verifyWrite(unsigned, const ConfigRecord &, StoreResult);
   ConfigStore &store_;
   Scan scan_;
   ConfigRecord scratch_, desired_;

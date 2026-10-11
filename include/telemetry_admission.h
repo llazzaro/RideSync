@@ -67,6 +67,17 @@ public:
   MotionCurrentSnapshot motionSnapshot(uint32_t now) const;
 
 private:
+  DynamicMotionInput dynamicInput(const ImuEvidence &e, const MotionEstimate &converted,
+                                  bool fresh);
+  bool motionFresh(const ImuEvidence &e, const RecordTimestamp &timestamp, uint32_t age);
+  void publishCurrentMotion(const ImuEvidence &e, const MotionEvidence &motion,
+                            const RecordTimestamp &timestamp, uint32_t raw);
+  void prepareStaticMotion(const ImuEvidence &e, MotionEvidence &motion);
+  bool inboxesDrained();
+  bool admitImuInbox();
+  bool admitCameraInbox();
+  void observeImuLoss();
+  void accountCameraLoss();
   SessionClock &clock_;
   Storage &storage_;
   ImuInbox &inbox_;

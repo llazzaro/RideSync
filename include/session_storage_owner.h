@@ -18,6 +18,8 @@ public:
   bool workerFinished() const { return finished_.load(std::memory_order_acquire); }
 
 private:
+  void acquireBinding();
+  void allocateSession();
   StorageSink &sink_;
   SessionIdentityAllocator allocator_;
   IdentityAllocation allocation_;

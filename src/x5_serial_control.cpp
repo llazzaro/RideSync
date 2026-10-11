@@ -5,26 +5,30 @@ void X5SerialControl::reject() {
   if (rejected_ != UINT32_MAX)
     ++rejected_;
 }
+void X5SerialControl::finishLine() {
+  X5SerialCommand parsed = X5SerialCommand::Invalid;
+  if (!discard_) {
+    line_[size_] = 0;
+    const char *names[] = {"CONNECT", "REC", "STOP", "QUERY", "STATUS", "DISCONNECT", "WAKE"};
+    for (unsigned i = 0; i < 7; ++i)
+      if (std::strcmp(line_.data(), names[i]) == 0)
+        parsed = static_cast<X5SerialCommand>(i + 1);
+  }
+  if (parsed == X5SerialCommand::Invalid)
+    reject();
+  if (!pending_) {
+    command_ = parsed;
+    pending_ = true;
+  }
+  size_ = 0;
+  discard_ = cr_ = false;
+  return;
+}
 void X5SerialControl::consume(char c) {
   if (pending_)
     discard_ = true;
   if (c == '\n') {
-    X5SerialCommand parsed = X5SerialCommand::Invalid;
-    if (!discard_) {
-      line_[size_] = 0;
-      const char *names[] = {"CONNECT", "REC", "STOP", "QUERY", "STATUS", "DISCONNECT", "WAKE"};
-      for (unsigned i = 0; i < 7; ++i)
-        if (std::strcmp(line_.data(), names[i]) == 0)
-          parsed = static_cast<X5SerialCommand>(i + 1);
-    }
-    if (parsed == X5SerialCommand::Invalid)
-      reject();
-    if (!pending_) {
-      command_ = parsed;
-      pending_ = true;
-    }
-    size_ = 0;
-    discard_ = cr_ = false;
+    finishLine();
     return;
   }
   if (discard_)

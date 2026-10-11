@@ -9,6 +9,41 @@
 #include <esp_heap_caps.h>
 #endif
 namespace ridesync {
+namespace {
+bool qualifiedModem(const QualifiedLocalTelemetry &q) {
+  return q.runtime.gps_qualified && q.modem.pins_qualified && q.modem.documentary_profile_opt_in &&
+         (q.modem_already_powered || q.modem_power_sequence) && q.runtime.power_timing.qualified;
+}
+bool qualifiedStorage(const QualifiedLocalTelemetry &q) {
+  return q.sd.opt_in && q.sd.wiring_card_qualified && q.sd.exclusive_volume &&
+         q.sd.namespace_commissioned && q.sd.commissioned_namespace;
+}
+bool qualifiedOptionalImu(const QualifiedLocalTelemetry &q) {
+  return !q.runtime.imu_enabled ||
+         (q.runtime.imu_qualified && q.imu.enabled && q.imu.dedicated_bus &&
+          q.imu.electrically_qualified && q.imu.sensor_id);
+}
+bool matchingButton(const ButtonGpioConfig &saved, const ButtonGpioConfig &qualified) {
+  return qualified.enabled && qualified.board_qualified && saved.pin == qualified.pin &&
+         saved.pull == qualified.pull && saved.active_low == qualified.active_low;
+}
+bool qualifiedResetIdentity(const Hero12Qualification &q) {
+  return q.source_qualified && q.classic_profile_confirmed && q.firmware_size &&
+         q.identity.verified &&
+         (q.identity.type == IdentityType::Public || q.identity.type == IdentityType::RandomStatic);
+}
+DeviceHealth modemHealth(const ModemSnapshot &gps) {
+  if (gps.validity == FixValidity::Valid)
+    return DeviceHealth::Ok;
+  if (gps.validity == FixValidity::NoFix)
+    return DeviceHealth::NoFix;
+  if (gps.health == UartHealth::Exhausted)
+    return DeviceHealth::RetryExhausted;
+  if (gps.state == ModemState::Desynchronized || gps.health == UartHealth::InvalidClock)
+    return DeviceHealth::Desynchronized;
+  return DeviceHealth::Missing;
+}
+} // namespace
 SupervisedEsp32Application::SupervisedEsp32Application(
     HardwareSerial &u, SPIClass &s, TwoWire &w, const QualifiedLocalTelemetry &q,
     const QualifiedHandlebar &h, const std::array<Hero12Qualification, kMaxCameras> &c,
@@ -37,6 +72,25 @@ SupervisedEsp32Application::~SupervisedEsp32Application() {
     telemetry_->~Esp32LocalTelemetry();
   }
 }
+void SupervisedEsp32Application::configureCameras(const SettingsSnapshot &settings) {
+  SourceConfig source;
+  camera_allowed_ =
+      expandSettings(settings.settings, source) && cameras_runtime_.manager.configure(source).ok();
+  camera_allowed_ = camera_allowed_ && cameras_runtime_.adapter.configure(source, cameras_);
+  qualification_.runtime.peers = settings.peers;
+  qualification_.runtime.gps_forwarding_consumer = &cameras_runtime_.adapter;
+}
+void SupervisedEsp32Application::configureWorkerPolicies(bool local, bool safe) {
+  const auto &q = qualification_;
+  for (size_t i = 0; i < policy_.size(); ++i) {
+    auto &p = policy_[i];
+    p.enabled = local && (i != static_cast<unsigned>(Worker::Ble) || camera_allowed_) &&
+                (i != static_cast<unsigned>(Worker::Imu) || (q.runtime.imu_enabled && !safe));
+    p.required = p.qualified = p.enabled;
+    p.deadline_ms = HealthSupervisor::kMaxDeadlineMs;
+    p.startup_grace_ms = HealthSupervisor::kMaxGraceMs;
+  }
+}
 std::array<WorkerPolicy, 4> SupervisedEsp32Application::prepare(const SettingsSnapshot &settings,
                                                                 bool safe, bool nvs,
                                                                 HealthSupervisor &supervisor) {
@@ -62,36 +116,16 @@ std::array<WorkerPolicy, 4> SupervisedEsp32Application::prepare(const SettingsSn
   camera_allowed_ = admission.cameras;
   const auto &saved_button = settings.settings.button_gpio;
   const auto &qualified_button = handlebar_.button;
-  button_allowed_ = admission.button && camera_allowed_ && qualified_button.enabled &&
-                    qualified_button.board_qualified && saved_button.pin == qualified_button.pin &&
-                    saved_button.pull == qualified_button.pull &&
-                    saved_button.active_low == qualified_button.active_low;
-  if (camera_allowed_) {
-    SourceConfig source;
-    camera_allowed_ = expandSettings(settings.settings, source) &&
-                      cameras_runtime_.manager.configure(source).ok();
-    camera_allowed_ = camera_allowed_ && cameras_runtime_.adapter.configure(source, cameras_);
-    q.runtime.peers = settings.peers;
-    q.runtime.gps_forwarding_consumer = &cameras_runtime_.adapter;
-  }
+  button_allowed_ =
+      admission.button && camera_allowed_ && matchingButton(saved_button, qualified_button);
+  if (camera_allowed_)
+    configureCameras(settings);
   button_allowed_ = button_allowed_ && camera_allowed_;
   handlebar_.actions = settings.settings.button;
   // Saved GPIO cannot replace independently qualified physical routing.
-  const bool local =
-      admission.local_telemetry && q.runtime.gps_qualified && q.modem.pins_qualified &&
-      q.modem.documentary_profile_opt_in && (q.modem_already_powered || q.modem_power_sequence) &&
-      q.runtime.power_timing.qualified && q.sd.opt_in && q.sd.wiring_card_qualified &&
-      q.sd.exclusive_volume && q.sd.namespace_commissioned && q.sd.commissioned_namespace &&
-      (!q.runtime.imu_enabled || (q.runtime.imu_qualified && q.imu.enabled && q.imu.dedicated_bus &&
-                                  q.imu.electrically_qualified && q.imu.sensor_id));
-  for (size_t i = 0; i < policy_.size(); ++i) {
-    auto &p = policy_[i];
-    p.enabled = local && (i != static_cast<unsigned>(Worker::Ble) || camera_allowed_) &&
-                (i != static_cast<unsigned>(Worker::Imu) || (q.runtime.imu_enabled && !safe));
-    p.required = p.qualified = p.enabled;
-    p.deadline_ms = HealthSupervisor::kMaxDeadlineMs;
-    p.startup_grace_ms = HealthSupervisor::kMaxGraceMs;
-  }
+  const bool local = admission.local_telemetry && qualifiedModem(q) && qualifiedStorage(q) &&
+                     qualifiedOptionalImu(q);
+  configureWorkerPolicies(local, safe);
   return policy_;
 }
 void SupervisedEsp32Application::launch() {
@@ -148,6 +182,27 @@ bool SupervisedEsp32Application::resetAdmitted() const {
          Esp32BleHost::instance().state() == BleHostState::Ready &&
          Esp32BleHost::instance().fault() == BleFault::None;
 }
+bool SupervisedEsp32Application::resetPeerMatches(uint8_t slot, uint32_t peer_id) const {
+  const auto &q = cameras_.hero12[slot];
+  unsigned matched = 0;
+  for (size_t i = 0; i < qualification_.runtime.peers.count; ++i) {
+    const auto &p = qualification_.runtime.peers.entries[i];
+    if (p.slot == slot && p.id == peer_id && p.model == CameraModel::HERO12_BLACK)
+      ++matched;
+    if (p.slot != slot && p.slot < kMaxCameras && cameras_.hero12[p.slot].identity.verified &&
+        cameras_.hero12[p.slot].identity.type == q.identity.type &&
+        cameras_.hero12[p.slot].identity.address == q.identity.address)
+      return false;
+  }
+  return matched == 1;
+}
+bool SupervisedEsp32Application::resetContextCurrent(uint8_t slot, uint32_t peer_id, uint32_t epoch,
+                                                     uint64_t generation, uint32_t timeout_ms,
+                                                     uint32_t &now) {
+  return !(!resetAdmitted() || epoch != epoch_ || generation != generation_ || !peer_id ||
+           slot >= kMaxCameras || !timeout_ms || timeout_ms > 5000 || !resetNow(now) ||
+           host_operation_ == UINT32_MAX || cameras_runtime_.manager.sealed(slot));
+}
 BondResetSubmission SupervisedEsp32Application::requestPairingReset(uint8_t slot, uint32_t peer_id,
                                                                     uint32_t epoch,
                                                                     uint64_t generation,
@@ -158,28 +213,15 @@ BondResetSubmission SupervisedEsp32Application::requestPairingReset(uint8_t slot
   if (!operation || operation <= last_reset_)
     return BondResetSubmission::Stale;
   uint32_t now = 0;
-  if (!resetAdmitted() || epoch != epoch_ || generation != generation_ || !peer_id ||
-      slot >= kMaxCameras || !timeout_ms || timeout_ms > 5000 || !resetNow(now) ||
-      host_operation_ == UINT32_MAX || cameras_runtime_.manager.sealed(slot))
+  if (!resetContextCurrent(slot, peer_id, epoch, generation, timeout_ms, now))
     return BondResetSubmission::Refused;
   const auto &q = cameras_.hero12[slot];
-  if (!q.source_qualified || !q.classic_profile_confirmed || !q.firmware_size ||
-      !q.identity.verified ||
-      (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic))
+  if (!qualifiedResetIdentity(q))
     return BondResetSubmission::Refused;
-  unsigned matched = 0;
-  for (size_t i = 0; i < qualification_.runtime.peers.count; ++i) {
-    const auto &p = qualification_.runtime.peers.entries[i];
-    if (p.slot == slot && p.id == peer_id && p.model == CameraModel::HERO12_BLACK)
-      ++matched;
-    if (p.slot != slot && p.slot < kMaxCameras && cameras_.hero12[p.slot].identity.verified &&
-        cameras_.hero12[p.slot].identity.type == q.identity.type &&
-        cameras_.hero12[p.slot].identity.address == q.identity.address)
-      return BondResetSubmission::Refused;
-  }
+  if (!resetPeerMatches(slot, peer_id))
+    return BondResetSubmission::Refused;
   BleStoreProof proof;
-  if (matched != 1 || !Esp32BleHost::instance().admittedProof(proof) ||
-      proof.qualification_record == UINT32_MAX)
+  if (!Esp32BleHost::instance().admittedProof(proof) || proof.qualification_record == UINT32_MAX)
     return BondResetSubmission::Refused;
   reset_ = {};
   reset_.operation = last_reset_ = operation;
@@ -284,6 +326,51 @@ bool SupervisedEsp32Application::serviceResetHost(uint32_t now) {
   return false;
 }
 
+void SupervisedEsp32Application::submitProofReset(uint32_t now) {
+  if (!cameras_runtime_.adapter.hero12().maintenanceReleased(reset_.slot))
+    return;
+  const auto result =
+      pairingProofMaintenance().request(reset_.operation, reset_proof_, reset_deadline_, now);
+  if (result == BondResetSubmission::Queued) {
+    proof_pending_ = true;
+    reset_.phase = ApplicationResetPhase::RevokingProof;
+    return;
+  }
+  if (result == BondResetSubmission::Busy && !retried_) {
+    retried_ = true;
+    retry_wait_ = true;
+    retry_at_ = now + 100;
+    return;
+  }
+  reset_.outcome = result == BondResetSubmission::Busy ? BondOutcome::Busy : BondOutcome::Refused;
+  reset_.finished = true;
+  finishReset();
+  return;
+}
+void SupervisedEsp32Application::submitHostReset(uint32_t now) {
+  if (host_operation_ == UINT32_MAX) {
+    revokeReset();
+    finishReset();
+    return;
+  }
+  reset_host_operation_ = ++host_operation_;
+  const auto result = Esp32BleHost::instance().requestBondReset(
+      reset_identity_, reset_host_operation_, reset_deadline_, now);
+  if (result == BondResetSubmission::Queued) {
+    host_pending_ = true;
+    reset_.phase = ApplicationResetPhase::WaitingHost;
+    return;
+  }
+  if (result == BondResetSubmission::Busy && !retried_) {
+    retried_ = true;
+    retry_wait_ = true;
+    retry_at_ = now + 100;
+    return;
+  }
+  reset_.outcome = result == BondResetSubmission::Busy ? BondOutcome::Busy : BondOutcome::Refused;
+  reset_.finished = true;
+  finishReset();
+}
 void SupervisedEsp32Application::serviceResetPhase(uint32_t now) {
   if (reset_.finished) {
     finishReset();
@@ -295,50 +382,11 @@ void SupervisedEsp32Application::serviceResetPhase(uint32_t now) {
     retry_wait_ = false;
   }
   if (reset_.phase == ApplicationResetPhase::Retiring) {
-    if (!cameras_runtime_.adapter.hero12().maintenanceReleased(reset_.slot))
-      return;
-    const auto result =
-        pairingProofMaintenance().request(reset_.operation, reset_proof_, reset_deadline_, now);
-    if (result == BondResetSubmission::Queued) {
-      proof_pending_ = true;
-      reset_.phase = ApplicationResetPhase::RevokingProof;
-      return;
-    }
-    if (result == BondResetSubmission::Busy && !retried_) {
-      retried_ = true;
-      retry_wait_ = true;
-      retry_at_ = now + 100;
-      return;
-    }
-    reset_.outcome = result == BondResetSubmission::Busy ? BondOutcome::Busy : BondOutcome::Refused;
-    reset_.finished = true;
-    finishReset();
+    submitProofReset(now);
     return;
   }
-  if (reset_.phase == ApplicationResetPhase::Submitting) {
-    if (host_operation_ == UINT32_MAX) {
-      revokeReset();
-      finishReset();
-      return;
-    }
-    reset_host_operation_ = ++host_operation_;
-    const auto result = Esp32BleHost::instance().requestBondReset(
-        reset_identity_, reset_host_operation_, reset_deadline_, now);
-    if (result == BondResetSubmission::Queued) {
-      host_pending_ = true;
-      reset_.phase = ApplicationResetPhase::WaitingHost;
-      return;
-    }
-    if (result == BondResetSubmission::Busy && !retried_) {
-      retried_ = true;
-      retry_wait_ = true;
-      retry_at_ = now + 100;
-      return;
-    }
-    reset_.outcome = result == BondResetSubmission::Busy ? BondOutcome::Busy : BondOutcome::Refused;
-    reset_.finished = true;
-    finishReset();
-  }
+  if (reset_.phase == ApplicationResetPhase::Submitting)
+    submitHostReset(now);
 }
 
 void SupervisedEsp32Application::serviceReset() {
@@ -370,9 +418,8 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
   if (!telemetry_)
     return;
   telemetry_->owner().supervision(stalls, refused, fault);
-  if (stalls || refused || fault)
-    telemetry_->owner().currentAdmission(false, safe_mode_);
   if (stalls || refused || fault) {
+    telemetry_->owner().currentAdmission(false, safe_mode_);
     reset_current_ = false;
     revokeReset();
   }
@@ -381,13 +428,7 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
   const auto s = telemetry_->status();
   const bool no_session =
       s.phase == TelemetryPhase::Stopping || s.phase == TelemetryPhase::Finished;
-  publish(Worker::At, s.at_completed,
-          s.gps.validity == FixValidity::Valid    ? DeviceHealth::Ok
-          : s.gps.validity == FixValidity::NoFix  ? DeviceHealth::NoFix
-          : s.gps.health == UartHealth::Exhausted ? DeviceHealth::RetryExhausted
-          : (s.gps.state == ModemState::Desynchronized || s.gps.health == UartHealth::InvalidClock)
-              ? DeviceHealth::Desynchronized
-              : DeviceHealth::Missing,
+  publish(Worker::At, s.at_completed, modemHealth(s.gps),
           (no_session || s.gps.health == UartHealth::InvalidClock) && s.at_completed != 0,
           no_session && s.at_completed == 0);
   publish(Worker::Sd, s.sd_completed, s.storage_error ? DeviceHealth::IoError : DeviceHealth::Ok,

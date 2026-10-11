@@ -18,6 +18,28 @@ void seal(Packet &p) {
   p.bytes[p.size++] = c & 0xff;
   p.bytes[p.size++] = c >> 8;
 }
+bool validAuthorization(const char *auth, size_t size) {
+  if (!auth || !size || size > 32)
+    return false;
+  for (size_t i = 0; i < size; ++i)
+    if (auth[i] < 0x20 || auth[i] > 0x7e)
+      return false;
+  return true;
+}
+bool validResponseHeader(const uint8_t *p, size_t size) {
+  if (p[2] != 0x40 || size < 23 || le16(p + 5) != size - 7 || p[9] != 4 || p[14] != 2 ||
+      (p[18] != 0x80 && p[18] != 0xc0))
+    return false;
+  constexpr size_t reserved[] = {7, 8, 10, 11, 16, 17, 19, 20};
+  for (auto offset : reserved)
+    if (p[offset])
+      return false;
+  return true;
+}
+bool validEnvelope(const uint8_t *p, size_t size) {
+  return p && size >= 7 && size <= kReceiveCapacity && p[0] == 0xff && p[1] == 6 &&
+         size == static_cast<size_t>(le16(p + 3)) + 7 && crc(p, size - 2) == le16(p + size - 2);
+}
 } // namespace
 Packet encode(Command command, uint8_t seq, const char *auth, size_t auth_size) {
   Packet p;
@@ -28,11 +50,8 @@ Packet encode(Command command, uint8_t seq, const char *auth, size_t auth_size) 
   size_t count = 0;
   switch (command) {
   case Command::Authorize:
-    if (!auth || !auth_size || auth_size > 32)
+    if (!validAuthorization(auth, auth_size))
       return p;
-    for (size_t i = 0; i < auth_size; ++i)
-      if (auth[i] < 0x20 || auth[i] > 0x7e)
-        return p;
     code = 0x27;
     payload[count++] = 0x0a;
     payload[count++] = static_cast<uint8_t>(auth_size);
@@ -89,8 +108,7 @@ Packet encodeSync() {
 }
 Decoded decode(const uint8_t *p, size_t size) {
   Decoded d;
-  if (!p || size < 7 || size > kReceiveCapacity || p[0] != 0xff || p[1] != 6 ||
-      size != static_cast<size_t>(le16(p + 3)) + 7 || crc(p, size - 2) != le16(p + size - 2))
+  if (!validEnvelope(p, size))
     return d;
   if (p[2] == 0x41) {
     if (size == 7)
@@ -98,8 +116,7 @@ Decoded decode(const uint8_t *p, size_t size) {
     d.kind = Kind::Sync;
     return d;
   }
-  if (p[2] != 0x40 || size < 23 || le16(p + 5) != size - 7 || p[7] || p[8] || p[9] != 4 || p[10] ||
-      p[11] || p[14] != 2 || p[16] || p[17] || (p[18] != 0x80 && p[18] != 0xc0) || p[19] || p[20])
+  if (!validResponseHeader(p, size))
     return d;
   d.kind = Kind::Response;
   d.status = le16(p + 12);

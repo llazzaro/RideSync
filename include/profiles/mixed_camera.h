@@ -55,6 +55,10 @@ public:
   const HealthProgress &progress() const { return progress_; }
 
 private:
+  CameraError requestX5Wake();
+  bool configureModel(size_t, const CameraConfig &, const MixedCameraQualifications &);
+  bool invalidWakeConfig(const SourceConfig &) const;
+  bool configureCamera(size_t, const SourceConfig &, const MixedCameraQualifications &);
   class X5Recovery final : public WakeRecovery {
   public:
     explicit X5Recovery(MixedCameraAdapter &owner) : owner_(owner) {}
@@ -68,6 +72,7 @@ private:
     WakeRecoveryResult result_;
     uint32_t deadline_ = 0;
     bool used_ = false;
+    void pollActive(uint32_t now);
     void fail(CameraError);
   };
   Clock &clock_;

@@ -85,6 +85,32 @@ Attribute attributes[] = {
 ble_gatt_chr_def remote_chars[4]{}, extra_chars[10]{};
 ble_gatt_svc_def services[3]{};
 
+int readAttribute(const Attribute &attribute, uint16_t conn, uint16_t handle,
+                  ble_gatt_access_ctxt *context, bool active) {
+
+  record(Kind::Read, conn, handle, active ? 0 : BLE_ATT_ERR_READ_NOT_PERMITTED, attribute.read,
+         attribute.read_size);
+  if (!active)
+    return BLE_ATT_ERR_READ_NOT_PERMITTED;
+  return os_mbuf_append(context->om, attribute.read, attribute.read_size) == 0
+             ? 0
+             : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+int writeAttribute(uint16_t conn, uint16_t handle, ble_gatt_access_ctxt *context, bool active) {
+
+  const uint16_t length = OS_MBUF_PKTLEN(context->om);
+  uint8_t bytes[256];
+  const uint16_t copied = length < sizeof(bytes) ? length : sizeof(bytes);
+  if (os_mbuf_copydata(context->om, 0, copied, bytes) != 0) {
+    fail(BLE_HS_EBADDATA);
+    return BLE_ATT_ERR_UNLIKELY;
+  }
+  record(Kind::Write, conn, handle, active ? 0 : BLE_ATT_ERR_WRITE_NOT_PERMITTED, bytes, length);
+  // SDK owns/frees the mbuf. No retained pointer, decode, reply or notify.
+  return active ? 0 : BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+}
+
 int access(uint16_t conn, uint16_t handle, ble_gatt_access_ctxt *context, void *arg) {
   auto &attribute = *static_cast<Attribute *>(arg);
   bool active;
@@ -93,50 +119,75 @@ int access(uint16_t conn, uint16_t handle, ble_gatt_access_ctxt *context, void *
     capture.tick(uint32_t(nowMs()));
     active = capture.active() && connection == conn;
   }
-  if (context->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-    record(Kind::Read, conn, handle, active ? 0 : BLE_ATT_ERR_READ_NOT_PERMITTED, attribute.read,
-           attribute.read_size);
-    if (!active)
-      return BLE_ATT_ERR_READ_NOT_PERMITTED;
-    return os_mbuf_append(context->om, attribute.read, attribute.read_size) == 0
-               ? 0
-               : BLE_ATT_ERR_INSUFFICIENT_RES;
-  }
-  if (context->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-    const uint16_t length = OS_MBUF_PKTLEN(context->om);
-    uint8_t bytes[256];
-    const uint16_t copied = length < sizeof(bytes) ? length : sizeof(bytes);
-    if (os_mbuf_copydata(context->om, 0, copied, bytes) != 0) {
-      fail(BLE_HS_EBADDATA);
-      return BLE_ATT_ERR_UNLIKELY;
-    }
-    record(Kind::Write, conn, handle, active ? 0 : BLE_ATT_ERR_WRITE_NOT_PERMITTED, bytes, length);
-    // SDK owns/frees the mbuf. No retained pointer, decode, reply or notify.
-    return active ? 0 : BLE_ATT_ERR_WRITE_NOT_PERMITTED;
-  }
+  if (context->op == BLE_GATT_ACCESS_OP_READ_CHR)
+    return readAttribute(attribute, conn, handle, context, active);
+  if (context->op == BLE_GATT_ACCESS_OP_WRITE_CHR)
+    return writeAttribute(conn, handle, context, active);
   return BLE_ATT_ERR_UNLIKELY;
+}
+
+void connected(ble_gap_event *event) {
+  const uint16_t conn = event->connect.conn_handle;
+  if (event->connect.status) {
+    record(Kind::Connect, conn, 0, event->connect.status);
+    fail(event->connect.status);
+    return;
+  }
+  {
+    Lock lock;
+    connection = conn;
+    shutter.connected(conn);
+  }
+  ble_gap_conn_desc info{};
+  const int rc = ble_gap_conn_find(conn, &info);
+  record(Kind::Connect, conn, rc ? 0xffff : info.peer_ota_addr.type, rc);
+  record(Kind::Mtu, conn, BLE_L2CAP_CID_ATT, ble_att_mtu(conn));
+  return;
+}
+
+void subscribed(ble_gap_event *event) {
+  if (event->subscribe.attr_handle == attributes[1].handle) {
+    Lock lock;
+    shutter.subscription(event->subscribe.conn_handle, event->subscribe.attr_handle,
+                         event->subscribe.cur_notify != 0);
+  }
+  record(Kind::Subscribe, event->subscribe.conn_handle, event->subscribe.attr_handle,
+         event->subscribe.cur_notify | (event->subscribe.cur_indicate << 1) |
+             (event->subscribe.reason << 8));
+  return;
+}
+
+void securityChanged(ble_gap_event *event) {
+  ble_gap_conn_desc info{};
+  const int rc = ble_gap_conn_find(event->enc_change.conn_handle, &info);
+  const uint16_t flags = rc ? 0xffff
+                            : info.sec_state.encrypted | (info.sec_state.authenticated << 1) |
+                                  (info.sec_state.bonded << 2);
+  record(Kind::Security, event->enc_change.conn_handle, flags, event->enc_change.status);
+  if (event->enc_change.status || (!rc && info.sec_state.bonded))
+    fail(event->enc_change.status ? event->enc_change.status : BLE_HS_ENOTSUP,
+         StopReason::Security);
+  return;
+}
+
+void advertisingCompleted(ble_gap_event *event) {
+  record(Kind::AdvertisingEnd, BLE_HS_CONN_HANDLE_NONE, 0, event->adv_complete.reason);
+  {
+    Lock lock;
+    wake.advertisingEnded(capture, connection);
+    if (capture.used() && !capture.active()) {
+      sdk_control.requestStop();
+      shutter.cancel();
+    }
+  }
+  return;
 }
 
 int gap(ble_gap_event *event, void *) {
   switch (event->type) {
-  case BLE_GAP_EVENT_CONNECT: {
-    const uint16_t conn = event->connect.conn_handle;
-    if (event->connect.status) {
-      record(Kind::Connect, conn, 0, event->connect.status);
-      fail(event->connect.status);
-      break;
-    }
-    {
-      Lock lock;
-      connection = conn;
-      shutter.connected(conn);
-    }
-    ble_gap_conn_desc info{};
-    const int rc = ble_gap_conn_find(conn, &info);
-    record(Kind::Connect, conn, rc ? 0xffff : info.peer_ota_addr.type, rc);
-    record(Kind::Mtu, conn, BLE_L2CAP_CID_ATT, ble_att_mtu(conn));
+  case BLE_GAP_EVENT_CONNECT:
+    connected(event);
     break;
-  }
   case BLE_GAP_EVENT_DISCONNECT:
     record(Kind::Disconnect, event->disconnect.conn.conn_handle, 0, event->disconnect.reason);
     {
@@ -151,27 +202,11 @@ int gap(ble_gap_event *event, void *) {
     record(Kind::Mtu, event->mtu.conn_handle, event->mtu.channel_id, event->mtu.value);
     break;
   case BLE_GAP_EVENT_SUBSCRIBE:
-    if (event->subscribe.attr_handle == attributes[1].handle) {
-      Lock lock;
-      shutter.subscription(event->subscribe.conn_handle, event->subscribe.attr_handle,
-                           event->subscribe.cur_notify != 0);
-    }
-    record(Kind::Subscribe, event->subscribe.conn_handle, event->subscribe.attr_handle,
-           event->subscribe.cur_notify | (event->subscribe.cur_indicate << 1) |
-               (event->subscribe.reason << 8));
+    subscribed(event);
     break;
-  case BLE_GAP_EVENT_ENC_CHANGE: {
-    ble_gap_conn_desc info{};
-    const int rc = ble_gap_conn_find(event->enc_change.conn_handle, &info);
-    const uint16_t flags = rc ? 0xffff
-                              : info.sec_state.encrypted | (info.sec_state.authenticated << 1) |
-                                    (info.sec_state.bonded << 2);
-    record(Kind::Security, event->enc_change.conn_handle, flags, event->enc_change.status);
-    if (event->enc_change.status || (!rc && info.sec_state.bonded))
-      fail(event->enc_change.status ? event->enc_change.status : BLE_HS_ENOTSUP,
-           StopReason::Security);
+  case BLE_GAP_EVENT_ENC_CHANGE:
+    securityChanged(event);
     break;
-  }
   case BLE_GAP_EVENT_PASSKEY_ACTION:
     // Never auto-confirm unknown numeric comparison/passkeys; never log them.
     record(Kind::Passkey, event->passkey.conn_handle, 0, event->passkey.params.action);
@@ -182,15 +217,7 @@ int gap(ble_gap_event *event, void *) {
     fail(BLE_HS_ENOTSUP, StopReason::Security);
     return BLE_GAP_REPEAT_PAIRING_IGNORE; // Never delete a bond to retry.
   case BLE_GAP_EVENT_ADV_COMPLETE:
-    record(Kind::AdvertisingEnd, BLE_HS_CONN_HANDLE_NONE, 0, event->adv_complete.reason);
-    {
-      Lock lock;
-      wake.advertisingEnded(capture, connection);
-      if (capture.used() && !capture.active()) {
-        sdk_control.requestStop();
-        shutter.cancel();
-      }
-    }
+    advertisingCompleted(event);
     break;
   default:
     break;
@@ -380,6 +407,73 @@ int initializeSdk() {
     nimble_port_freertos_init(hostTask);
   return rc;
 }
+void initializeAdvertising() {
+  uint8_t address_type = 0;
+  const int rc = prepareAdvertising(address_type);
+  {
+    Lock lock;
+    sdk_control.complete(rc);
+  }
+  if (rc)
+    fail(rc);
+  else
+    submitAdvertising(address_type);
+}
+void stopAdvertising() {
+  if (!ble_gap_adv_active())
+    return;
+  bool admitted;
+  {
+    Lock lock;
+    admitted = sdk_control.begin(SdkAction::StopAdvertising);
+  }
+  if (!admitted)
+    return;
+  const int rc = ble_gap_adv_stop();
+  {
+    Lock lock;
+    sdk_control.complete(rc);
+  }
+  record(Kind::AdvertisingEnd, BLE_HS_CONN_HANDLE_NONE, 0, rc);
+}
+bool terminateConnection(uint16_t conn) {
+  bool admitted;
+  {
+    Lock lock;
+    admitted = sdk_control.begin(SdkAction::Terminate);
+  }
+  if (!admitted)
+    return false;
+  const int rc = ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+  {
+    Lock lock;
+    sdk_control.complete(rc);
+  }
+  record(Kind::Error, conn, 0, rc); // Return status, never disconnected proof.
+  return rc == 0 || rc == BLE_HS_ENOTCONN;
+}
+bool requestPreparation(bool &synced, bool &preparation_attempted) {
+  Lock lock;
+  bool prepare = false;
+  capture.tick(uint32_t(nowMs()));
+  if (capture.used() && !capture.active())
+    sdk_control.requestStop();
+  synced = host_synced;
+  if (synced && !preparation_attempted) {
+    preparation_attempted = true;
+    prepare = sdk_control.admitPreparation(capture, uint32_t(nowMs()));
+  }
+  return prepare;
+}
+void stopOwner(uint32_t now, bool synced, bool stop, uint16_t conn, uint32_t &last_stop_attempt,
+               bool &termination_sent) {
+  if (synced && stop && uint32_t(now - last_stop_attempt) >= 100) {
+    last_stop_attempt = now;
+    stopAdvertising();
+    if (conn != BLE_HS_CONN_HANDLE_NONE && !termination_sent)
+      termination_sent = terminateConnection(conn);
+  }
+}
 void ownerTask(void *) {
   const int startup = initializeSdk();
   {
@@ -395,29 +489,9 @@ void ownerTask(void *) {
   for (;;) {
     bool synced, prepare = false, stop;
     uint16_t conn;
-    {
-      Lock lock;
-      capture.tick(uint32_t(nowMs()));
-      if (capture.used() && !capture.active())
-        sdk_control.requestStop();
-      synced = host_synced;
-      if (synced && !preparation_attempted) {
-        preparation_attempted = true;
-        prepare = sdk_control.admitPreparation(capture, uint32_t(nowMs()));
-      }
-    }
-    if (prepare) {
-      uint8_t address_type = 0;
-      const int rc = prepareAdvertising(address_type);
-      {
-        Lock lock;
-        sdk_control.complete(rc);
-      }
-      if (rc)
-        fail(rc);
-      else
-        submitAdvertising(address_type);
-    }
+    prepare = requestPreparation(synced, preparation_attempted);
+    if (prepare)
+      initializeAdvertising();
     submitShutter();
     const uint32_t now = uint32_t(nowMs());
     {
@@ -430,40 +504,7 @@ void ownerTask(void *) {
       stop = sdk_control.snapshot().stop_requested;
       conn = connection;
     }
-    if (synced && stop && uint32_t(now - last_stop_attempt) >= 100) {
-      last_stop_attempt = now;
-      if (ble_gap_adv_active()) {
-        bool admitted;
-        {
-          Lock lock;
-          admitted = sdk_control.begin(SdkAction::StopAdvertising);
-        }
-        if (admitted) {
-          const int rc = ble_gap_adv_stop();
-          {
-            Lock lock;
-            sdk_control.complete(rc);
-          }
-          record(Kind::AdvertisingEnd, BLE_HS_CONN_HANDLE_NONE, 0, rc);
-        }
-      }
-      if (conn != BLE_HS_CONN_HANDLE_NONE && !termination_sent) {
-        bool admitted;
-        {
-          Lock lock;
-          admitted = sdk_control.begin(SdkAction::Terminate);
-        }
-        if (admitted) {
-          const int rc = ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
-          {
-            Lock lock;
-            sdk_control.complete(rc);
-          }
-          record(Kind::Error, conn, 0, rc); // Return status, never disconnected proof.
-          termination_sent = rc == 0 || rc == BLE_HS_ENOTCONN;
-        }
-      }
-    }
+    stopOwner(now, synced, stop, conn, last_stop_attempt, termination_sent);
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
@@ -603,7 +644,21 @@ void reportQueuedEvent() {
   }
 }
 
-void reportSummary(uint32_t now, const LoopState &state, char *line) {
+void reportKindCounts(char (&line)[768], size_t length, const Stats &stats) {
+  for (unsigned i = 0; i < unsigned(Kind::Count); ++i) {
+    const int added = snprintf(line + length, sizeof(line) - length, "%s%lu", i ? "/" : "",
+                               static_cast<unsigned long>(stats.by_kind[i]));
+    if (added < 0 || size_t(added) >= sizeof(line) - length)
+      return;
+    length += size_t(added);
+  }
+  if (length && length + 1 < sizeof(line)) {
+    line[length++] = '\n';
+    emit(line, length);
+  }
+}
+
+void reportSummary(uint32_t now, const LoopState &state, char (&line)[768]) {
   if (uint32_t(now - last_summary) >= 1000) {
     last_summary = now;
     Stats stats;
@@ -635,22 +690,8 @@ void reportSummary(uint32_t now, const LoopState &state, char *line) {
         unsigned(sdk.last_returned_action), sdk.last_status, shutter_pending, wake.enabled(),
         static_cast<unsigned long>(nvs.init), static_cast<unsigned long>(nvs.open),
         static_cast<unsigned long>(nvs.erase));
-    if (n > 0 && size_t(n) < sizeof(line)) {
-      size_t length = size_t(n);
-      for (unsigned i = 0; i < unsigned(Kind::Count); ++i) {
-        const int added = snprintf(line + length, sizeof(line) - length, "%s%lu", i ? "/" : "",
-                                   static_cast<unsigned long>(stats.by_kind[i]));
-        if (added < 0 || size_t(added) >= sizeof(line) - length) {
-          length = 0;
-          break;
-        }
-        length += size_t(added);
-      }
-      if (length && length + 1 < sizeof(line)) {
-        line[length++] = '\n';
-        emit(line, length);
-      }
-    }
+    if (n > 0 && size_t(n) < sizeof(line))
+      reportKindCounts(line, size_t(n), stats);
   }
 }
 

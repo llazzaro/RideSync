@@ -176,6 +176,9 @@ private:
   std::array<Peer, kMaxCameras> peers_;
   std::array<bool, kMaxCameras> maintenance_{};
   bool validPolicy() const;
+  CameraError peerAdmission(size_t) const;
+  CameraError operationAdmission(size_t, Operation) const;
+  bool eventEnvelope(const Event &, Peer *&, bool &);
   bool validateEvent(const Event &, Peer *&, bool &, uint32_t &, Operation &);
   bool handleCompleted(size_t, const Event &, Peer &);
   bool handleObservation(const Event &, Peer &);

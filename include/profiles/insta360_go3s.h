@@ -52,6 +52,14 @@ public:
   void result(const BleResult &) override;
 
 private:
+  void advanceAcknowledged(uint8_t i);
+  bool beginCommand(uint8_t i, Operation op, Token t);
+  bool transactionExpired(uint8_t i, bool allow_unprompted_sync) const;
+  void servicePeer(uint8_t i);
+  bool beginConnection(uint8_t i, Token t);
+  bool cameraResponse(uint8_t i, const go3s::Decoded &d);
+  void writeComplete(uint8_t i, const BleResult &r);
+  void notification(uint8_t i, const BleResult &r);
   enum class Step : uint8_t {
     None,
     AwaitSync,
@@ -94,6 +102,8 @@ private:
   bool started_ = false, enabled_ = false, servicing_ = false;
   static bool valid(const Go3sQualification &);
   static bool reached(uint32_t, uint32_t);
+  go3s::Packet packetForStep(uint8_t i, Step step);
+  void admitPacket(uint8_t i, Step step);
   void retire(uint8_t, Go3sFault);
   bool send(uint8_t, Step);
   void advance(uint8_t);

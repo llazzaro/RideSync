@@ -33,6 +33,8 @@ private:
   bool armed_ = false, long_sent_ = false, pending_ = false, second_ = false;
   uint32_t changed_ = 0, pressed_ = 0, released_ = 0;
   void emit(ButtonAction action);
+  void release(uint32_t now);
+  void transition(uint32_t now);
 };
 enum class ButtonPull { External, Up, Down };
 struct ButtonGpioConfig {

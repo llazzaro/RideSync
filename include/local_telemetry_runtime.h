@@ -126,6 +126,19 @@ public:
   void detachControl(HandlebarControl &);
 
 private:
+  bool camerasEligible() const;
+  void observeSession();
+  void stopSessionWhenDrained();
+  void anchorGps(RecordTimestamp &t, ModemSnapshot &sample);
+  void constructSession();
+  void admitCameras();
+  bool powerTimingQualified() const;
+  bool startQualified() const;
+  void serviceSession();
+  void serviceImu();
+  void serviceGps();
+  void admitSession();
+  void serviceAllocation();
   struct Active {
     CameraEventSession session;
     ModemGnss modem;

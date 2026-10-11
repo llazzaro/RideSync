@@ -62,6 +62,30 @@ public:
   void result(const BleResult &) override;
 
 private:
+  static bool activeRecoveryPhase(Hero12RecoveryPhase);
+  void beginRecoveryScan();
+  bool hardwareRetryReady(uint8_t i) const;
+  static bool serviceListHasFea6(const BleEvent &, size_t offset, size_t length);
+  bool failedRecoveryOperation(uint8_t i);
+  void requestRecoveryOperation(uint8_t i, Operation operation);
+  void finishRecoveryObservation(uint8_t i, bool require_known);
+  void transportClosed(const BleResult &r);
+  void recoveryScanComplete(const BleResult &r);
+  void recoveryAdvertisement(const BleResult &r);
+  bool beginCommand(uint8_t i, Operation op, Token token);
+  bool beginConnection(uint8_t i, Token token);
+  void servicePeer(uint8_t i);
+  void recoveryStart(uint8_t i);
+  void recoveryObserve(uint8_t i);
+  void recoveryConnect(uint8_t i);
+  void advanceRecoveryPeer(uint8_t i);
+  void unsolicitedStatus(uint8_t i, gopro::Channel route, const gopro::Message &message);
+  void publishWireAck(uint8_t i);
+  bool classicResponse(uint8_t i, gopro::Channel route, const gopro::Message &message);
+  bool identityResponse(uint8_t i, gopro::Channel route, const gopro::Message &message);
+  bool setupResponse(uint8_t i, gopro::Channel route, const gopro::Message &message);
+  void writeComplete(uint8_t i, const BleResult &r);
+  void notification(uint8_t i, const BleResult &r);
   enum class Step : uint8_t {
     None,
     Pair,
@@ -80,6 +104,14 @@ private:
     QueryEncoding,
     KeepAlive
   };
+  struct StepSpec {
+    gopro::Request request;
+    uint8_t status;
+    CameraAckAction ack;
+    Step next;
+    bool classic;
+  };
+  static const StepSpec &stepSpec(Step);
   struct Peer {
     Hero12Qualification qualification;
     Hero12Fault fault = Hero12Fault::None;
@@ -127,6 +159,26 @@ private:
   uint32_t scan_generation_ = 0;
   uint8_t event_count_ = 0, cursor_ = 0;
   bool enabled_ = false, started_ = false, servicing_ = false;
+  static bool requestedStatusPresent(const Peer &, const gopro::Response &);
+  static bool registrationStatusPresent(uint8_t, const gopro::Response &);
+  Step advanceHardware(uint8_t i);
+  Step advanceReady(uint8_t i);
+  Step advanceQuery(uint8_t i);
+  Step advanceConfirmation(uint8_t i);
+  Step nextStep(uint8_t i, Step done);
+  bool acknowledged(uint8_t i) const;
+  static bool setupStep(Step);
+  static bool matchesCameraResponse(const Peer &, gopro::Channel, const gopro::Message &);
+  struct OutgoingPacket {
+    uint8_t bytes[20] = {};
+    size_t length = 0;
+    gopro::Channel route = gopro::Channel::Command;
+    uint8_t id = 0, status = 0;
+  };
+  bool preparePacket(uint8_t i, Step step, OutgoingPacket &) const;
+  bool ownsScanResult(const BleResult &) const;
+  void transportEvent(uint8_t i, const BleResult &);
+  bool completeCameraResponse(uint8_t, gopro::Channel, const gopro::Message &);
   void retire(uint8_t, Hero12Fault);
   void enqueue(Event);
   void drain();

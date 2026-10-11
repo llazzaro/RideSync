@@ -102,46 +102,49 @@ void Esp32Insta360Wake::finish() {
   queueBarrier();
   worker_done_ = true;
 }
-void Esp32Insta360Wake::cycle() {
+bool Esp32Insta360Wake::prepareAdvertising() {
   auto &host = Esp32BleHost::instance();
   const auto &op = lease_.operation;
-  if (worker_done_) {
-    const auto late = lease_.connection.load(std::memory_order_acquire);
-    if (late != kBleNoHandle && !terminate_attempted_) {
-      terminate_attempted_ = true;
-      if (ble_gap_terminate(late, BLE_ERR_REM_USER_CONN_TERM))
-        host.quarantineWake();
-    }
-    return;
+  prepared_ = true;
+  int rc = 0;
+  if (open(millis()))
+    rc = ble_gap_adv_set_data(lease_.bytes.advertisement.data(), 31);
+  if (!rc && open(millis()))
+    rc = ble_gap_adv_rsp_set_data(lease_.bytes.scan_response.data(), 25);
+  const uint32_t now = millis();
+  if (!rc && open(now) && host.admitWakeStart(op, now)) {
+    ble_gap_adv_params params{};
+    params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    rc = ble_gap_adv_start(host.wakeOwnAddressType(), nullptr, lease_.deadline - now, &params, gap,
+                           &lease_);
+    started_ = !rc;
   }
-  if (!prepared_) {
-    prepared_ = true;
-    int rc = 0;
-    if (open(millis()))
-      rc = ble_gap_adv_set_data(lease_.bytes.advertisement.data(), 31);
-    if (!rc && open(millis()))
-      rc = ble_gap_adv_rsp_set_data(lease_.bytes.scan_response.data(), 25);
-    const uint32_t now = millis();
-    if (!rc && open(now) && host.admitWakeStart(op, now)) {
-      ble_gap_adv_params params{};
-      params.conn_mode = BLE_GAP_CONN_MODE_UND;
-      params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-      rc = ble_gap_adv_start(host.wakeOwnAddressType(), nullptr, lease_.deadline - now, &params,
-                             gap, &lease_);
-      started_ = !rc;
-    }
-    host.wakeReturned(op, rc);
-    if (!started_) {
-      finish();
-      return;
-    }
+  host.wakeReturned(op, rc);
+  if (!started_) {
+    finish();
+    return false;
   }
+  return true;
+}
+void Esp32Insta360Wake::terminateIncoming() {
+  auto &host = Esp32BleHost::instance();
   const auto connection = lease_.connection.load(std::memory_order_acquire);
   if (connection != kBleNoHandle && !terminate_attempted_) {
     terminate_attempted_ = true;
     if (ble_gap_terminate(connection, BLE_ERR_REM_USER_CONN_TERM))
       host.quarantineWake();
   }
+}
+void Esp32Insta360Wake::cycle() {
+  auto &host = Esp32BleHost::instance();
+  if (worker_done_) {
+    terminateIncoming();
+    return;
+  }
+  if (!prepared_ && !prepareAdvertising())
+    return;
+  terminateIncoming();
   if (lease_.complete.load(std::memory_order_acquire)) {
     finish();
     return;

@@ -22,7 +22,7 @@ CONTEXT = ['session_id', 'sensor_epoch'] + IMU[12:56] + MOTION[1:19]
 LOSS_COUNTERS = ('dropped', 'rejected', 'lost')
 
 
-def prepare(data, anchor_frame, timing_model):
+def _motion_rows(data, anchor_frame, timing_model):
     if data.split('\n', 1)[0] != '#ridesync_telemetry,4':
         raise ValueError('MotionV4 input required')
     if timing_model != 'nominal-odr' or anchor_frame <= 0:
@@ -34,88 +34,120 @@ def prepare(data, anchor_frame, timing_model):
     if sum(row["kind"] == "imu" and int(row["frame_sequence"]) == anchor_frame
            for row in rows) != 1:
         raise ValueError("anchor frame must occur exactly once")
-    output = []
-    context = None
-    counters = {}
-    previous_frame = None
-    previous_batch = None
-    previous_position = None
-    pending_break = False
-    anchored = False
-    odr = None
-    sample_count = 0
-    for row in rows:
+    return rows
+
+
+def _anchor_rate(row, measured):
+    qualified = ('motion_static_tilt_valid', 'motion_reference_stationary')
+    references = (('session_id', 'motion_reference_session_id'),
+                  ('generation', 'motion_reference_generation'),
+                  ('batch_sequence', 'motion_reference_batch'))
+    if not measured or any(row[field] != '1' for field in qualified):
+        raise ValueError('anchor requires matching qualified stationary evidence')
+    if int(row['timing_flags']) or not int(row['motion_reference_declaration']):
+        raise ValueError('anchor requires matching qualified stationary evidence')
+    if any(row[actual] != row[reference] for actual, reference in references):
+        raise ValueError('anchor requires matching qualified stationary evidence')
+    odr = int(row['gyro_odr_millihz'])
+    if odr <= 0 or int(row['accel_odr_millihz']) != odr:
+        raise ValueError('anchor requires equal nonzero accelerometer/gyro ODR')
+    return odr
+
+
+class ReplaySequence:
+    """Track continuity separately from the explicitly declared anchor/cadence."""
+
+    def __init__(self, anchor_frame):
+        self.anchor_frame = anchor_frame
+        self.context = None
+        self.counters = {}
+        self.previous_frame = None
+        self.previous_position = None
+        self.pending_break = False
+        self.odr = None
+        self.sample_count = 0
+
+    def observe(self, row):
         kind = row['kind']
-        if kind not in ('imu', 'config', 'health', 'control'):
-            continue
         current_context = tuple(row[field] for field in CONTEXT)
         current_counters = tuple(int(row[field]) for field in LOSS_COUNTERS)
-        if kind in counters and current_counters != counters[kind]:
-            pending_break = True
+        if kind in self.counters and current_counters != self.counters[kind]:
+            self.pending_break = True
         if any(value == 0xffffffff for value in current_counters):
-            pending_break = True
-        counters[kind] = current_counters
-        if context is not None and current_context != context:
-            pending_break = True
-        context = current_context
+            self.pending_break = True
+        self.counters[kind] = current_counters
+        if self.context is not None and current_context != self.context:
+            self.pending_break = True
+        self.context = current_context
+        self.observe_position(row)
+
+    def observe_position(self, row):
         if int(row['timing_flags']):
-            pending_break = True
-        batch, position = int(row['batch_sequence']), int(row['byte_position'])
-        if previous_batch is not None and (batch < previous_batch or
-                (batch == previous_batch and position <= previous_position)):
-            pending_break = True
-        previous_batch, previous_position = batch, position
+            self.pending_break = True
+        position = (int(row['batch_sequence']), int(row['byte_position']))
+        if self.previous_position is not None and position <= self.previous_position:
+            self.pending_break = True
+        self.previous_position = position
+
+    def accept(self, row):
+        kind = row['kind']
+        if kind not in ('imu', 'config', 'health', 'control'):
+            return None
+        self.observe(row)
         if kind != 'imu':
             # Normal trailers/end markers preserve the nominal sample chain.
             if kind != 'control' or int(row['event_code']) not in (0, 5):
-                pending_break = True
-            continue
+                self.pending_break = True
+            return None
         frame = int(row['frame_sequence'])
-        if previous_frame is not None and frame != previous_frame + 1:
-            pending_break = True
-        previous_frame = frame
+        if self.previous_frame is not None and frame != self.previous_frame + 1:
+            self.pending_break = True
+        self.previous_frame = frame
         measured = row['motion_state'] == '2' and row['motion_measurements_valid'] == '1'
-        if not anchored:
-            if frame != anchor_frame:
-                pending_break = False
-                continue
-            if not measured or row['motion_static_tilt_valid'] != '1' or \
-                    row['motion_reference_stationary'] != '1' or int(row['timing_flags']) or \
-                    row['session_id'] != row['motion_reference_session_id'] or \
-                    row['generation'] != row['motion_reference_generation'] or \
-                    row['batch_sequence'] != row['motion_reference_batch'] or \
-                    not int(row['motion_reference_declaration']):
-                raise ValueError('anchor requires matching qualified stationary evidence')
+        if self.odr is None and frame != self.anchor_frame:
+            self.pending_break = False
+            return None
+        return self.sample(row, measured)
+
+    def sample(self, row, measured):
+        stationary = int(self.odr is None)
+        declaration = int(row['motion_reference_declaration']) if stationary else 0
+        if stationary:
+            self.odr = _anchor_rate(row, measured)
             # An explicit qualified anchor starts a new segment after earlier faults.
-            pending_break = False
-            odr = int(row['gyro_odr_millihz'])
-            if odr <= 0 or int(row['accel_odr_millihz']) != odr:
-                raise ValueError('anchor requires equal nonzero accelerometer/gyro ODR')
-            anchored = True
-            stationary = 1
-            declaration = int(row['motion_reference_declaration'])
+            self.pending_break = False
         else:
-            sample_count += 1
-            stationary, declaration = 0, 0
-            if int(row['gyro_odr_millihz']) != odr or int(row['accel_odr_millihz']) != odr:
-                pending_break = True
+            self.sample_count += 1
+            if any(int(row[field]) != self.odr for field in
+                   ('gyro_odr_millihz', 'accel_odr_millihz')):
+                self.pending_break = True
         if not measured:
-            pending_break = True
+            self.pending_break = True
         result = {
             'session_id': int(row['session_id']), 'sensor_id': int(row['sensor_id']),
             'config_generation': int(row['generation']), 'mount_id': int(row['mount_id']),
             'calibration_id': int(row['calibration_id']), 'sensor_epoch': int(row['sensor_epoch']),
-            'sequence': frame,
-            'sample_time_us': round(Fraction(sample_count * 1000000000, odr)),
+            'sequence': int(row['frame_sequence']),
+            'sample_time_us': round(Fraction(self.sample_count * 1000000000, self.odr)),
             'timing_source': 'modelled', 'measurements_valid': int(measured),
-            'discontinuity': int(pending_break), 'stationary': stationary,
+            'discontinuity': int(self.pending_break), 'stationary': stationary,
             'declaration': declaration,
         }
         for target, source in zip(COLUMNS[13:], VECTORS):
             result[target] = row[source] if measured else '0'
-        output.append(result)
-        pending_break = False
-    if not anchored:
+        self.pending_break = False
+        return result
+
+
+def prepare(data, anchor_frame, timing_model):
+    rows = _motion_rows(data, anchor_frame, timing_model)
+    sequence = ReplaySequence(anchor_frame)
+    output = []
+    for row in rows:
+        result = sequence.accept(row)
+        if result is not None:
+            output.append(result)
+    if sequence.odr is None:
         raise ValueError('anchor frame not found')
     return output
 

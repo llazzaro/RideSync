@@ -16,37 +16,39 @@ void RecordingManager::detachPreparation(RecordingPreparation &p) {
   if (preparation_ == &p)
     preparation_ = nullptr;
 }
+void RecordingManager::peerStatus(size_t i, RecordingStatus &s) const {
+  const auto &c = *cameras_.state(i);
+  auto &p = s.peers[i];
+  p.enabled = c.lifecycle != Lifecycle::Disabled;
+  if (!p.enabled)
+    return;
+  ++s.enabled;
+  p.ready = c.lifecycle == Lifecycle::Ready || c.lifecycle == Lifecycle::Operating;
+  if (p.ready)
+    ++s.ready;
+  p.observed = c.observed;
+  if (c.has_observation && c.observed == RecordingState::Recording)
+    ++s.recording;
+  else if (c.has_observation && c.observed == RecordingState::Stopped)
+    ++s.stopped;
+  else
+    ++s.unknown;
+  p.pending = pending(static_cast<int>(peers_[i].stage));
+  p.terminal_failure = peers_[i].stage == Stage::Error;
+  p.acknowledged = peers_[i].acknowledged;
+  p.error = peers_[i].error == CameraError::None ? c.error : peers_[i].error;
+  if (p.pending)
+    ++s.pending;
+  if (p.error != CameraError::None)
+    ++s.errors;
+}
 RecordingStatus RecordingManager::status() const {
   RecordingStatus s;
   s.intent = intent_;
   s.error = error_;
   s.generation = generation_;
-  for (size_t i = 0; i < cameras_.size(); ++i) {
-    const auto &c = *cameras_.state(i);
-    auto &p = s.peers[i];
-    p.enabled = c.lifecycle != Lifecycle::Disabled;
-    if (!p.enabled)
-      continue;
-    ++s.enabled;
-    p.ready = c.lifecycle == Lifecycle::Ready || c.lifecycle == Lifecycle::Operating;
-    if (p.ready)
-      ++s.ready;
-    p.observed = c.observed;
-    if (c.has_observation && c.observed == RecordingState::Recording)
-      ++s.recording;
-    else if (c.has_observation && c.observed == RecordingState::Stopped)
-      ++s.stopped;
-    else
-      ++s.unknown;
-    p.pending = pending(static_cast<int>(peers_[i].stage));
-    p.terminal_failure = peers_[i].stage == Stage::Error;
-    p.acknowledged = peers_[i].acknowledged;
-    p.error = peers_[i].error == CameraError::None ? c.error : peers_[i].error;
-    if (p.pending)
-      ++s.pending;
-    if (p.error != CameraError::None)
-      ++s.errors;
-  }
+  for (size_t i = 0; i < cameras_.size(); ++i)
+    peerStatus(i, s);
   return s;
 }
 void RecordingManager::notify() {
@@ -83,27 +85,29 @@ CameraError RecordingManager::seal(size_t i) {
   notify();
   return CameraError::None;
 }
+void RecordingManager::retirePrevious(size_t i) {
+  if (cameras_.sealed(i)) {
+    peers_[i] = Peer{};
+    peers_[i].stage = Stage::Error;
+    peers_[i].error = CameraError::Cancelled;
+    return;
+  }
+  if (preparation_)
+    preparation_->retire(i);
+  const auto l = cameras_.state(i)->lifecycle;
+  const auto retired = cameras_.state(i)->token;
+  if (pending(static_cast<int>(peers_[i].stage)) || l == Lifecycle::Operating ||
+      l == Lifecycle::Connecting || l == Lifecycle::Backoff)
+    cameras_.cancel(i);
+  peers_[i] = Peer{};
+  peers_[i].retired = retired;
+  peers_[i].hasRetired = true;
+}
 void RecordingManager::begin(bool query) {
   // This coordinator owns command admission. Retire previous work instead of
   // filling the per-camera FIFO with superseded group requests.
-  for (size_t i = 0; i < cameras_.size(); ++i) {
-    if (cameras_.sealed(i)) {
-      peers_[i] = Peer{};
-      peers_[i].stage = Stage::Error;
-      peers_[i].error = CameraError::Cancelled;
-      continue;
-    }
-    if (preparation_)
-      preparation_->retire(i);
-    const auto l = cameras_.state(i)->lifecycle;
-    const auto retired = cameras_.state(i)->token;
-    if (pending(static_cast<int>(peers_[i].stage)) || l == Lifecycle::Operating ||
-        l == Lifecycle::Connecting || l == Lifecycle::Backoff)
-      cameras_.cancel(i);
-    peers_[i] = Peer{};
-    peers_[i].retired = retired;
-    peers_[i].hasRetired = true;
-  }
+  for (size_t i = 0; i < cameras_.size(); ++i)
+    retirePrevious(i);
   syncing_ = query;
   error_ = GroupError::None;
   ++generation_;
@@ -209,75 +213,96 @@ void RecordingManager::update() {
     notify();
   }
 }
-void RecordingManager::advance() {
-  ++advancements_;
-  for (size_t i = 0; i < cameras_.size(); ++i) {
-    auto &p = peers_[i];
-    const auto &c = *cameras_.state(i);
-    if (syncing_ && p.stage == Stage::Done &&
-        (c.lifecycle != Lifecycle::Ready || !c.has_observation ||
-         c.observed == RecordingState::Unknown)) {
-      p.stage = Stage::Error;
-      p.error = c.error == CameraError::None ? CameraError::Transport : c.error;
-    }
-    if (!pending(static_cast<int>(p.stage)))
-      continue;
-    if (p.stage == Stage::Retiring) {
-      if (reached(clock_.now(), p.deadline)) {
-        p.stage = Stage::Error;
-        p.error = CameraError::Timeout;
-      } else if ((c.lifecycle == Lifecycle::Idle || c.lifecycle == Lifecycle::Failed) &&
-                 preparation_->released(i)) {
-        // The actual Disconnected observation and host lease barrier have both
-        // completed. Only now admit replacement work using current generations.
-        admit(i);
-      }
-      continue;
-    }
-    if (p.stage == Stage::Prepare) {
-      if (reached(clock_.now(), p.deadline)) {
-        preparation_->retire(i);
-        p.stage = Stage::Error;
-        p.error = CameraError::Timeout;
-        continue;
-      }
-      const auto result = preparation_->prepared(i);
-      if (result.pending)
-        continue;
-      if (result.error != CameraError::None) {
-        p.stage = Stage::Error;
-        p.error = result.error;
-      } else {
-        command(i);
-      }
-      continue;
-    }
-    if (c.lifecycle == Lifecycle::Failed || c.lifecycle == Lifecycle::Idle) {
-      p.stage = Stage::Error;
-      p.error = c.error == CameraError::None ? CameraError::NotConnected : c.error;
-    } else if (p.stage == Stage::Admission) {
-      if (reached(clock_.now(), p.deadline)) {
-        p.stage = Stage::Error;
-        p.error = CameraError::Timeout;
-      } else if (c.lifecycle == Lifecycle::Ready && preparation_->commandReady(i)) {
-        command(i);
-      }
-    } else if (p.stage == Stage::Connect && c.lifecycle == Lifecycle::Ready)
-      command(i);
-    else if (p.stage == Stage::Confirm) {
-      if (reached(clock_.now(), p.deadline)) {
-        expireConfirm(i);
-      } else if (p.fresh && c.has_observation && c.observed != RecordingState::Unknown &&
-                 (syncing_ || c.observed == intent_))
-        p.stage = Stage::Done;
-    }
+void RecordingManager::advanceRetiring(size_t i) {
+  auto &p = peers_[i];
+  const auto &c = *cameras_.state(i);
+  if (reached(clock_.now(), p.deadline)) {
+    p.stage = Stage::Error;
+    p.error = CameraError::Timeout;
+  } else if ((c.lifecycle == Lifecycle::Idle || c.lifecycle == Lifecycle::Failed) &&
+             preparation_->released(i)) {
+    // The actual Disconnected observation and host lease barrier have both
+    // completed. Only now admit replacement work using current generations.
+    admit(i);
   }
-  if (!syncing_ || status().pending)
+}
+void RecordingManager::advancePreparation(size_t i) {
+  auto &p = peers_[i];
+  if (reached(clock_.now(), p.deadline)) {
+    preparation_->retire(i);
+    p.stage = Stage::Error;
+    p.error = CameraError::Timeout;
     return;
-  syncing_ = false;
-  if (!decideAfterSync_)
+  }
+  const auto result = preparation_->prepared(i);
+  if (result.pending)
     return;
-  decideAfterSync_ = false;
+  if (result.error != CameraError::None) {
+    p.stage = Stage::Error;
+    p.error = result.error;
+  } else {
+    command(i);
+  }
+}
+void RecordingManager::advanceConfirm(size_t i) {
+  auto &p = peers_[i];
+  const auto &c = *cameras_.state(i);
+  if (reached(clock_.now(), p.deadline))
+    expireConfirm(i);
+  else if (p.fresh && c.has_observation && c.observed != RecordingState::Unknown &&
+           (syncing_ || c.observed == intent_))
+    p.stage = Stage::Done;
+}
+void RecordingManager::advanceConnected(size_t i) {
+  auto &p = peers_[i];
+  const auto &c = *cameras_.state(i);
+  switch (p.stage) {
+  case Stage::Admission:
+    if (reached(clock_.now(), p.deadline)) {
+      p.stage = Stage::Error;
+      p.error = CameraError::Timeout;
+    } else if (c.lifecycle == Lifecycle::Ready && preparation_->commandReady(i)) {
+      command(i);
+    }
+    break;
+  case Stage::Connect:
+    if (c.lifecycle == Lifecycle::Ready)
+      command(i);
+    break;
+  case Stage::Confirm:
+    advanceConfirm(i);
+    break;
+  default:
+    break;
+  }
+}
+void RecordingManager::advancePeer(size_t i) {
+  auto &p = peers_[i];
+  const auto &c = *cameras_.state(i);
+  if (syncing_ && p.stage == Stage::Done &&
+      (c.lifecycle != Lifecycle::Ready || !c.has_observation ||
+       c.observed == RecordingState::Unknown)) {
+    p.stage = Stage::Error;
+    p.error = c.error == CameraError::None ? CameraError::Transport : c.error;
+  }
+  if (!pending(static_cast<int>(p.stage)))
+    return;
+  if (p.stage == Stage::Retiring) {
+    advanceRetiring(i);
+    return;
+  }
+  if (p.stage == Stage::Prepare) {
+    advancePreparation(i);
+    return;
+  }
+  if (c.lifecycle == Lifecycle::Failed || c.lifecycle == Lifecycle::Idle) {
+    p.stage = Stage::Error;
+    p.error = c.error == CameraError::None ? CameraError::NotConnected : c.error;
+    return;
+  }
+  advanceConnected(i);
+}
+void RecordingManager::decideIntentAfterSync() {
   size_t known = 0, recording = 0;
   for (size_t i = 0; i < cameras_.size(); ++i)
     if (peers_[i].stage == Stage::Done) {
@@ -294,6 +319,18 @@ void RecordingManager::advance() {
   for (size_t i = 0; i < cameras_.size(); ++i)
     if (peers_[i].stage == Stage::Done)
       command(i);
+}
+void RecordingManager::advance() {
+  ++advancements_;
+  for (size_t i = 0; i < cameras_.size(); ++i)
+    advancePeer(i);
+  if (!syncing_ || status().pending)
+    return;
+  syncing_ = false;
+  if (!decideAfterSync_)
+    return;
+  decideAfterSync_ = false;
+  decideIntentAfterSync();
 }
 bool RecordingManager::event(const Event &e) {
   if (e.peer < cameras_.size() && peers_[e.peer].stage == Stage::Confirm &&

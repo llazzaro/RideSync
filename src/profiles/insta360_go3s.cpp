@@ -1,4 +1,7 @@
 #include "profiles/insta360_go3s.h"
+#include "profiles/central_service.h"
+#include "profiles/insta360_be80_profile.h"
+#include "profiles/qualification.h"
 #include "recording_manager.h"
 #include <cstring>
 namespace ridesync {
@@ -7,33 +10,14 @@ Go3sAdapter::Go3sAdapter(BleHost &host, Clock &clock)
 bool Go3sAdapter::reached(uint32_t now, uint32_t deadline) { return now - deadline < 0x80000000UL; }
 bool Go3sAdapter::valid(const Go3sQualification &q) {
   const char fw[] = "8.0.4.11";
-  if (!q.source_qualified || q.firmware_size != sizeof(fw) - 1 ||
-      std::memcmp(q.firmware.data(), fw, sizeof(fw) - 1) || !q.identity.verified ||
-      (q.identity.type != IdentityType::Public && q.identity.type != IdentityType::RandomStatic))
-    return false;
-  bool nonzero = false, all_ff = true;
-  for (auto b : q.identity.address) {
-    nonzero |= b != 0;
-    all_ff &= b == 255;
-  }
-  return nonzero && !all_ff &&
-         (q.identity.type != IdentityType::RandomStatic ||
-          (q.identity.address[5] & 0xc0) == 0xc0) &&
+  return q.source_qualified && q.firmware_size == sizeof(fw) - 1 &&
+         std::memcmp(q.firmware.data(), fw, sizeof(fw) - 1) == 0 &&
+         qualification::resolvedIdentity(q.identity) &&
          go3s::encode(go3s::Command::Authorize, 1, q.authorization_id.data(), q.authorization_size)
              .size;
 }
-BleProfileSpec Go3sAdapter::profileSpec() {
-  BleProfileSpec s;
-  s.service_count = 1;
-  s.services[0] = BleUuid::shortUuid(0xbe80);
-  s.endpoint_count = 2;
-  s.endpoints[0].uuid = BleUuid::shortUuid(0xbe81);
-  s.endpoints[0].properties = 8; // ATT write response, not a camera ACK.
-  s.endpoints[1].uuid = BleUuid::shortUuid(0xbe82);
-  s.endpoints[1].properties = 0x10;
-  s.endpoints[1].subscribe = 1;
-  return s;
-}
+
+BleProfileSpec Go3sAdapter::profileSpec() { return insta360Be80ProfileSpec(); }
 RetryPolicy Go3sAdapter::managerPolicy() {
   RetryPolicy p;
   p.timeout_ms = 60000;
@@ -65,27 +49,23 @@ bool Go3sAdapter::commandReady(uint8_t i) const {
 Go3sFault Go3sAdapter::fault(uint8_t i) const {
   return i < kBlePeers ? peers_[i].fault : Go3sFault::Qualification;
 }
-bool Go3sAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
-  if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::Insta360 ||
-      camera.model != CameraModel::GO3S || !t.valid() || !t.hasRoom())
-    return false;
-  const auto i = static_cast<uint8_t>(index);
+bool Go3sAdapter::beginConnection(uint8_t i, Token t) {
   auto &p = peers_[i];
-  if (!p.qualified || !valid(p.qualification))
+
+  if (p.ready || p.connecting || disconnected_[i] || !t.connection ||
+      !central_.connect(i, t.connection, p.qualification.identity, profileSpec()))
     return false;
-  if (op == Operation::Connect) {
-    if (p.ready || p.connecting || disconnected_[i] || !t.connection ||
-        !central_.connect(i, t.connection, p.qualification.identity, profileSpec()))
-      return false;
-    const auto qualification = p.qualification;
-    p = Peer{};
-    p.qualification = qualification;
-    p.qualified = p.connecting = true;
-    p.token = t;
-    p.fault = Go3sFault::None;
-    p.deadline = clock_.now() + 60000;
-    return true;
-  }
+  const auto qualification = p.qualification;
+  p = Peer{};
+  p.qualification = qualification;
+  p.qualified = p.connecting = true;
+  p.token = t;
+  p.fault = Go3sFault::None;
+  p.deadline = clock_.now() + 60000;
+  return true;
+}
+bool Go3sAdapter::beginCommand(uint8_t i, Operation op, Token t) {
+  auto &p = peers_[i];
   const bool heartbeat =
       p.ready && !p.sealed && p.step == Step::Heartbeat && p.resume == Step::None;
   if ((!commandReady(i) && !heartbeat) || p.token.connection != t.connection ||
@@ -99,6 +79,18 @@ bool Go3sAdapter::begin(size_t index, const CameraConfig &camera, Operation op, 
     return true;
   }
   return send(i, op == Operation::Start ? Step::Video : Step::Stop);
+}
+bool Go3sAdapter::begin(size_t index, const CameraConfig &camera, Operation op, Token t) {
+  if (!enabled_ || !manager_ || index >= kBlePeers || camera.family != CameraFamily::Insta360 ||
+      camera.model != CameraModel::GO3S || !t.valid() || !t.hasRoom())
+    return false;
+  const auto i = static_cast<uint8_t>(index);
+  auto &p = peers_[i];
+  if (!p.qualified || !valid(p.qualification))
+    return false;
+  if (op == Operation::Connect)
+    return beginConnection(i, t);
+  return beginCommand(i, op, t);
 }
 void Go3sAdapter::retire(uint8_t i, Go3sFault fault) {
   auto &p = peers_[i];
@@ -128,40 +120,39 @@ void Go3sAdapter::stop() {
       retire(i, Go3sFault::Cancelled);
   central_.stop();
 }
-bool Go3sAdapter::send(uint8_t i, Step step) {
+go3s::Packet Go3sAdapter::packetForStep(uint8_t i, Step step) {
   auto &p = peers_[i];
-  if (p.sealed || p.step != Step::None || !central_.admissionOpen(i))
-    return false;
-  go3s::Packet packet;
   if (step == Step::Nudge) {
+    go3s::Packet packet;
     packet.size = 1;
     packet.bytes[0] = 0;
-  } else if (step == Step::Sync)
-    packet = go3s::encodeSync();
-  else {
-    if (p.next_sequence == 254) {
-      retire(i, Go3sFault::SequenceExhausted);
-      return false;
-    }
-    const uint8_t seq = p.next_sequence + 1;
-    go3s::Command c = go3s::Command::Authorize;
-    if (step == Step::Video)
-      c = go3s::Command::VideoMode;
-    else if (step == Step::Start)
-      c = go3s::Command::StartVideo;
-    else if (step == Step::Stop)
-      c = go3s::Command::Stop;
-    packet = go3s::encode(c, seq, p.qualification.authorization_id.data(),
-                          p.qualification.authorization_size);
+    return packet;
   }
-  if (!packet.size || host_.mtu(p.handle) < packet.size + 3) {
-    retire(i, Go3sFault::Mtu);
-    return false;
+  if (step == Step::Sync)
+    return go3s::encodeSync();
+  if (p.next_sequence == 254) {
+    retire(i, Go3sFault::SequenceExhausted);
+    return {};
   }
-  if (!central_.write(i, 0, packet.bytes.data(), packet.size, clock_.now())) {
-    retire(i, Go3sFault::Transport);
-    return false;
+  go3s::Command command = go3s::Command::Authorize;
+  switch (step) {
+  case Step::Video:
+    command = go3s::Command::VideoMode;
+    break;
+  case Step::Start:
+    command = go3s::Command::StartVideo;
+    break;
+  case Step::Stop:
+    command = go3s::Command::Stop;
+    break;
+  default:
+    break;
   }
+  return go3s::encode(command, p.next_sequence + 1, p.qualification.authorization_id.data(),
+                      p.qualification.authorization_size);
+}
+void Go3sAdapter::admitPacket(uint8_t i, Step step) {
+  auto &p = peers_[i];
   // Copied admission owns the sequence, even if the later SDK return is uncertain.
   if (step != Step::Sync && step != Step::Nudge)
     p.expected_sequence = ++p.next_sequence;
@@ -171,6 +162,23 @@ bool Go3sAdapter::send(uint8_t i, Step step) {
   p.response_deadline = clock_.now() + kResponseMs;
   if (step == Step::Heartbeat)
     p.deadline = p.response_deadline;
+}
+bool Go3sAdapter::send(uint8_t i, Step step) {
+  auto &p = peers_[i];
+  if (p.sealed || p.step != Step::None || !central_.admissionOpen(i))
+    return false;
+  const auto packet = packetForStep(i, step);
+  if (p.sealed)
+    return false; // Sequence exhaustion already selected the fault.
+  if (!packet.size || host_.mtu(p.handle) < packet.size + 3) {
+    retire(i, Go3sFault::Mtu);
+    return false;
+  }
+  if (!central_.write(i, 0, packet.bytes.data(), packet.size, clock_.now())) {
+    retire(i, Go3sFault::Transport);
+    return false;
+  }
+  admitPacket(i, step);
   return true;
 }
 void Go3sAdapter::complete(uint8_t i) {
@@ -191,6 +199,37 @@ void Go3sAdapter::complete(uint8_t i) {
   }
   p.keepalive_due = clock_.now() + kKeepAliveMs;
 }
+void Go3sAdapter::advanceAcknowledged(uint8_t i) {
+  auto &p = peers_[i];
+  const auto previous = p.step;
+  p.step = Step::None;
+  switch (previous) {
+  case Step::Nudge:
+    p.step = Step::AwaitSync;
+    p.att_done = p.camera_done = false;
+    p.response_deadline = clock_.now() + 1000;
+    if (p.sync_seen)
+      advance(i);
+    break;
+  case Step::Sync:
+    send(i, Step::Authorize);
+    break;
+  case Step::Video:
+    send(i, Step::Start);
+    break;
+  case Step::Heartbeat: {
+    p.keepalive_due = clock_.now() + kKeepAliveMs;
+    const auto resume = p.resume;
+    p.resume = Step::None;
+    if (resume != Step::None)
+      send(i, resume);
+    break;
+  }
+  default:
+    complete(i);
+    break;
+  }
+}
 void Go3sAdapter::advance(uint8_t i) {
   auto &p = peers_[i];
   if (p.sealed)
@@ -199,28 +238,64 @@ void Go3sAdapter::advance(uint8_t i) {
     p.step = Step::None;
     send(i, Step::Sync);
   } else if (p.step != Step::None && p.step != Step::AwaitSync && p.att_done && p.camera_done) {
-    const auto previous = p.step;
-    p.step = Step::None;
-    if (previous == Step::Nudge) {
-      p.step = Step::AwaitSync;
-      p.att_done = p.camera_done = false;
-      p.response_deadline = clock_.now() + 1000;
-      if (p.sync_seen)
-        advance(i);
-    } else if (previous == Step::Sync)
-      send(i, Step::Authorize);
-    else if (previous == Step::Video)
-      send(i, Step::Start);
-    else if (previous == Step::Heartbeat) {
-      p.keepalive_due = clock_.now() + kKeepAliveMs;
-      const auto resume = p.resume;
-      p.resume = Step::None;
-      if (resume != Step::None)
-        send(i, resume);
-    } else
-      complete(i);
+    advanceAcknowledged(i);
   } else if (p.ready && p.step == Step::None && reached(clock_.now(), p.keepalive_due))
     send(i, Step::Heartbeat);
+}
+bool Go3sAdapter::cameraResponse(uint8_t i, const go3s::Decoded &d) {
+  auto &p = peers_[i];
+  if (d.kind == go3s::Kind::Invalid) {
+    retire(i, Go3sFault::Protocol);
+    return false;
+  }
+  if (d.kind == go3s::Kind::Sync) {
+    if (p.step != Step::AwaitSync && p.step != Step::Nudge && p.step != Step::Sync) {
+      retire(i, Go3sFault::Protocol); // No surprise reauthorization/reset replay.
+      return false;
+    }
+    p.sync_seen = true;
+  }
+  if (d.kind == go3s::Kind::Response && p.step != Step::None && p.step != Step::AwaitSync &&
+      p.step != Step::Nudge && p.step != Step::Sync && d.sequence == p.expected_sequence) {
+    if (d.status != 200) {
+      retire(i, Go3sFault::Rejected);
+      return false;
+    }
+    p.camera_done = true;
+  }
+  return true;
+}
+void Go3sAdapter::notification(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+
+  if (r.endpoint != 1 || !r.event.size || r.event.size > r.event.bytes.size() ||
+      (p.receiver.pending() && reached(clock_.now(), p.fragment_started + kFragmentMs))) {
+    retire(i, Go3sFault::Protocol);
+    return;
+  }
+  for (size_t n = 0; n < r.event.size; ++n) {
+    if (!p.receiver.pending())
+      p.fragment_started = clock_.now();
+    const auto d = p.receiver.push(r.event.bytes[n]);
+    if (!cameraResponse(i, d))
+      return;
+  }
+}
+void Go3sAdapter::writeComplete(uint8_t i, const BleResult &r) {
+  auto &p = peers_[i];
+
+  if (r.endpoint != 0 || p.step == Step::None || r.event.status) {
+    retire(i, Go3sFault::Transport);
+    return;
+  }
+  p.att_done = true;
+}
+bool Go3sAdapter::transactionExpired(uint8_t i, bool allow_unprompted_sync) const {
+  const auto &p = peers_[i];
+  return (p.connecting || p.step != Step::None) &&
+         (reached(clock_.now(), p.deadline) ||
+          (p.step != Step::None && reached(clock_.now(), p.response_deadline) &&
+           !(allow_unprompted_sync && p.step == Step::AwaitSync && !p.nudged)));
 }
 void Go3sAdapter::result(const BleResult &r) {
   const auto i = r.event.peer;
@@ -233,10 +308,7 @@ void Go3sAdapter::result(const BleResult &r) {
   }
   if (p.sealed)
     return;
-  if ((p.connecting || p.step != Step::None) &&
-      (reached(clock_.now(), p.deadline) ||
-       (p.step != Step::None && reached(clock_.now(), p.response_deadline) &&
-        !(p.step == Step::AwaitSync && !p.nudged)))) {
+  if (transactionExpired(i, true)) {
     retire(i, Go3sFault::Timeout);
     return;
   }
@@ -245,41 +317,9 @@ void Go3sAdapter::result(const BleResult &r) {
     p.step = Step::AwaitSync;
     p.response_deadline = clock_.now() + 2000;
   } else if (r.kind == BleResultKind::WriteComplete) {
-    if (r.endpoint != 0 || p.step == Step::None || r.event.status) {
-      retire(i, Go3sFault::Transport);
-      return;
-    }
-    p.att_done = true;
+    writeComplete(i, r);
   } else if (r.kind == BleResultKind::Notification) {
-    if (r.endpoint != 1 || !r.event.size || r.event.size > r.event.bytes.size() ||
-        (p.receiver.pending() && reached(clock_.now(), p.fragment_started + kFragmentMs))) {
-      retire(i, Go3sFault::Protocol);
-      return;
-    }
-    for (size_t n = 0; n < r.event.size; ++n) {
-      if (!p.receiver.pending())
-        p.fragment_started = clock_.now();
-      const auto d = p.receiver.push(r.event.bytes[n]);
-      if (d.kind == go3s::Kind::Invalid) {
-        retire(i, Go3sFault::Protocol);
-        return;
-      }
-      if (d.kind == go3s::Kind::Sync) {
-        if (p.step != Step::AwaitSync && p.step != Step::Nudge && p.step != Step::Sync) {
-          retire(i, Go3sFault::Protocol); // No surprise reauthorization/reset replay.
-          return;
-        }
-        p.sync_seen = true;
-      }
-      if (d.kind == go3s::Kind::Response && p.step != Step::None && p.step != Step::AwaitSync &&
-          p.step != Step::Nudge && p.step != Step::Sync && d.sequence == p.expected_sequence) {
-        if (d.status != 200) {
-          retire(i, Go3sFault::Rejected);
-          return;
-        }
-        p.camera_done = true;
-      }
-    }
+    notification(i, r);
   }
 }
 void Go3sAdapter::drain() {
@@ -306,35 +346,26 @@ void Go3sAdapter::drain() {
       manager_->event(completed);
   }
 }
-void Go3sAdapter::service(bool advance_manager) {
-  if (servicing_ || !manager_)
+void Go3sAdapter::servicePeer(uint8_t i) {
+  auto &p = peers_[i];
+  if (p.sealed)
     return;
-  servicing_ = true;
-  central_.service(clock_.now());
-  for (uint8_t i = 0; i < kBlePeers; ++i) {
-    auto &p = peers_[i];
-    if (p.sealed)
-      continue;
-    if (p.step == Step::AwaitSync && !p.nudged && reached(clock_.now(), p.response_deadline) &&
-        !reached(clock_.now(), p.deadline)) {
-      // Source-backed single zero-byte prompt when subscription-time SYNC was missed.
-      p.nudged = true;
-      p.step = Step::None;
-      send(i, Step::Nudge);
-    } else if ((p.connecting || p.step != Step::None) &&
-               (reached(clock_.now(), p.deadline) ||
-                (p.step != Step::None && reached(clock_.now(), p.response_deadline))))
-      retire(i, Go3sFault::Timeout);
-    else if (p.receiver.pending() && reached(clock_.now(), p.fragment_started + kFragmentMs))
-      retire(i, Go3sFault::Protocol);
-    else
-      advance(i);
-  }
-  drain();
-  if (advance_manager && group_)
-    group_->tick();
-  else if (advance_manager)
-    manager_->tick();
-  servicing_ = false;
+  if (p.step == Step::AwaitSync && !p.nudged && reached(clock_.now(), p.response_deadline) &&
+      !reached(clock_.now(), p.deadline)) {
+    // Source-backed single zero-byte prompt when subscription-time SYNC was missed.
+    p.nudged = true;
+    p.step = Step::None;
+    send(i, Step::Nudge);
+  } else if (transactionExpired(i, false))
+    retire(i, Go3sFault::Timeout);
+  else if (p.receiver.pending() && reached(clock_.now(), p.fragment_started + kFragmentMs))
+    retire(i, Go3sFault::Protocol);
+  else
+    advance(i);
+}
+void Go3sAdapter::service(bool advance_manager) {
+  serviceCentralProfile(
+      servicing_, central_, clock_, manager_, group_, advance_manager,
+      [this](uint8_t peer) { servicePeer(peer); }, [this]() { drain(); });
 }
 } // namespace ridesync

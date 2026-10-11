@@ -113,12 +113,144 @@ struct Reader {
     return s;
   }
 };
+bool decodeCamera(Reader &reader, CameraConfig &p) {
+  p.name = reader.string(64);
+  p.identifier = reader.string(17);
+  p.wake_identifier = reader.string(17);
+  auto f = reader.number(1), m = reader.number(1), a = reader.number(1);
+  if (f < 1 || f > 3 || m < 1 || m > 8 || a > 2)
+    return false;
+  p.family = f == 1 ? CameraFamily::Insta360 : f == 2 ? CameraFamily::GoPro : CameraFamily::DJI;
+  const CameraModel models[] = {CameraModel::X5,          CameraModel::GO3S,
+                                CameraModel::ONE_RS,      CameraModel::HERO12_BLACK,
+                                CameraModel::DJI_ACTION4, CameraModel::DJI_ACTION5_PRO,
+                                CameraModel::DJI_ACTION6, CameraModel::DJI_OSMO360};
+  p.model = models[m - 1];
+  p.address_type = a == 1   ? AddressType::Public
+                   : a == 2 ? AddressType::Random
+                            : AddressType::Unknown;
+  p.enabled = reader.boolean();
+  p.gps_telemetry = reader.boolean();
+  return true;
+}
+bool decodeButtonSettings(Reader &reader, SourceConfig &c) {
+  auto &b = c.button;
+  b.debounce_ms = uint32_t(reader.number(4));
+  b.long_ms = uint32_t(reader.number(4));
+  b.double_ms = uint32_t(reader.number(4));
+  b.double_enabled = reader.boolean();
+  const ButtonAction actions[] = {ButtonAction::RecordingIntent, ButtonAction::WakeReconnect,
+                                  ButtonAction::Resync};
+  auto a = reader.number(1), l = reader.number(1), d = reader.number(1);
+  if (a > 2 || l > 2 || d > 2)
+    return false;
+  b.short_action = actions[a];
+  b.long_action = actions[l];
+  b.double_action = actions[d];
+  auto &g = c.button_gpio;
+  g.enabled = reader.boolean();
+  g.board_qualified = reader.boolean();
+  auto pin = reader.number(4);
+  if (pin != 0xffffffffu && pin > 39)
+    return false;
+  g.pin = pin == 0xffffffffu ? -1 : int(pin);
+  auto pull = reader.number(1);
+  if (pull > 2)
+    return false;
+  g.pull = pull == 0 ? ButtonPull::External : pull == 1 ? ButtonPull::Up : ButtonPull::Down;
+  g.active_low = reader.boolean();
+  return true;
+}
+PersistStatus validateEnvelope(const ConfigRecord &r) {
+  if (r.size < header || r.size > kConfigRecordMax || std::memcmp(r.bytes.data(), "RSCF", 4))
+    return PersistStatus::Corrupt;
+  if (r.bytes[4] != 1)
+    return PersistStatus::Future;
+  if (r.bytes[5] || r.bytes[18] || r.bytes[19] || get(r.bytes.data() + 16, 2) != r.size - header ||
+      get(r.bytes.data() + 20, 4) != crc(r) || !get(r.bytes.data() + 8, 8))
+    return PersistStatus::Corrupt;
+  const auto schema = get(r.bytes.data() + 6, 2);
+  if (schema > 2)
+    return PersistStatus::Future;
+  if (schema < 1)
+    return PersistStatus::Corrupt;
+  return PersistStatus::Loaded;
+}
+PersistStatus writeFailureStatus(StoreStatus status) {
+  switch (status) {
+  case StoreStatus::Refused:
+    return PersistStatus::Refused;
+  case StoreStatus::SetError:
+    return PersistStatus::WriteError;
+  case StoreStatus::CommitError:
+    return PersistStatus::CommitError;
+  default:
+    return PersistStatus::Indeterminate;
+  }
+}
 bool samePayload(const ConfigRecord &a, const ConfigRecord &b) {
   return a.size == b.size && a.size >= header &&
          std::equal(a.bytes.begin() + header, a.bytes.begin() + a.size, b.bytes.begin() + header);
 }
 } // namespace
 bool validateSettings(const SourceConfig &c) { return settingsValid(c); }
+bool ConfigPersistence::mergeSlot(unsigned i, SourceConfig &c, uint64_t gen,
+                                  PersistResult decoded) {
+  auto &s = scan_;
+  auto &r = scratch_;
+  // Decoding has completed; raw bytes can now be replaced by canonical bytes.
+  encodeConfig(c, gen, r);
+  if (s.winner >= 0 && gen == s.generation) {
+    if (!samePayload(r, s.canonical) || decoded.status != s.result.status) {
+      s.result = PersistStatus::Ambiguous;
+      s.blocked = true;
+      return false;
+    }
+  } else if (s.winner < 0 || gen > s.generation) {
+    s.winner = int(i);
+    s.generation = gen;
+    s.config = std::move(c);
+    s.canonical = r;
+    s.result = decoded;
+    s.migration = decoded.status == PersistStatus::Migrated;
+  }
+  return true;
+}
+bool ConfigPersistence::scanSlot(unsigned i, bool &bad, bool &future) {
+  auto &s = scan_;
+  auto &r = scratch_;
+  if (!store_.allowed()) {
+    s.result = PersistStatus::Refused;
+    s.blocked = true;
+    return false;
+  }
+  const auto io = store_.read(i, r);
+  if (io.status == StoreStatus::Missing)
+    return true;
+  if (io.status == StoreStatus::Refused || io.status == StoreStatus::Error) {
+    s.result = {io.status == StoreStatus::Refused ? PersistStatus::Refused
+                                                  : PersistStatus::ReadError,
+                io.code};
+    s.blocked = true;
+    return false;
+  }
+  if (io.status == StoreStatus::Oversized) {
+    bad = true;
+    return true;
+  }
+  SourceConfig c;
+  uint64_t gen = 0;
+  const auto decoded = decodeConfig(r, c, gen);
+  if (decoded.status == PersistStatus::Future) {
+    future = true;
+    return true;
+  }
+  if (decoded.status != PersistStatus::Loaded && decoded.status != PersistStatus::Migrated) {
+    bad = true;
+    return true;
+  }
+  return mergeSlot(i, c, gen, decoded);
+}
 void ConfigPersistence::scan() {
   auto &s = scan_;
   s.result = {};
@@ -127,55 +259,9 @@ void ConfigPersistence::scan() {
   s.generation = 0;
   s.blocked = s.migration = false;
   bool bad = false, future = false;
-  auto &r = scratch_;
-  for (unsigned i = 0; i < 2; ++i) {
-    if (!store_.allowed()) {
-      s.result = PersistStatus::Refused;
-      s.blocked = true;
+  for (unsigned i = 0; i < 2; ++i)
+    if (!scanSlot(i, bad, future))
       return;
-    }
-    const auto io = store_.read(i, r);
-    if (io.status == StoreStatus::Missing)
-      continue;
-    if (io.status == StoreStatus::Refused || io.status == StoreStatus::Error) {
-      s.result = {io.status == StoreStatus::Refused ? PersistStatus::Refused
-                                                    : PersistStatus::ReadError,
-                  io.code};
-      s.blocked = true;
-      return;
-    }
-    if (io.status == StoreStatus::Oversized) {
-      bad = true;
-      continue;
-    }
-    SourceConfig c;
-    uint64_t gen = 0;
-    const auto decoded = decodeConfig(r, c, gen);
-    if (decoded.status == PersistStatus::Future) {
-      future = true;
-      continue;
-    }
-    if (decoded.status != PersistStatus::Loaded && decoded.status != PersistStatus::Migrated) {
-      bad = true;
-      continue;
-    }
-    // Decoding has completed; raw bytes can now be replaced by canonical bytes.
-    encodeConfig(c, gen, r);
-    if (s.winner >= 0 && gen == s.generation) {
-      if (!samePayload(r, s.canonical) || decoded.status != s.result.status) {
-        s.result = PersistStatus::Ambiguous;
-        s.blocked = true;
-        return;
-      }
-    } else if (s.winner < 0 || gen > s.generation) {
-      s.winner = int(i);
-      s.generation = gen;
-      s.config = std::move(c);
-      s.canonical = r;
-      s.result = decoded;
-      s.migration = decoded.status == PersistStatus::Migrated;
-    }
-  }
   if (future) {
     s.result = PersistStatus::Future;
     s.blocked = true;
@@ -239,71 +325,21 @@ PersistResult encodeConfig(const SourceConfig &c, uint64_t generation, ConfigRec
   return PersistStatus::Encoded;
 }
 PersistResult decodeConfig(const ConfigRecord &r, SourceConfig &out, uint64_t &generation) {
-  if (r.size < header || r.size > kConfigRecordMax || std::memcmp(r.bytes.data(), "RSCF", 4))
-    return PersistStatus::Corrupt;
-  if (r.bytes[4] != 1)
-    return PersistStatus::Future;
-  if (r.bytes[5] || r.bytes[18] || r.bytes[19] || get(r.bytes.data() + 16, 2) != r.size - header ||
-      get(r.bytes.data() + 20, 4) != crc(r) || !get(r.bytes.data() + 8, 8))
-    return PersistStatus::Corrupt;
-  auto schema = get(r.bytes.data() + 6, 2);
-  if (schema > 2)
-    return PersistStatus::Future;
-  if (schema < 1)
-    return PersistStatus::Corrupt;
+  const auto envelope = validateEnvelope(r);
+  if (envelope != PersistStatus::Loaded)
+    return envelope;
+  const auto schema = get(r.bytes.data() + 6, 2);
   SourceConfig c;
   Reader reader{r};
   c.count = size_t(reader.number(1));
   c.capacity = size_t(reader.number(1));
   if (!c.capacity || c.capacity > kMaxCameras || c.count > c.capacity)
     return PersistStatus::Corrupt;
-  for (size_t i = 0; i < c.count; ++i) {
-    auto &p = c.cameras[i];
-    p.name = reader.string(64);
-    p.identifier = reader.string(17);
-    p.wake_identifier = reader.string(17);
-    auto f = reader.number(1), m = reader.number(1), a = reader.number(1);
-    if (f < 1 || f > 3 || m < 1 || m > 8 || a > 2)
+  for (size_t i = 0; i < c.count; ++i)
+    if (!decodeCamera(reader, c.cameras[i]))
       return PersistStatus::Corrupt;
-    p.family = f == 1 ? CameraFamily::Insta360 : f == 2 ? CameraFamily::GoPro : CameraFamily::DJI;
-    const CameraModel models[] = {CameraModel::X5,          CameraModel::GO3S,
-                                  CameraModel::ONE_RS,      CameraModel::HERO12_BLACK,
-                                  CameraModel::DJI_ACTION4, CameraModel::DJI_ACTION5_PRO,
-                                  CameraModel::DJI_ACTION6, CameraModel::DJI_OSMO360};
-    p.model = models[m - 1];
-    p.address_type = a == 1   ? AddressType::Public
-                     : a == 2 ? AddressType::Random
-                              : AddressType::Unknown;
-    p.enabled = reader.boolean();
-    p.gps_telemetry = reader.boolean();
-  }
-  if (schema == 2) {
-    auto &b = c.button;
-    b.debounce_ms = uint32_t(reader.number(4));
-    b.long_ms = uint32_t(reader.number(4));
-    b.double_ms = uint32_t(reader.number(4));
-    b.double_enabled = reader.boolean();
-    const ButtonAction actions[] = {ButtonAction::RecordingIntent, ButtonAction::WakeReconnect,
-                                    ButtonAction::Resync};
-    auto a = reader.number(1), l = reader.number(1), d = reader.number(1);
-    if (a > 2 || l > 2 || d > 2)
-      return PersistStatus::Corrupt;
-    b.short_action = actions[a];
-    b.long_action = actions[l];
-    b.double_action = actions[d];
-    auto &g = c.button_gpio;
-    g.enabled = reader.boolean();
-    g.board_qualified = reader.boolean();
-    auto pin = reader.number(4);
-    if (pin != 0xffffffffu && pin > 39)
-      return PersistStatus::Corrupt;
-    g.pin = pin == 0xffffffffu ? -1 : int(pin);
-    auto pull = reader.number(1);
-    if (pull > 2)
-      return PersistStatus::Corrupt;
-    g.pull = pull == 0 ? ButtonPull::External : pull == 1 ? ButtonPull::Up : ButtonPull::Down;
-    g.active_low = reader.boolean();
-  }
+  if (schema == 2 && !decodeButtonSettings(reader, c))
+    return PersistStatus::Corrupt;
   if (!reader.ok || reader.at != r.size || !settingsValid(c))
     return PersistStatus::Corrupt;
   out = std::move(c);
@@ -350,6 +386,44 @@ PersistResult ConfigPersistence::retry(uint32_t now) {
   requested_ = now;
   return result_ = pending_ ? PersistStatus::Pending : PersistStatus::Unchanged;
 }
+bool ConfigPersistence::verifyWrite(unsigned target, const ConfigRecord &r, StoreResult io) {
+  if (io.status != StoreStatus::Ok) {
+    result_ = {writeFailureStatus(io.status), io.code};
+    return false;
+  }
+  auto &verified = scratch_;
+  const auto read =
+      store_.allowed() ? store_.read(target, verified) : StoreResult{StoreStatus::Refused};
+  if (store_.allowed() && read.status == StoreStatus::Ok && verified.size == r.size &&
+      std::equal(r.bytes.begin(), r.bytes.begin() + r.size, verified.bytes.begin())) {
+    pending_ = false;
+    failures_ = 0;
+    uncertain_ = false;
+    result_ = PersistStatus::Durable;
+    return true;
+  }
+  result_ = {read.status == StoreStatus::Refused || !store_.allowed()
+                 ? PersistStatus::Refused
+                 : PersistStatus::VerificationError,
+             read.code};
+  return false;
+}
+PersistResult ConfigPersistence::failedWrite() {
+  if (result_.status == PersistStatus::Refused)
+    pending_ = false;
+  uncertain_ = true;
+  result_.indeterminate = true;
+  result_.cause = result_.status;
+  if (++failures_ >= 3) {
+    latched_ = true;
+    result_.status = PersistStatus::Latched;
+  }
+  return result_;
+}
+bool ConfigPersistence::unchangedPayload() const {
+  return scan_.winner >= 0 && !scan_.migration && !uncertain_ &&
+         samePayload(scan_.canonical, desired_);
+}
 PersistResult ConfigPersistence::service(uint32_t now) {
   if (!store_.allowed()) {
     // Refusal discards the mailbox: reopening a gate must not replay commands.
@@ -370,7 +444,7 @@ PersistResult ConfigPersistence::service(uint32_t now) {
     return result_ = s.result;
   }
   // Schema1 must be upgraded even if its decoded settings equal schema2.
-  if (s.winner >= 0 && !s.migration && !uncertain_ && samePayload(s.canonical, desired_)) {
+  if (unchangedPayload()) {
     pending_ = false;
     return result_ = PersistStatus::Unchanged;
   }
@@ -385,36 +459,8 @@ PersistResult ConfigPersistence::service(uint32_t now) {
   attempted_ = true;
   attempted_at_ = now;
   const auto io = store_.write(target, r);
-  if (io.status == StoreStatus::Ok) {
-    auto &verified = scratch_;
-    const auto read =
-        store_.allowed() ? store_.read(target, verified) : StoreResult{StoreStatus::Refused};
-    if (store_.allowed() && read.status == StoreStatus::Ok && verified.size == r.size &&
-        std::equal(r.bytes.begin(), r.bytes.begin() + r.size, verified.bytes.begin())) {
-      pending_ = false;
-      failures_ = 0;
-      uncertain_ = false;
-      return result_ = PersistStatus::Durable;
-    }
-    result_ = {read.status == StoreStatus::Refused || !store_.allowed()
-                   ? PersistStatus::Refused
-                   : PersistStatus::VerificationError,
-               read.code};
-  } else
-    result_ = {io.status == StoreStatus::Refused       ? PersistStatus::Refused
-               : io.status == StoreStatus::SetError    ? PersistStatus::WriteError
-               : io.status == StoreStatus::CommitError ? PersistStatus::CommitError
-                                                       : PersistStatus::Indeterminate,
-               io.code};
-  if (result_.status == PersistStatus::Refused)
-    pending_ = false;
-  uncertain_ = true;
-  result_.indeterminate = true;
-  result_.cause = result_.status;
-  if (++failures_ >= 3) {
-    latched_ = true;
-    result_.status = PersistStatus::Latched;
-  }
-  return result_;
+  if (verifyWrite(target, r, io))
+    return result_;
+  return failedWrite();
 }
 } // namespace ridesync

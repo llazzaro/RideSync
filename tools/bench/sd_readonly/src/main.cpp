@@ -18,6 +18,21 @@ uint32_t crc32(const uint8_t *p, size_t n) {
   }
   return ~crc;
 }
+bool recordHeaderValid(const uint8_t *p) {
+  return word(p) == 0x44495352 && word(p + 4) == 1 && word(p + 8) != 0 && word(p + 12) == 0 &&
+         word(p + 16) == 0;
+}
+bool recordIntegrityValid(const uint8_t *p) {
+  return word(p + 20) == ~word(p + 8) && word(p + 24) == 0xffffffff && word(p + 28) == 0xffffffff &&
+         word(p + 32) == 0 && word(p + 36) == crc32(p, 36);
+}
+bool readSlot(const char *path, uint8_t (&record)[40]) {
+  File f = SD.open(path, FILE_READ);
+  const bool good = f && !f.isDirectory() && f.size() == 40 && f.read(record, 40) == 40;
+  if (f)
+    f.close();
+  return good && recordHeaderValid(record) && recordIntegrityValid(record);
+}
 void probe() {
   Serial.println("SD_READONLY: mounting at 1 MHz; format disabled");
   if (!SD.begin(BOARD_SD_CS_PIN, SPI, 1000000, "/sdprobe", 1, false)) {
@@ -29,15 +44,7 @@ void probe() {
   bool valid = true;
   const char *paths[] = {"/.session-id-a", "/.session-id-b"};
   for (unsigned i = 0; i < 2; ++i) {
-    File f = SD.open(paths[i], FILE_READ);
-    bool good = f && !f.isDirectory() && f.size() == 40 && f.read(records[i], 40) == 40;
-    if (f)
-      f.close();
-    auto p = records[i];
-    good = good && word(p) == 0x44495352 && word(p + 4) == 1 && word(p + 8) != 0 &&
-           word(p + 12) == 0 && word(p + 16) == 0 && word(p + 20) == ~word(p + 8) &&
-           word(p + 24) == 0xffffffff && word(p + 28) == 0xffffffff && word(p + 32) == 0 &&
-           word(p + 36) == crc32(p, 36);
+    const bool good = readSlot(paths[i], records[i]);
     Serial.printf("SD_READONLY: baseline_slot_%u=%s\n", i, good ? "VALID" : "INVALID");
     valid = valid && good;
   }

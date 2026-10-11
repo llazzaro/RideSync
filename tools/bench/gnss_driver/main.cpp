@@ -65,7 +65,7 @@ void setup() {
   Serial.begin(115200);
   // Idle: UART2 stays unopened; no modem power/reset/commands are issued.
 }
-void loop() {
+bool readCommands() {
   bool requested = false;
   // Bounded control input. X is terminal when consumed, including before A.
   for (unsigned n = 0; n < 16 && Serial.available(); ++n) {
@@ -81,8 +81,10 @@ void loop() {
       requested = true;
     }
   }
-  bench.loop(); // Heartbeat outside production gps.tick, even after terminal stop.
-  const auto state = bench.snapshot();
+  return requested;
+}
+
+bool stateChanged(const ModemSnapshot &state) {
   const unsigned power = unsigned(state.gnss_power_enabled);
   const unsigned ready = unsigned(state.receiver_ready);
   const unsigned stop = unsigned(bench.stopReason());
@@ -96,6 +98,13 @@ void loop() {
   last_power = power;
   last_ready = ready;
   last_stop = stop;
+  return changed;
+}
+
+void loop() {
+  const bool requested = readCommands();
+  bench.loop(); // Heartbeat outside production gps.tick, even after terminal stop.
+  const bool changed = stateChanged(bench.snapshot());
   const uint32_t now = millis();
   if (requested || changed || uint32_t(now - last_report) >= 1000) {
     last_report = now;

@@ -17,6 +17,7 @@ public:
   const MotionEstimate &estimate() const { return estimate_; }
 
 private:
+  void updateStaticTilt(const MotionVector &, const MotionVector &);
   MotionEstimatorConfig config_;
   MotionEstimate estimate_;
   uint32_t last_declaration_ = 0;

@@ -33,6 +33,14 @@ public:
   }
 
 private:
+  bool configureProfile();
+  void publishMetadata(ImuConfig &metadata);
+  bool prepareSampling();
+  bool verifySensorConfig(const bmi2_sens_config *readback, const bmi2_sens_config *c);
+  bool verifyFifoConfig(bmi2_sens_config *readback);
+  bool configureFifoCadence();
+  bool configureSensors(bmi2_sens_config *c);
+  bool initializeDevice();
   bool selectRegister(uint8_t) override;
   uint32_t receive(uint8_t *, uint32_t) override;
   uint32_t transmit(uint8_t, const uint8_t *, uint32_t) override;

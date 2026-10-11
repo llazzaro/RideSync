@@ -39,6 +39,26 @@ bool matches(const CameraConfig &camera, const BondIdentity &id) {
   }
   return true;
 }
+Hero12RecoveryPhase wakeRecoveryPhase(WakePhase phase) {
+  switch (phase) {
+  case WakePhase::Queued:
+  case WakePhase::Advertising:
+  case WakePhase::Releasing:
+    return Hero12RecoveryPhase::Pending;
+  case WakePhase::Recovering:
+    return Hero12RecoveryPhase::Observing;
+  case WakePhase::Ready:
+    return Hero12RecoveryPhase::Ready;
+  case WakePhase::Timeout:
+    return Hero12RecoveryPhase::Timeout;
+  case WakePhase::Unsupported:
+    return Hero12RecoveryPhase::Unsupported;
+  case WakePhase::Cancelled:
+    return Hero12RecoveryPhase::Cancelled;
+  default:
+    return Hero12RecoveryPhase::Failed;
+  }
+}
 } // namespace
 MixedCameraAdapter::MixedCameraAdapter(BleHost &host, X5PeripheralPort &port, Clock &clock,
                                        WakeRadio *radio)
@@ -78,58 +98,72 @@ RetryPolicy MixedCameraAdapter::managerPolicy() {
   p.max_attempts = 1;
   return p;
 }
+bool MixedCameraAdapter::invalidWakeConfig(const SourceConfig &s) const {
+  return wake_config_.enabled &&
+         (s.count == 0 || !wake_config_.source_qualified || s.cameras[0].model != CameraModel::X5 ||
+          insta360::encodeWake(wake_config_.profile, wake_config_.identifier.data(), 6).error !=
+              insta360::WakeCodecError::None ||
+          !wake_policy_.total_ms || wake_policy_.total_ms >= 0x80000000u ||
+          !wake_policy_.slice_ms || wake_policy_.slice_ms > wake_policy_.total_ms ||
+          s.cameras[0].wake_identifier.size() != 6 ||
+          !std::equal(wake_config_.identifier.begin(), wake_config_.identifier.end(),
+                      s.cameras[0].wake_identifier.begin()));
+}
+bool MixedCameraAdapter::configureModel(size_t i, const CameraConfig &camera,
+                                        const MixedCameraQualifications &q) {
+  bool ok = false;
+  switch (camera.model) {
+  case CameraModel::X5:
+    ok = i == 0 && matches(camera, q.x5.identity) && x5_.configure(q.x5);
+    break;
+  case CameraModel::ONE_RS:
+    ok = matches(camera, q.one_rs[i].identity) && one_.configurePeer(i, q.one_rs[i]);
+    break;
+  case CameraModel::GO3S:
+    ok = matches(camera, q.go3s[i].identity) && go_.configurePeer(i, q.go3s[i]);
+    break;
+  case CameraModel::HERO12_BLACK:
+    ok = matches(camera, q.hero12[i].identity) && hero_.configurePeer(i, q.hero12[i]);
+    break;
+  case CameraModel::DJI_ACTION4:
+  case CameraModel::DJI_ACTION5_PRO:
+  case CameraModel::DJI_ACTION6:
+  case CameraModel::DJI_OSMO360:
+    ok = q.dji[i].model == camera.model && matches(camera, q.dji[i].identity) &&
+         dji_.configurePeer(i, q.dji[i]);
+    break;
+  default:
+    break;
+  }
+  return ok;
+}
+bool MixedCameraAdapter::configureCamera(size_t i, const SourceConfig &s,
+                                         const MixedCameraQualifications &q) {
+  const auto *stored = manager_->configuredCamera(i);
+  if (!stored || stored->model != s.cameras[i].model ||
+      stored->identifier != s.cameras[i].identifier ||
+      stored->address_type != s.cameras[i].address_type)
+    return false;
+  if (!configureModel(i, s.cameras[i], q))
+    return false;
+  if (s.cameras[i].gps_telemetry &&
+      (s.cameras[i].model != CameraModel::ONE_RS || !q.gps[i].enabled ||
+       !q.gps[i].source_qualified || !one_.configureGps(i, s.cameras[i], q.gps[i])))
+    return false;
+  return true;
+}
 bool MixedCameraAdapter::configure(const SourceConfig &s, const MixedCameraQualifications &q) {
   if (configured_ || !manager_ || !validate(s).ok() || manager_->size() != s.count)
     return false;
   source_ = s;
   wake_config_ = q.x5_wake;
   wake_policy_ = q.x5_wake_policy;
-  if (wake_config_.enabled &&
-      (s.count == 0 || !wake_config_.source_qualified || s.cameras[0].model != CameraModel::X5 ||
-       insta360::encodeWake(wake_config_.profile, wake_config_.identifier.data(), 6).error !=
-           insta360::WakeCodecError::None ||
-       !wake_policy_.total_ms || wake_policy_.total_ms >= 0x80000000u || !wake_policy_.slice_ms ||
-       wake_policy_.slice_ms > wake_policy_.total_ms || s.cameras[0].wake_identifier.size() != 6 ||
-       !std::equal(wake_config_.identifier.begin(), wake_config_.identifier.end(),
-                   s.cameras[0].wake_identifier.begin())))
+  if (invalidWakeConfig(s))
     return false;
   for (size_t i = 0; i < s.count; ++i) {
     if (!s.cameras[i].enabled)
       continue;
-    const auto *stored = manager_->configuredCamera(i);
-    if (!stored || stored->model != s.cameras[i].model ||
-        stored->identifier != s.cameras[i].identifier ||
-        stored->address_type != s.cameras[i].address_type)
-      return false;
-    bool ok = false;
-    switch (s.cameras[i].model) {
-    case CameraModel::X5:
-      ok = i == 0 && matches(s.cameras[i], q.x5.identity) && x5_.configure(q.x5);
-      break;
-    case CameraModel::ONE_RS:
-      ok = matches(s.cameras[i], q.one_rs[i].identity) && one_.configurePeer(i, q.one_rs[i]);
-      break;
-    case CameraModel::GO3S:
-      ok = matches(s.cameras[i], q.go3s[i].identity) && go_.configurePeer(i, q.go3s[i]);
-      break;
-    case CameraModel::HERO12_BLACK:
-      ok = matches(s.cameras[i], q.hero12[i].identity) && hero_.configurePeer(i, q.hero12[i]);
-      break;
-    case CameraModel::DJI_ACTION4:
-    case CameraModel::DJI_ACTION5_PRO:
-    case CameraModel::DJI_ACTION6:
-    case CameraModel::DJI_OSMO360:
-      ok = q.dji[i].model == s.cameras[i].model && matches(s.cameras[i], q.dji[i].identity) &&
-           dji_.configurePeer(i, q.dji[i]);
-      break;
-    default:
-      break;
-    }
-    if (!ok)
-      return false;
-    if (s.cameras[i].gps_telemetry &&
-        (s.cameras[i].model != CameraModel::ONE_RS || !q.gps[i].enabled ||
-         !q.gps[i].source_qualified || !one_.configureGps(i, s.cameras[i], q.gps[i])))
+    if (!configureCamera(i, s, q))
       return false;
   }
   return configured_ = true;
@@ -268,16 +302,7 @@ CameraError MixedCameraAdapter::requestRecovery(uint8_t i, bool recording,
     return CameraError::Unsupported; // preparation never sends a shutter.
   recovery_[i] = true;
   if (source_.cameras[i].model == CameraModel::X5 && wakeSupported(i)) {
-    const auto status = wake_.status(0);
-    if (wake_id_ && !status.released)
-      return CameraError::Busy;
-    if (wake_id_ >= UINT32_MAX - 1)
-      return CameraError::InvalidPolicy;
-    WakeOperation op;
-    op.peer = 0;
-    op.id = ++wake_id_;
-    op.generation = 1;
-    return wake_.request(op, wake_config_, wake_policy_, clock_.now());
+    return requestX5Wake();
   }
   auto state = manager_->state(i);
   if (state->lifecycle == Lifecycle::Ready)
@@ -308,31 +333,7 @@ Hero12RecoveryState MixedCameraAdapter::recoveryState(uint8_t i) const {
     return s;
   if (i == 0 && wakeSupported(i)) {
     const auto w = wake_.status(0);
-    switch (w.phase) {
-    case WakePhase::Queued:
-    case WakePhase::Advertising:
-    case WakePhase::Releasing:
-      s.phase = Hero12RecoveryPhase::Pending;
-      break;
-    case WakePhase::Recovering:
-      s.phase = Hero12RecoveryPhase::Observing;
-      break;
-    case WakePhase::Ready:
-      s.phase = Hero12RecoveryPhase::Ready;
-      break;
-    case WakePhase::Timeout:
-      s.phase = Hero12RecoveryPhase::Timeout;
-      break;
-    case WakePhase::Unsupported:
-      s.phase = Hero12RecoveryPhase::Unsupported;
-      break;
-    case WakePhase::Cancelled:
-      s.phase = Hero12RecoveryPhase::Cancelled;
-      break;
-    default:
-      s.phase = Hero12RecoveryPhase::Failed;
-      break;
-    }
+    s.phase = wakeRecoveryPhase(w.phase);
     return s;
   }
   auto *c = manager_->state(i);
@@ -416,21 +417,25 @@ void MixedCameraAdapter::X5Recovery::fail(CameraError e) {
   result_.observed = RecordingState::Unknown;
   owner_.manager_->cancel(0);
 }
+void MixedCameraAdapter::X5Recovery::pollActive(uint32_t now) {
+
+  auto *s = owner_.manager_->state(0);
+  if (reached(now, deadline_))
+    fail(CameraError::Timeout);
+  else if (owner_.stopped_)
+    fail(CameraError::Disabled);
+  else if (s->error != CameraError::None)
+    fail(s->error);
+  else if (owner_.x5_.ready(Operation::Start)) {
+    result_.terminal = result_.released = result_.fresh = true;
+    result_.observed = owner_.x5_.observed();
+  }
+}
 WakeRecoveryResult MixedCameraAdapter::X5Recovery::poll(const WakeOperation &op, uint32_t now) {
   if (!used_ || !sameWakeOperation(op, result_.operation))
     return {};
   if (!result_.terminal) {
-    auto *s = owner_.manager_->state(0);
-    if (reached(now, deadline_))
-      fail(CameraError::Timeout);
-    else if (owner_.stopped_)
-      fail(CameraError::Disabled);
-    else if (s->error != CameraError::None)
-      fail(s->error);
-    else if (owner_.x5_.ready(Operation::Start)) {
-      result_.terminal = result_.released = result_.fresh = true;
-      result_.observed = owner_.x5_.observed();
-    }
+    pollActive(now);
   }
   if (result_.terminal && result_.error != CameraError::None)
     result_.released = owner_.x5_.connectionReleased();
@@ -439,5 +444,18 @@ WakeRecoveryResult MixedCameraAdapter::X5Recovery::poll(const WakeOperation &op,
 void MixedCameraAdapter::X5Recovery::cancel(const WakeOperation &op) {
   if (used_ && sameWakeOperation(op, result_.operation))
     fail(CameraError::Cancelled);
+}
+CameraError MixedCameraAdapter::requestX5Wake() {
+
+  const auto status = wake_.status(0);
+  if (wake_id_ && !status.released)
+    return CameraError::Busy;
+  if (wake_id_ >= UINT32_MAX - 1)
+    return CameraError::InvalidPolicy;
+  WakeOperation op;
+  op.peer = 0;
+  op.id = ++wake_id_;
+  op.generation = 1;
+  return wake_.request(op, wake_config_, wake_policy_, clock_.now());
 }
 } // namespace ridesync

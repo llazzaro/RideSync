@@ -1,3 +1,4 @@
+#include "../fixtures/ble/adapter_host.h"
 #include "profiles/dji_camera.h"
 #include <algorithm>
 #include <cstring>
@@ -62,16 +63,7 @@ struct Host : BleHost {
   }
   bool releaseContext(BleContext &) override { return true; }
   uint16_t mtu(uint16_t) const override { return negotiated; }
-  void complete(size_t n) {
-    BleEvent e;
-    e.connection = commands[n].connection;
-    e.handle = commands[n].handle;
-    if (commands[n].phase == BlePhase::VerifySubscription) {
-      e.size = 2;
-      e.bytes[0] = 1;
-    }
-    deliver(*contexts[n], e, true);
-  }
+  void complete(size_t n) { adapter_fixture::complete(*this, n); }
   // Independent synthetic camera fixture builder; deliberately separate from
   // production encoding/CRC. Known CRC vectors are checked by codec tests.
   std::vector<uint8_t> frame(uint16_t seq, uint8_t type, uint8_t set, uint8_t id,
@@ -129,15 +121,7 @@ struct Host : BleHost {
     return frame(seq, 0, 0x1d, 2, d);
   }
   void notify(uint8_t peer, const std::vector<uint8_t> &p, size_t from = 0, size_t size = 0) {
-    BleEvent e;
-    e.kind = BleEventKind::Notification;
-    e.connection = 10 + peer;
-    e.handle = 6;
-    if (!size)
-      size = p.size() - from;
-    e.size = size;
-    std::copy(p.begin() + from, p.begin() + from + size, e.bytes.begin());
-    deliver(*links[peer], e);
+    adapter_fixture::notify(*this, peer, p, from, size);
   }
 };
 struct Rig {
@@ -189,102 +173,62 @@ struct Rig {
       adapter.service();
     TEST_ASSERT_TRUE(adapter.canDestroy());
   }
-  void handle(size_t n) {
-    const auto c = host.commands[n];
-    auto &x = *host.contexts[n];
-    BleEvent e;
-    e.connection = 10 + x.peer;
-    if (c.phase == BlePhase::Connect) {
-      host.links[x.peer] = &x;
-      subscribed[x.peer] = synced[x.peer] = false;
-      e.kind = BleEventKind::Connected;
-      host.deliver(x, e);
-    } else if (c.phase == BlePhase::Security) {
-      e.kind = BleEventKind::Security;
-      e.encrypted = e.bonded = true;
-      e.identity.verified = true;
-      e.identity.type = IdentityType::Public;
-      e.identity.address[0] = x.peer + 1;
-      host.deliver(x, e);
-    } else if (c.phase == BlePhase::Services) {
-      if (!host.missing) {
-        e.kind = BleEventKind::Service;
-        e.uuid = c.uuid;
-        e.start = 1;
-        e.end = 12;
-        host.deliver(x, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Characteristics) {
-      for (unsigned j = 0; j < 2; ++j) {
-        e.kind = BleEventKind::Characteristic;
-        e.uuid = BleUuid::shortUuid(j ? 0xfff4 : 0xfff5);
-        e.start = 2 + j * 3;
-        e.handle = e.start + 1;
-        e.properties = j ? 0x10 : (host.property ? 4 : 8);
-        host.deliver(x, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Descriptors) {
-      if (host.cccd) {
-        e.kind = BleEventKind::Descriptor;
-        e.uuid = BleUuid::shortUuid(0x2902);
-        e.handle = c.start + 1;
-        host.deliver(x, e);
-      }
-      host.complete(n);
-    } else if (c.phase == BlePhase::Subscribe || c.phase == BlePhase::VerifySubscription) {
-      host.complete(n);
-      if (c.phase == BlePhase::VerifySubscription)
-        subscribed[x.peer] = true;
-    } else if (c.phase == BlePhase::WriteWithoutResponse) {
-      auto reply = [&] {
-        const uint16_t seq = c.bytes[8] | (c.bytes[9] << 8);
-        if (c.bytes[3] == 0x20)
-          return;
-        if (c.bytes[12] == 0 && c.bytes[13] == 0x19) {
-          if (!host.drop)
-            host.notify(x.peer, host.response(host.wrong_seq ? seq + 1 : seq, 0, 0x19));
-          if (host.grant_enabled) {
-            auto g = host.grant(host.model, host.denied);
-            if (host.fragment) {
-              host.notify(x.peer, g, 0, 7);
-              host.notify(x.peer, g, 7);
-            } else
-              host.notify(x.peer, g);
-          }
-        } else if (c.bytes[12] == 0x1d && c.bytes[13] == 5) {
-          if (host.status_enabled)
-            host.notify(x.peer, host.status(++host.next_status));
-        } else if (!host.drop)
-          host.notify(x.peer, host.response(seq, c.bytes[12], c.bytes[13]));
-      };
-      if (host.ack_first)
-        reply();
-      host.complete(n);
-      if (!host.ack_first)
-        reply();
+  void connected(size_t, const BleCommand &, BleContext &x, BleEvent &e) {
+    host.links[x.peer] = &x;
+    subscribed[x.peer] = synced[x.peer] = false;
+    e.kind = BleEventKind::Connected;
+    host.deliver(x, e);
+  }
+  void secured(size_t, const BleCommand &, BleContext &x, BleEvent &e) {
+    e.kind = BleEventKind::Security;
+    e.encrypted = e.bonded = true;
+    e.identity.verified = true;
+    e.identity.type = IdentityType::Public;
+    e.identity.address[0] = x.peer + 1;
+    host.deliver(x, e);
+  }
+  void characteristics(size_t n, const BleCommand &, BleContext &x, BleEvent &e) {
+    adapter_fixture::characteristics(host, n, x, e, BleUuid::shortUuid(0xfff5),
+                                     BleUuid::shortUuid(0xfff4), 4, 8);
+  }
+  void subscribedPhase(size_t n, const BleCommand &c, BleContext &x, BleEvent &) {
+    host.complete(n);
+    if (c.phase == BlePhase::VerifySubscription)
+      subscribed[x.peer] = true;
+  }
+  void replyConnection(uint8_t peer, uint16_t seq) {
+    if (!host.drop)
+      host.notify(peer, host.response(host.wrong_seq ? seq + 1 : seq, 0, 0x19));
+    if (host.grant_enabled) {
+      auto g = host.grant(host.model, host.denied);
+      if (host.fragment) {
+        host.notify(peer, g, 0, 7);
+        host.notify(peer, g, 7);
+      } else
+        host.notify(peer, g);
     }
   }
-  void pump() {
-    for (unsigned n = 0; n < 100; ++n) {
-      adapter.service();
-      adapter.service();
-      if (handled < host.commands.size())
-        handle(handled++);
-      else {
-        bool injected = false;
-        for (unsigned i = 0; i < count; ++i)
-          if (auto_sync && subscribed[i] && !synced[i]) {
-            cameraSync(i);
-            synced[i] = injected = true;
-          }
-        if (!injected)
-          break;
-      }
-    }
-    adapter.service();
+  void reply(const BleCommand &c, BleContext &x) {
+    const uint16_t seq = c.bytes[8] | (c.bytes[9] << 8);
+    if (c.bytes[3] == 0x20)
+      return;
+    if (c.bytes[12] == 0 && c.bytes[13] == 0x19) {
+      replyConnection(x.peer, seq);
+    } else if (c.bytes[12] == 0x1d && c.bytes[13] == 5) {
+      if (host.status_enabled)
+        host.notify(x.peer, host.status(++host.next_status));
+    } else if (!host.drop)
+      host.notify(x.peer, host.response(seq, c.bytes[12], c.bytes[13]));
   }
+  void writeResponse(size_t n, const BleCommand &c, BleContext &x, BleEvent &) {
+    if (host.ack_first)
+      reply(c, x);
+    host.complete(n);
+    if (!host.ack_first)
+      reply(c, x);
+  }
+  void handle(size_t n) { adapter_fixture::handle(*this, n, BlePhase::WriteWithoutResponse); }
+  void pump() { adapter_fixture::pump(*this); }
   void cameraSync(uint8_t peer = 0) { host.notify(peer, host.grant()); }
   unsigned nudges() {
     unsigned n = 0;

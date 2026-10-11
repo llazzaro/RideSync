@@ -68,6 +68,64 @@ LedWiring wiring(LedMode mode = LedMode::Mono) {
   }
   return c;
 }
+static void invalidateWiring(int scenario, LedWiring &c, bool &ack, ButtonGpioConfig &button) {
+  switch (scenario) {
+  case 0:
+    c.mode = LedMode::Disabled;
+    break;
+  case 1:
+    c.board_qualified = false;
+    break;
+  case 2:
+    ack = false;
+    break;
+  case 3:
+    c.reservations_complete = false;
+    break;
+  case 4:
+    c.pins[1] = 18;
+    break;
+  case 5:
+    c.polarity[1] = LedPolarity::Unspecified;
+    break;
+  case 6:
+    c.reserved_pins = uint64_t(1) << 19;
+    break;
+  case 7:
+    button.enabled = true;
+    button.pin = 19;
+    break;
+  case 8:
+    c.pins[0] = -1;
+    break;
+  case 9:
+    c.pins[0] = 34;
+    break;
+  case 10:
+    c.pins[0] = 6;
+    break;
+  case 11:
+    c.pins[0] = 16;
+    break;
+  case 12:
+    c.pins[0] = 26;
+    break;
+  case 13:
+    c.mode = static_cast<LedMode>(99);
+    break;
+  case 14:
+    c.polarity[0] = static_cast<LedPolarity>(99);
+    break;
+  case 15:
+    c.mode = LedMode::Mono; // Accidental remaining RGB pins cannot be ignored.
+    break;
+  case 16:
+    button.enabled = true;
+    button.pin = -1;
+    break;
+  }
+}
+
 void backend_refuses_without_any_gpio() {
   for (int scenario = 0; scenario < 17; ++scenario) {
     Port port;
@@ -75,61 +133,7 @@ void backend_refuses_without_any_gpio() {
     auto c = wiring(LedMode::Rgb);
     bool ack = true;
     ButtonGpioConfig button;
-    switch (scenario) {
-    case 0:
-      c.mode = LedMode::Disabled;
-      break;
-    case 1:
-      c.board_qualified = false;
-      break;
-    case 2:
-      ack = false;
-      break;
-    case 3:
-      c.reservations_complete = false;
-      break;
-    case 4:
-      c.pins[1] = 18;
-      break;
-    case 5:
-      c.polarity[1] = LedPolarity::Unspecified;
-      break;
-    case 6:
-      c.reserved_pins = uint64_t(1) << 19;
-      break;
-    case 7:
-      button.enabled = true;
-      button.pin = 19;
-      break;
-    case 8:
-      c.pins[0] = -1;
-      break;
-    case 9:
-      c.pins[0] = 34;
-      break;
-    case 10:
-      c.pins[0] = 6;
-      break;
-    case 11:
-      c.pins[0] = 16;
-      break;
-    case 12:
-      c.pins[0] = 26;
-      break;
-    case 13:
-      c.mode = static_cast<LedMode>(99);
-      break;
-    case 14:
-      c.polarity[0] = static_cast<LedPolarity>(99);
-      break;
-    case 15:
-      c.mode = LedMode::Mono; // Accidental remaining RGB pins cannot be ignored.
-      break;
-    case 16:
-      button.enabled = true;
-      button.pin = -1;
-      break;
-    }
+    invalidateWiring(scenario, c, ack, button);
     auto result = sink.begin(c, ack, button);
     TEST_ASSERT_EQUAL((int)(scenario == 0 ? LedBackendState::Disabled : LedBackendState::Refused),
                       (int)result);
@@ -150,98 +154,111 @@ void backend_refuses_without_any_gpio() {
     TEST_ASSERT_EQUAL(0, port.writes);
   }
 }
+static void assert_rgb_polarity(unsigned bits) {
+  Port port;
+  GpioLedSink sink(port);
+  auto c = wiring(LedMode::Rgb);
+  for (int i = 0; i < 3; ++i)
+    c.polarity[i] = (bits & (1 << i)) ? LedPolarity::ActiveLow : LedPolarity::ActiveHigh;
+  TEST_ASSERT_EQUAL((int)LedBackendState::Ready, (int)sink.begin(c, true));
+  TEST_ASSERT_EQUAL((uint64_t(1) << 18) | (uint64_t(1) << 19) | (uint64_t(1) << 23),
+                    port.configured);
+  for (int i = 0; i < 3; ++i)
+    TEST_ASSERT_EQUAL(bool(bits & (1 << i)), port.levels[i].level);
+  TEST_ASSERT_EQUAL(0, sink.write({true, true, false}));
+  for (int i = 0; i < 3; ++i) {
+    TEST_ASSERT_EQUAL(c.pins[i], port.levels[3 + i].pin);
+    TEST_ASSERT_EQUAL((i < 2) != bool(bits & (1 << i)), port.levels[3 + i].level);
+  }
+  int count = port.writes;
+  sink.begin(c, true);
+  TEST_ASSERT_EQUAL(count, port.writes);
+}
+
+static void assert_mono_polarity(bool low) {
+  Port port;
+  GpioLedSink sink(port);
+  auto c = wiring();
+  c.polarity[0] = low ? LedPolarity::ActiveLow : LedPolarity::ActiveHigh;
+  sink.begin(c, true);
+  sink.write({false, false, true});
+  TEST_ASSERT_EQUAL(!low, port.levels.back().level);
+  sink.write({});
+  TEST_ASSERT_EQUAL(low, port.levels.back().level);
+}
+
+static void assert_gpio_failure(int failure) {
+  Port port;
+  GpioLedSink sink(port);
+  auto c = wiring(LedMode::Rgb);
+  if (failure == -2)
+    port.config_error = 88;
+  else
+    port.fail_write = failure;
+  sink.begin(c, true);
+  sink.write({true, true, true});
+  TEST_ASSERT_EQUAL(
+      (int)(failure == -2 ? LedBackendState::ConfigFailed : LedBackendState::WriteFailed),
+      (int)sink.state());
+  TEST_ASSERT_EQUAL(failure == -2 ? 88 : 77, sink.error());
+  const int calls = port.writes;
+  TEST_ASSERT_EQUAL(sink.error(), sink.write({true}));
+  TEST_ASSERT_EQUAL(calls, port.writes);
+  // Best effort off on ALL qualified channels, preserving the first SDK error.
+  TEST_ASSERT_TRUE(port.levels.size() >= 3);
+  for (size_t i = port.levels.size() - 3; i < port.levels.size(); ++i)
+    TEST_ASSERT_FALSE(port.levels[i].level);
+}
+
 void backend_polarities_and_failures() {
-  for (unsigned bits = 0; bits < 8; ++bits) {
-    Port port;
-    GpioLedSink sink(port);
-    auto c = wiring(LedMode::Rgb);
-    for (int i = 0; i < 3; ++i)
-      c.polarity[i] = (bits & (1 << i)) ? LedPolarity::ActiveLow : LedPolarity::ActiveHigh;
-    TEST_ASSERT_EQUAL((int)LedBackendState::Ready, (int)sink.begin(c, true));
-    TEST_ASSERT_EQUAL((uint64_t(1) << 18) | (uint64_t(1) << 19) | (uint64_t(1) << 23),
-                      port.configured);
-    for (int i = 0; i < 3; ++i)
-      TEST_ASSERT_EQUAL(bool(bits & (1 << i)), port.levels[i].level);
-    TEST_ASSERT_EQUAL(0, sink.write({true, true, false}));
-    for (int i = 0; i < 3; ++i) {
-      TEST_ASSERT_EQUAL(c.pins[i], port.levels[3 + i].pin);
-      TEST_ASSERT_EQUAL((i < 2) != bool(bits & (1 << i)), port.levels[3 + i].level);
-    }
-    int count = port.writes;
-    sink.begin(c, true);
-    TEST_ASSERT_EQUAL(count, port.writes);
-  }
-  for (bool low : {false, true}) {
-    Port port;
-    GpioLedSink sink(port);
-    auto c = wiring();
-    c.polarity[0] = low ? LedPolarity::ActiveLow : LedPolarity::ActiveHigh;
-    sink.begin(c, true);
-    sink.write({false, false, true});
-    TEST_ASSERT_EQUAL(!low, port.levels.back().level);
-    sink.write({});
-    TEST_ASSERT_EQUAL(low, port.levels.back().level);
-  }
-  for (int failure : {-2, 0, 1, 2, 3, 4, 5}) {
-    Port port;
-    GpioLedSink sink(port);
-    auto c = wiring(LedMode::Rgb);
-    if (failure == -2)
-      port.config_error = 88;
-    else
-      port.fail_write = failure;
-    sink.begin(c, true);
-    sink.write({true, true, true});
-    TEST_ASSERT_EQUAL(
-        (int)(failure == -2 ? LedBackendState::ConfigFailed : LedBackendState::WriteFailed),
-        (int)sink.state());
-    TEST_ASSERT_EQUAL(failure == -2 ? 88 : 77, sink.error());
-    const int calls = port.writes;
-    TEST_ASSERT_EQUAL(sink.error(), sink.write({true}));
-    TEST_ASSERT_EQUAL(calls, port.writes);
-    // Best effort off on ALL qualified channels, preserving the first SDK error.
-    TEST_ASSERT_TRUE(port.levels.size() >= 3);
-    for (size_t i = port.levels.size() - 3; i < port.levels.size(); ++i)
-      TEST_ASSERT_FALSE(port.levels[i].level);
+  for (unsigned bits = 0; bits < 8; ++bits)
+    assert_rgb_polarity(bits);
+  for (bool low : {false, true})
+    assert_mono_polarity(low);
+  for (int failure : {-2, 0, 1, 2, 3, 4, 5})
+    assert_gpio_failure(failure);
+}
+struct LedEdge {
+  uint32_t t;
+  bool on;
+};
+static void assertPatternEdges(LedState state, uint32_t origin, const std::vector<LedEdge> &edges) {
+  Sink sink;
+  StatusLed led(sink);
+  for (const auto &edge : edges) {
+    led.service(state, origin + edge.t);
+    const LedFrame expected(edge.on && state != LedState::Recovery,
+                            edge.on && state == LedState::Partial,
+                            edge.on && state == LedState::Recovery);
+    TEST_ASSERT_TRUE(expected == sink.frames.back());
+    auto calls = sink.frames.size();
+    led.service(state, origin + edge.t);
+    TEST_ASSERT_EQUAL(calls, sink.frames.size());
   }
 }
+
 void all_pattern_edges_and_rollover() {
-  struct Edge {
-    uint32_t t;
-    bool on;
-  };
-  const std::vector<Edge> recording{{0, true},    {499, true},  {500, false}, {501, false},
-                                    {999, false}, {1000, true}, {1001, true}};
-  const std::vector<Edge> partial{{0, true},    {99, true},   {100, false},  {101, false},
-                                  {199, false}, {200, true},  {201, true},   {299, true},
-                                  {300, false}, {301, false}, {1999, false}, {2000, true},
-                                  {2001, true}};
-  const std::vector<Edge> recovery{{0, true},    {99, true},  {100, false}, {101, false},
-                                   {199, false}, {200, true}, {201, true}};
-  const std::vector<Edge> error{{0, true},    {99, true},   {100, false}, {101, false},
-                                {199, false}, {200, true},  {201, true},  {299, true},
-                                {300, false}, {301, false}, {399, false}, {400, true},
-                                {401, true},  {499, true},  {500, false}, {501, false},
-                                {999, false}, {1000, true}, {1001, true}};
+  const std::vector<LedEdge> recording{{0, true},    {499, true},  {500, false}, {501, false},
+                                       {999, false}, {1000, true}, {1001, true}};
+  const std::vector<LedEdge> partial{{0, true},    {99, true},   {100, false},  {101, false},
+                                     {199, false}, {200, true},  {201, true},   {299, true},
+                                     {300, false}, {301, false}, {1999, false}, {2000, true},
+                                     {2001, true}};
+  const std::vector<LedEdge> recovery{{0, true},    {99, true},  {100, false}, {101, false},
+                                      {199, false}, {200, true}, {201, true}};
+  const std::vector<LedEdge> error{{0, true},    {99, true},   {100, false}, {101, false},
+                                   {199, false}, {200, true},  {201, true},  {299, true},
+                                   {300, false}, {301, false}, {399, false}, {400, true},
+                                   {401, true},  {499, true},  {500, false}, {501, false},
+                                   {999, false}, {1000, true}, {1001, true}};
   for (uint32_t origin : {0U, UINT32_MAX - 50})
     for (LedState state :
          {LedState::Recording, LedState::Partial, LedState::Recovery, LedState::Error}) {
-      Sink sink;
-      StatusLed led(sink);
       const auto &edges = state == LedState::Recording  ? recording
                           : state == LedState::Partial  ? partial
                           : state == LedState::Recovery ? recovery
                                                         : error;
-      for (const auto &edge : edges) {
-        led.service(state, origin + edge.t);
-        const LedFrame expected(edge.on && state != LedState::Recovery,
-                                edge.on && state == LedState::Partial,
-                                edge.on && state == LedState::Recovery);
-        TEST_ASSERT_TRUE(expected == sink.frames.back());
-        auto calls = sink.frames.size();
-        led.service(state, origin + edge.t);
-        TEST_ASSERT_EQUAL(calls, sink.frames.size());
-      }
+      assertPatternEdges(state, origin, edges);
     }
 }
 void phase_transitions_generation_and_gaps() {
@@ -367,21 +384,20 @@ void actual_group_observations_and_priority() {
   group.event(observed);
   TEST_ASSERT_EQUAL((int)LedState::Recording, (int)selected());
   // All pairwise higher priorities mask recording/ready/partial; terminal vs retries.
-  for (bool fault : {false, true})
-    for (bool retry : {false, true})
-      for (bool degraded : {false, true}) {
-        LedHealth health;
-        health.application_fault = fault;
-        health.adapter_recovery = retry;
-        health.devices[0].enabled = health.devices[0].qualified = health.devices[0].current = true;
-        health.devices[0].outcome = DeviceHealth::NoFix;
-        health.devices[0].severity = degraded ? LedSeverity::Partial : LedSeverity::Ignore;
-        TEST_ASSERT_EQUAL((int)(fault      ? LedState::Error
-                                : retry    ? LedState::Recovery
-                                : degraded ? LedState::Partial
-                                           : LedState::Recording),
-                          (int)selected(health));
-      }
+  for (unsigned flags = 0; flags < 8; ++flags) {
+    const bool fault = flags & 4, retry = flags & 2, degraded = flags & 1;
+    LedHealth health;
+    health.application_fault = fault;
+    health.adapter_recovery = retry;
+    health.devices[0].enabled = health.devices[0].qualified = health.devices[0].current = true;
+    health.devices[0].outcome = DeviceHealth::NoFix;
+    health.devices[0].severity = degraded ? LedSeverity::Partial : LedSeverity::Ignore;
+    TEST_ASSERT_EQUAL((int)(fault      ? LedState::Error
+                            : retry    ? LedState::Recovery
+                            : degraded ? LedState::Partial
+                                       : LedState::Recording),
+                      (int)selected(health));
+  }
   status = group.status();
   status.peers[0].error = CameraError::Timeout;
   lives[0] = Lifecycle::Backoff;

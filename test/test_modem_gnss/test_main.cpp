@@ -498,13 +498,7 @@ void pre_key_is_finite_and_cancel_never_replays_or_releases_twice() {
   gps.tick();
   TEST_ASSERT_EQUAL_STRING("AT\r", uart.tx.c_str());
 }
-static void cancelledPower(unsigned preparation) {
-  RawClock raw;
-  SessionClock clock(raw, 1, 1000);
-  Uart uart;
-  ModemGnss modem(uart, enabled());
-  CancelPower power;
-  GpsManager gps(clock, modem, &power, qualifiedTiming());
+static void prepareCancellation(unsigned preparation, RawClock &raw, Uart &uart, GpsManager &gps) {
   if (preparation)
     gps.tick();
   if (preparation >= 2) {
@@ -521,6 +515,15 @@ static void cancelledPower(unsigned preparation) {
     }
     TEST_ASSERT_TRUE(gps.snapshot().receiver_ready);
   }
+}
+static void cancelledPower(unsigned preparation) {
+  RawClock raw;
+  SessionClock clock(raw, 1, 1000);
+  Uart uart;
+  ModemGnss modem(uart, enabled());
+  CancelPower power;
+  GpsManager gps(clock, modem, &power, qualifiedTiming());
+  prepareCancellation(preparation, raw, uart, gps);
   const auto sent = uart.tx;
   const auto read = uart.read_count;
   gps.cancel();

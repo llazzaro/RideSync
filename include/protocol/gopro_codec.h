@@ -66,6 +66,12 @@ private:
     size_t declared = 0, packets = 0;
     Message message;
   } streams_[4];
+  Outcome startStream(Stream *&, uint32_t, Channel, const uint8_t *, size_t, uint32_t, size_t &);
+  Stream *findStream(uint32_t peer, Channel channel);
+  void expireStreams(uint32_t now);
+  static Outcome startHeader(const uint8_t *, size_t, size_t &, size_t &);
+  Stream *allocateStream(uint32_t peer, Channel channel, uint32_t now, size_t declared);
+  static Outcome appendPacket(Stream &, const uint8_t *, size_t, size_t, Message &);
 };
 } // namespace gopro
 } // namespace ridesync

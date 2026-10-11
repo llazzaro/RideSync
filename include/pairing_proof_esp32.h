@@ -35,6 +35,7 @@ private:
   ProofRevocationResult result_;
   bool active() const;
   void perform();
+  void writeFloor(uint32_t);
 };
 PairingProofMaintenance &pairingProofMaintenance();
 } // namespace ridesync

@@ -35,14 +35,8 @@ bool Esp32BleHost::reservePeripheral(void *owner, uint32_t generation) {
       fault() != BleFault::None || !restore_verified_ || !refusal_installed_ ||
       !nvsBootStatus().persistenceAllowed())
     return false;
-  for (const auto &slot : slots_)
-    if (slot.context &&
-        (slot.context->phase == BlePhase::Scan ||
-         (slot.context->phase == BlePhase::Connect &&
-          slot.context->connection.load(std::memory_order_acquire) == kBleNoHandle)))
-      return false; // Serialize GAP setup; established central links retain their contexts.
-  if (ble_gap_disc_active() || ble_gap_conn_active() || ble_gap_adv_active())
-    return false;
+  if (gapSetupBusy(std::memory_order_acquire))
+    return false; // Serialize GAP setup; established central links retain their contexts.
   peripheral_generation_ = generation;
   peripheral_gap_reserved_.store(true, std::memory_order_release);
   peripheral_reserved_.store(true, std::memory_order_release);

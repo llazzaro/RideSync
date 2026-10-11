@@ -22,6 +22,10 @@ void admitCamera(SessionClock &clock, Storage &storage, CameraEvidence evidence)
   }
   storage.enqueueCamera(timestamp, evidence);
 }
+bool benignDynamicMetadata(const ImuEvidence &e) {
+  return e.kind == RecordKind::ImuControl && (e.event_code == 0 || e.event_code == 5) &&
+         !(e.timing_flags & 7);
+}
 } // namespace
 constexpr uint32_t ImuInbox::kCapacity, CameraInbox::kCapacity;
 constexpr uint8_t ImuBatch::kRecords, TelemetryAdmission::kQuota;
@@ -109,17 +113,63 @@ MotionCurrentSnapshot TelemetryAdmission::motionSnapshot(uint32_t now) const {
     return {};
   return current_;
 }
-bool TelemetryAdmission::admitImu(const ImuEvidence &e, MotionInputRoute route, bool reserve) {
-  if (e.kind > RecordKind::Gps && e.kind < RecordKind::Camera) {
-    imu_admission_started_ = true;
-    if (route != motion_options_.route)
-      revokeMotion();
+void TelemetryAdmission::accountCameraLoss() {
+  if (camera_) {
+    const uint32_t dropped = camera_->dropped_.load(std::memory_order_acquire);
+    const uint32_t rejected = camera_->rejected_.load(std::memory_order_acquire);
+    storage_.droppedCamera(dropped - camera_dropped_seen_);
+    storage_.rejectedCamera(rejected - camera_rejected_seen_);
+    camera_dropped_seen_ = dropped;
+    camera_rejected_seen_ = rejected;
   }
-  uint32_t raw;
-  const auto timestamp = clock_.snapshotWithRaw(raw);
-  MotionEvidence motion;
-  motion.state = motion_state_;
-  withdrawMotionReference();
+}
+void TelemetryAdmission::observeImuLoss() {
+  uint32_t dropped = 0;
+  for (unsigned kind = 0; kind < 5; ++kind)
+    dropped += inbox_.dropped_[kind].load(std::memory_order_acquire);
+  if (dropped != dynamic_dropped_seen_) {
+    dynamic_.reset();
+    dynamic_discontinuity_ = true;
+    dynamic_dropped_seen_ = dropped;
+  }
+}
+bool TelemetryAdmission::admitCameraInbox() {
+  if (!camera_)
+    return false;
+  const uint32_t r = camera_->read_.load(std::memory_order_relaxed);
+  if (r != camera_->write_.load(std::memory_order_acquire)) {
+    const auto evidence = camera_->slots_[r % CameraInbox::kCapacity];
+    camera_->read_.store(r + 1, std::memory_order_release);
+    admitCamera(clock_, storage_, evidence);
+    camera_turn_ = false;
+    return true;
+  }
+  return false;
+}
+bool TelemetryAdmission::admitImuInbox() {
+  const uint32_t r = inbox_.read_.load(std::memory_order_relaxed);
+  if (r != inbox_.write_.load(std::memory_order_acquire)) {
+    const auto &batch = inbox_.slots_[r % ImuInbox::kCapacity];
+    admitImu(batch.records[index_], MotionInputRoute::Inbox, true);
+    if (++index_ == batch.count) {
+      index_ = 0;
+      inbox_.read_.store(r + 1, std::memory_order_release);
+    }
+
+    camera_turn_ = true;
+    return true;
+  }
+  return false;
+}
+bool TelemetryAdmission::inboxesDrained() {
+  return inbox_.finished_.load(std::memory_order_acquire) &&
+         inbox_.read_.load(std::memory_order_relaxed) ==
+             inbox_.write_.load(std::memory_order_acquire) &&
+         (!camera_ || (camera_->finished_.load(std::memory_order_acquire) &&
+                       camera_->read_.load(std::memory_order_relaxed) ==
+                           camera_->write_.load(std::memory_order_acquire)));
+}
+void TelemetryAdmission::prepareStaticMotion(const ImuEvidence &e, MotionEvidence &motion) {
   if (motion_state_ == MotionAdmission::Enabled) {
     motion.config = motion_options_.estimator;
     motion.snapshot_max_age_ms = motion_options_.snapshot_max_age_ms;
@@ -129,20 +179,11 @@ bool TelemetryAdmission::admitImu(const ImuEvidence &e, MotionInputRoute route, 
       motion.estimate = estimator_.update(e, motion.reference);
     }
   }
+}
+void TelemetryAdmission::publishCurrentMotion(const ImuEvidence &e, const MotionEvidence &motion,
+                                              const RecordTimestamp &timestamp, uint32_t raw) {
   const uint32_t age = raw - e.receipt_millis32;
-  motion.dynamic_requested = motion_options_.dynamic.enabled;
-  motion.dynamic_cadence_us = motion_options_.dynamic_cadence_us;
-  if (motion.dynamic_requested)
-    motion.dynamic = updateDynamic(e, motion.estimate, motion.dynamic_declaration,
-                                   e.receipt_known && age <= motion_options_.snapshot_max_age_ms &&
-                                       timestamp.monotonic_quality == MonotonicQuality::Valid &&
-                                       age <= timestamp.monotonic_ms);
-  const bool accepted = storage_.enqueueImu(timestamp, e, reserve, motion);
-  if (!accepted) {
-    dynamic_.reset();
-    dynamic_discontinuity_ = true;
-  }
-  if (accepted && motion.estimate.measurements_valid && e.receipt_known && !(e.timing_flags & 7) &&
+  if (motion.estimate.measurements_valid && e.receipt_known && !(e.timing_flags & 7) &&
       timestamp.monotonic_quality == MonotonicQuality::Valid &&
       age <= motion_options_.snapshot_max_age_ms && age <= timestamp.monotonic_ms) {
     current_.current = true;
@@ -159,27 +200,14 @@ bool TelemetryAdmission::admitImu(const ImuEvidence &e, MotionInputRoute route, 
     current_.source.timing_flags = e.timing_flags;
     admitted_raw_ = raw;
   }
-  return accepted;
 }
-DynamicMotionEstimate TelemetryAdmission::updateDynamic(const ImuEvidence &e,
-                                                        const MotionEstimate &converted,
-                                                        uint32_t &declaration, bool fresh) {
-  if (motion_state_ != MotionAdmission::Enabled) {
-    DynamicMotionEstimate refused;
-    refused.fault = !motion_options_.dynamic_reference ? DynamicMotionFault::Reference
-                                                       : DynamicMotionFault::Configuration;
-    dynamic_.reset();
-    return refused;
-  }
-  // FIFO end and read-boundary sensor-time records are metadata, not samples.
-  // Preserve the segment across these benign controls without advancing its
-  // modelled clock or treating their sensor-time snapshot as acquisition time.
-  if (e.kind == RecordKind::ImuControl && (e.event_code == 0 || e.event_code == 5) &&
-      !(e.timing_flags & 7) && !dynamic_discontinuity_) {
-    DynamicMotionEstimate metadata;
-    metadata.fault = DynamicMotionFault::None;
-    return metadata;
-  }
+bool TelemetryAdmission::motionFresh(const ImuEvidence &e, const RecordTimestamp &timestamp,
+                                     uint32_t age) {
+  return e.receipt_known && age <= motion_options_.snapshot_max_age_ms &&
+         timestamp.monotonic_quality == MonotonicQuality::Valid && age <= timestamp.monotonic_ms;
+}
+DynamicMotionInput TelemetryAdmission::dynamicInput(const ImuEvidence &e,
+                                                    const MotionEstimate &converted, bool fresh) {
   DynamicMotionInput input;
   input.session_id = e.session_id;
   input.sensor_id = e.config.sensor_id;
@@ -201,6 +229,54 @@ DynamicMotionEstimate TelemetryAdmission::updateDynamic(const ImuEvidence &e,
     dynamic_time_us_ += cadence;
   }
   input.sample_time_us = dynamic_time_us_;
+  return input;
+}
+bool TelemetryAdmission::admitImu(const ImuEvidence &e, MotionInputRoute route, bool reserve) {
+  if (e.kind > RecordKind::Gps && e.kind < RecordKind::Camera) {
+    imu_admission_started_ = true;
+    if (route != motion_options_.route)
+      revokeMotion();
+  }
+  uint32_t raw;
+  const auto timestamp = clock_.snapshotWithRaw(raw);
+  MotionEvidence motion;
+  motion.state = motion_state_;
+  withdrawMotionReference();
+  prepareStaticMotion(e, motion);
+  const uint32_t age = raw - e.receipt_millis32;
+  motion.dynamic_requested = motion_options_.dynamic.enabled;
+  motion.dynamic_cadence_us = motion_options_.dynamic_cadence_us;
+  if (motion.dynamic_requested)
+    motion.dynamic = updateDynamic(e, motion.estimate, motion.dynamic_declaration,
+                                   motionFresh(e, timestamp, age));
+  const bool accepted = storage_.enqueueImu(timestamp, e, reserve, motion);
+  if (!accepted) {
+    dynamic_.reset();
+    dynamic_discontinuity_ = true;
+  }
+  if (accepted)
+    publishCurrentMotion(e, motion, timestamp, raw);
+  return accepted;
+}
+DynamicMotionEstimate TelemetryAdmission::updateDynamic(const ImuEvidence &e,
+                                                        const MotionEstimate &converted,
+                                                        uint32_t &declaration, bool fresh) {
+  if (motion_state_ != MotionAdmission::Enabled) {
+    DynamicMotionEstimate refused;
+    refused.fault = !motion_options_.dynamic_reference ? DynamicMotionFault::Reference
+                                                       : DynamicMotionFault::Configuration;
+    dynamic_.reset();
+    return refused;
+  }
+  // FIFO end and read-boundary sensor-time records are metadata, not samples.
+  // Preserve the segment across these benign controls without advancing its
+  // modelled clock or treating their sensor-time snapshot as acquisition time.
+  if (benignDynamicMetadata(e) && !dynamic_discontinuity_) {
+    DynamicMotionEstimate metadata;
+    metadata.fault = DynamicMotionFault::None;
+    return metadata;
+  }
+  const auto input = dynamicInput(e, converted, fresh);
   if (e.kind != RecordKind::ImuSample)
     return dynamic_.update(input);
   DynamicMotionReference reference;
@@ -227,78 +303,26 @@ bool TelemetryAdmission::event(const ImuEvidence &evidence) {
 uint8_t TelemetryAdmission::tick() {
   if (stopped_)
     return 0;
-  if (camera_) {
-    const uint32_t dropped = camera_->dropped_.load(std::memory_order_acquire);
-    const uint32_t rejected = camera_->rejected_.load(std::memory_order_acquire);
-    storage_.droppedCamera(dropped - camera_dropped_seen_);
-    storage_.rejectedCamera(rejected - camera_rejected_seen_);
-    camera_dropped_seen_ = dropped;
-    camera_rejected_seen_ = rejected;
-  }
-  uint32_t dropped = 0;
-  for (unsigned kind = 0; kind < 5; ++kind)
-    dropped += inbox_.dropped_[kind].load(std::memory_order_acquire);
-  if (dropped != dynamic_dropped_seen_) {
-    dynamic_.reset();
-    dynamic_discontinuity_ = true;
-    dynamic_dropped_seen_ = dropped;
-  }
+  accountCameraLoss();
+  observeImuLoss();
   uint8_t processed = 0;
   for (; processed < kQuota;) {
     bool handled = false;
-    if (camera_ && camera_turn_) {
-      const uint32_t r = camera_->read_.load(std::memory_order_relaxed);
-      if (r != camera_->write_.load(std::memory_order_acquire)) {
-        const auto evidence = camera_->slots_[r % CameraInbox::kCapacity];
-        camera_->read_.store(r + 1, std::memory_order_release);
-        admitCamera(clock_, storage_, evidence);
-        handled = true;
-        camera_turn_ = false;
-      }
-    }
+    if (camera_turn_)
+      handled = admitCameraInbox();
     if (handled) {
       ++processed;
       continue;
     }
-    const uint32_t r = inbox_.read_.load(std::memory_order_relaxed);
-    if (r != inbox_.write_.load(std::memory_order_acquire)) {
-      const auto &batch = inbox_.slots_[r % ImuInbox::kCapacity];
-      admitImu(batch.records[index_], MotionInputRoute::Inbox, true);
-      if (++index_ == batch.count) {
-        index_ = 0;
-        inbox_.read_.store(r + 1, std::memory_order_release);
-      }
-      handled = true;
-      camera_turn_ = true;
-    }
-    if (!handled && camera_) {
-      const uint32_t cr = camera_->read_.load(std::memory_order_relaxed);
-      if (cr != camera_->write_.load(std::memory_order_acquire)) {
-        const auto evidence = camera_->slots_[cr % CameraInbox::kCapacity];
-        camera_->read_.store(cr + 1, std::memory_order_release);
-        admitCamera(clock_, storage_, evidence);
-        handled = true;
-        camera_turn_ = false;
-      }
-    }
+    handled = admitImuInbox();
+    if (!handled)
+      handled = admitCameraInbox();
     if (!handled)
       break;
     ++processed;
   }
-  if (stopping_ && inbox_.finished_.load(std::memory_order_acquire) &&
-      inbox_.read_.load(std::memory_order_relaxed) ==
-          inbox_.write_.load(std::memory_order_acquire) &&
-      (!camera_ || (camera_->finished_.load(std::memory_order_acquire) &&
-                    camera_->read_.load(std::memory_order_relaxed) ==
-                        camera_->write_.load(std::memory_order_acquire)))) {
-    if (camera_) {
-      const uint32_t dropped = camera_->dropped_.load(std::memory_order_acquire);
-      const uint32_t rejected = camera_->rejected_.load(std::memory_order_acquire);
-      storage_.droppedCamera(dropped - camera_dropped_seen_);
-      storage_.rejectedCamera(rejected - camera_rejected_seen_);
-      camera_dropped_seen_ = dropped;
-      camera_rejected_seen_ = rejected;
-    }
+  if (stopping_ && inboxesDrained()) {
+    accountCameraLoss();
     storage_.requestStop();
     stopped_ = true;
   }

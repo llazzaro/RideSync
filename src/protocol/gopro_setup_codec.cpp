@@ -28,6 +28,104 @@ bool unsignedBigEndian(const Message &raw, OwnedField field, uint64_t &value) {
     value = (value << 8) | raw.bytes[field.offset + i];
   return true;
 }
+struct ParsedSetup {
+  bool present = false, unknown_fields = false, unknown_enum = false;
+  uint64_t result = 0;
+};
+bool readWireValue(unsigned wire, const Message &message, size_t &at, uint64_t &value) {
+  switch (wire) {
+  case 0:
+    return varint(message.bytes, message.size, at, value);
+  case 1:
+  case 5: {
+    const size_t fixed = wire == 1 ? 8 : 4;
+    if (fixed > message.size - at)
+      return false;
+    at += fixed;
+    return true;
+  }
+  case 2:
+    if (!varint(message.bytes, message.size, at, value) || value > message.size - at)
+      return false;
+    at += static_cast<size_t>(value);
+    return true;
+  default:
+    return false;
+  }
+}
+bool validField(uint64_t field, unsigned wire) {
+  return field != 0 && field <= 0x1fffffff && wire <= 5 && wire != 3 && wire != 4 &&
+         (field != 1 || wire == 0);
+}
+bool parseSetupFields(const Message &message, ParsedSetup &parsed) {
+  size_t at = 2;
+  while (at < message.size) {
+    uint64_t key = 0, value = 0;
+    if (!varint(message.bytes, message.size, at, key))
+      return false;
+    const uint64_t field = key >> 3;
+    const unsigned wire = key & 7;
+    if (!validField(field, wire) || !readWireValue(wire, message, at, value))
+      return false;
+    if (field != 1)
+      parsed.unknown_fields = true;
+    else {
+      parsed.present = true;
+      parsed.result = value; // singular scalar: last value wins
+      if (value > 6)
+        parsed.unknown_enum = true; // fail closed even if a later duplicate is known
+    }
+  }
+  return parsed.present;
+}
+bool setupRoute(SetupOperation operation, Channel &route, uint8_t &feature, uint8_t &action) {
+  switch (operation) {
+  case SetupOperation::PairingFinish:
+    feature = 0x03;
+    action = 0x81;
+    route = Channel::Management;
+    return true;
+  case SetupOperation::ClaimExternalControl:
+    feature = 0xf1;
+    action = 0xe9;
+    return true;
+  default:
+    return false;
+  }
+}
+bool readIdentityFields(const Message &message, uint8_t id, OwnedField *fields, size_t count) {
+  size_t at = 2;
+  for (size_t f = 0; f < count; ++f) {
+    if (at == message.size)
+      return false;
+    const size_t length = message.bytes[at++];
+    if (length > message.size - at || (id == 0x51 && length == 0))
+      return false;
+    fields[f].offset = static_cast<uint16_t>(at);
+    fields[f].size = static_cast<uint16_t>(length);
+    at += length;
+  }
+  if (id == 0x3c)
+    return message.size - at == 0 || message.size - at == 11;
+  return at == message.size;
+}
+bool applyIdentity(IdentityResponse &response, const OwnedField *fields) {
+  uint64_t model = 0, major = 0, minor = 0;
+  if (response.id == 0x3c) {
+    if (!unsignedBigEndian(response.raw, fields[0], model))
+      return false;
+    response.model = model;
+    response.model_known = true;
+  } else {
+    if (!unsignedBigEndian(response.raw, fields[0], major) ||
+        !unsignedBigEndian(response.raw, fields[1], minor))
+      return false;
+    response.api_major = major;
+    response.api_minor = minor;
+    response.api_known = true;
+  }
+  return true;
+}
 } // namespace
 
 bool encodeSetup(SetupOperation operation, SetupPacket &packet, bool extended) {
@@ -85,17 +183,7 @@ SetupResponse decodeSetup(Channel channel, const Message &message, SetupOperatio
     return response;
   uint8_t feature = 0, action = 0;
   Channel route = Channel::Command;
-  switch (expected) {
-  case SetupOperation::PairingFinish:
-    feature = 0x03;
-    action = 0x81;
-    route = Channel::Management;
-    break;
-  case SetupOperation::ClaimExternalControl:
-    feature = 0xf1;
-    action = 0xe9;
-    break;
-  default:
+  if (!setupRoute(expected, route, feature, action)) {
     response.outcome = Outcome::Unknown;
     return response;
   }
@@ -103,59 +191,17 @@ SetupResponse decodeSetup(Channel channel, const Message &message, SetupOperatio
     response.outcome = Outcome::Unknown;
     return response;
   }
-  // Parse into locals; malformed tails never publish a result or setup success.
-  size_t at = 2;
-  bool present = false, unknown_fields = false, unknown_enum = false;
-  uint64_t result = 0;
-  while (at < message.size) {
-    uint64_t key = 0, value = 0;
-    if (!varint(message.bytes, message.size, at, key))
-      return response;
-    const uint64_t field = key >> 3;
-    const unsigned wire = key & 7;
-    if (field == 0 || field > 0x1fffffff || wire > 5 || wire == 3 || wire == 4)
-      return response; // groups are unsupported
-    if (field == 1 && wire != 0)
-      return response;
-    if (field != 1)
-      unknown_fields = true;
-    switch (wire) {
-    case 0:
-      if (!varint(message.bytes, message.size, at, value))
-        return response;
-      if (field == 1) {
-        present = true;
-        result = value; // singular scalar: last value wins
-        if (value > 6)
-          unknown_enum = true; // fail closed even if a later duplicate is known
-      }
-      break;
-    case 1:
-    case 5: {
-      const size_t fixed = wire == 1 ? 8 : 4;
-      if (fixed > message.size - at)
-        return response;
-      at += fixed;
-      break;
-    }
-    case 2:
-      if (!varint(message.bytes, message.size, at, value) || value > message.size - at)
-        return response;
-      at += static_cast<size_t>(value);
-      break;
-    default:
-      return response;
-    }
-  }
-  if (!present)
+  // Malformed tails never publish a result or setup success.
+  ParsedSetup parsed;
+  if (!parseSetupFields(message, parsed))
     return response;
   response.outcome = Outcome::Complete;
   response.domain = SetupResultDomain::GenericProtobuf;
   response.result_present = true;
-  response.result = result;
-  response.known_result = !unknown_enum && result <= 6;
-  response.success = response.known_result && result == 1;
-  response.unknown_fields = unknown_fields;
+  response.result = parsed.result;
+  response.known_result = !parsed.unknown_enum && parsed.result <= 6;
+  response.success = response.known_result && parsed.result == 1;
+  response.unknown_fields = parsed.unknown_fields;
   return response;
 }
 
@@ -181,36 +227,8 @@ IdentityResponse decodeIdentity(Channel channel, const Message &message) {
   }
   const size_t count = response.id == 0x3c ? 7 : 2;
   OwnedField fields[7] = {};
-  size_t at = 2;
-  for (size_t f = 0; f < count; ++f) {
-    if (at == message.size)
-      return response;
-    const size_t length = message.bytes[at++];
-    if (length > message.size - at || (response.id == 0x51 && length == 0))
-      return response;
-    fields[f].offset = static_cast<uint16_t>(at);
-    fields[f].size = static_cast<uint16_t>(length);
-    at += length;
-  }
-  if (response.id == 0x3c) {
-    if (message.size - at != 0 && message.size - at != 11)
-      return response;
-  } else if (at != message.size)
+  if (!readIdentityFields(message, response.id, fields, count) || !applyIdentity(response, fields))
     return response;
-  uint64_t model = 0, major = 0, minor = 0;
-  if (response.id == 0x3c) {
-    if (!unsignedBigEndian(response.raw, fields[0], model))
-      return response;
-    response.model = model;
-    response.model_known = true;
-  } else {
-    if (!unsignedBigEndian(response.raw, fields[0], major) ||
-        !unsignedBigEndian(response.raw, fields[1], minor))
-      return response;
-    response.api_major = major;
-    response.api_minor = minor;
-    response.api_known = true;
-  }
   memcpy(response.fields, fields, sizeof(fields));
   response.field_count = static_cast<uint8_t>(count);
   response.outcome = Outcome::Complete;

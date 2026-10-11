@@ -57,11 +57,16 @@ private:
   static void barrier(ble_npl_event *);
   static void worker(void *);
   void workerStep();
+  void startHost();
+  void startAdvertising();
+  void submitAdvertising();
+  void connected(ble_gap_event *, const ble_gap_conn_desc &, int);
   void emit(X5InputKind, int status = 0, uint32_t operation = 0, uint32_t cutoff = 0);
   void enqueue(const X5Input &);
   void terminal();
   void queueBarrier();
   void cleanup();
+  void cleanupReturned(bool, int);
   void send();
   static uint32_t now();
 };

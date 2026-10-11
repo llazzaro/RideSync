@@ -181,6 +181,9 @@ private:
       power_ms_ = now;
     if (s.receiver_ready && ready_ms_ < 0)
       ready_ms_ = now;
+    observeFix(s, now);
+  }
+  void observeFix(const ModemSnapshot &s, uint32_t now) {
     if (s.health == UartHealth::Healthy &&
         (s.validity == FixValidity::NoFix || s.validity == FixValidity::Valid) &&
         (!baseline_ || s.fix.receipt_monotonic_ms != last_receipt_ms_)) {

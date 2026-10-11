@@ -5,85 +5,98 @@
 #include <cstring>
 
 using namespace x5_probe;
-int main() {
-  {
-    WakeOption wake;
-    assert(wake.allowBegin() && !wake.enabled());
-    assert(wake.shutterAllowed() && wake.duration(120000) == 120000);
-    assert(wake.feed('A', false) == WakeInput::Command);
-    assert(wake.feed('W', false) == WakeInput::Consumed);
-    assert(!wake.allowBegin());
-    for (char c : {'A', 'B', 'C', '1', '2', '3'})
-      assert(wake.feed(c, false) == WakeInput::Consumed);
-    assert(wake.feed('\n', false) == WakeInput::Accepted);
-    assert(wake.enabled() && wake.allowBegin());
-    const uint8_t adv[] = {2,   1,  6, 27,  255, 76,  0,   2,   21,  9, 79, 82, 66, 73,  84, 9,
-                           255, 15, 0, 'A', 'B', 'C', '1', '2', '3', 0, 0,  0,  0,  228, 1};
-    const uint8_t scan[] = {3,   3,   128, 206, 20,  9,   'I', 'n', 's', 't', 'a', '3', '6',
-                            '0', ' ', 'G', 'P', 'S', ' ', 'R', 'e', 'm', 'o', 't', 'e'};
-    assert(wake.advertisement().size() == sizeof(adv));
-    assert(wake.scanResponse().size() == sizeof(scan));
-    assert(std::memcmp(wake.advertisement().data(), adv, sizeof(adv)) == 0);
-    assert(std::memcmp(wake.scanResponse().data(), scan, sizeof(scan)) == 0);
-    assert(wake.duration(120000) == 3000 && wake.duration(2999) == 2999);
-    assert(wake.duration(0) == 0 && !wake.shutterAllowed());
-    const auto before = wake.advertisement();
-    for (char c : {'W', 'S', 'S', 'A', 'A', 'X', 'X', '\n'})
-      assert(wake.feed(c, true) != WakeInput::Command);
-    assert(wake.enabled() && wake.advertisement() == before); // Immutable after A.
-    Capture capture;
-    assert(capture.begin(0));
-    capture.ready();
-    wake.advertisingEnded(capture, 7);
-    assert(capture.active()); // Connected capture remains finite, no shutter.
-    capture.tick(Capture::kWindowMs);
-    assert(!capture.active());
-  }
+static void test_private_wake_identifier() {
+  WakeOption wake;
+  assert(wake.allowBegin());
+  assert(!wake.enabled());
+  assert(wake.shutterAllowed());
+  assert(wake.duration(120000) == 120000);
+  assert(wake.feed('A', false) == WakeInput::Command);
+  assert(wake.feed('W', false) == WakeInput::Consumed);
+  assert(!wake.allowBegin());
+  for (char c : {'A', 'B', 'C', '1', '2', '3'})
+    assert(wake.feed(c, false) == WakeInput::Consumed);
+  assert(wake.feed('\n', false) == WakeInput::Accepted);
+  assert(wake.enabled());
+  assert(wake.allowBegin());
+  const uint8_t adv[] = {2,   1,  6, 27,  255, 76,  0,   2,   21,  9, 79, 82, 66, 73,  84, 9,
+                         255, 15, 0, 'A', 'B', 'C', '1', '2', '3', 0, 0,  0,  0,  228, 1};
+  const uint8_t scan[] = {3,   3,   128, 206, 20,  9,   'I', 'n', 's', 't', 'a', '3', '6',
+                          '0', ' ', 'G', 'P', 'S', ' ', 'R', 'e', 'm', 'o', 't', 'e'};
+  assert(wake.advertisement().size() == sizeof(adv));
+  assert(wake.scanResponse().size() == sizeof(scan));
+  assert(std::memcmp(wake.advertisement().data(), adv, sizeof(adv)) == 0);
+  assert(std::memcmp(wake.scanResponse().data(), scan, sizeof(scan)) == 0);
+  assert(wake.duration(120000) == 3000);
+  assert(wake.duration(2999) == 2999);
+  assert(wake.duration(0) == 0);
+  assert(!wake.shutterAllowed());
+  const auto before = wake.advertisement();
+  for (char c : {'W', 'S', 'S', 'A', 'A', 'X', 'X', '\n'})
+    assert(wake.feed(c, true) != WakeInput::Command);
+  assert(wake.enabled());
+  assert(wake.advertisement() == before); // Immutable after A.
+  Capture capture;
+  assert(capture.begin(0));
+  capture.ready();
+  wake.advertisingEnded(capture, 7);
+  assert(capture.active()); // Connected capture remains finite, no shutter.
+  capture.tick(Capture::kWindowMs);
+  assert(!capture.active());
+}
+
+static void test_malformed_private_identifier() {
   for (const char *bad : {"W\n", "W12345\n", "W1234567ASX\n", "W12345\r\n", "W12345\x7f\n"}) {
     WakeOption wake;
     for (const char *c = bad; *c; ++c)
       assert(wake.feed(*c, false) != WakeInput::Command);
-    assert(!wake.enabled() && !wake.allowBegin());
+    assert(!wake.enabled());
+    assert(!wake.allowBegin());
     for (char c : {'W', '1', '2', '3', '4', '5', '6', '\n'})
       assert(wake.feed(c, false) != WakeInput::Command);
-    assert(wake.allowBegin() && wake.enabled());
+    assert(wake.allowBegin());
+    assert(wake.enabled());
     Capture capture;
     assert(capture.begin(0));
     wake.advertisingEnded(capture, 0xffff);
-    assert(!capture.active() && capture.reason() == StopReason::Deadline);
+    assert(!capture.active());
+    assert(capture.reason() == StopReason::Deadline);
     assert(!capture.begin(1)); // No wake fallback/retry.
   }
-  const uint8_t expected[] = {0xfc, 0xef, 0xfe, 0x86, 0x00, 0x03, 0x01, 0x02, 0x00};
-  const auto shutter_bytes = ridesync::insta360::encodeShutterEvent();
-  assert(shutter_bytes.size() == sizeof(expected));
-  assert(std::memcmp(shutter_bytes.data(), expected, sizeof(expected)) == 0);
-  {
-    Capture capture;
-    SdkControl sdk;
-    ShutterControl shutter;
-    assert(!shutter.request(capture, sdk, 0)); // Idle is capture-only.
-    assert(capture.begin(0));
-    capture.ready();
-    assert(!shutter.request(capture, sdk, 1)); // No peer.
-    shutter.connected(7);
-    assert(!shutter.request(capture, sdk, 2)); // No CE82 notify subscription.
-    shutter.subscription(8, 18, true);         // Wrong peer cannot grant admission.
-    assert(!shutter.request(capture, sdk, 3));
-    shutter.subscription(7, 18, true);
-    assert(shutter.request(capture, sdk, 4));
-    assert(!shutter.request(capture, sdk, 5)); // One bounded pending slot.
-    uint16_t conn = 0xffff, attr = 0;
-    assert(shutter.admit(capture, sdk, 6, conn, attr));
-    assert(conn == 7 && attr == 18 && sdk.snapshot().action == SdkAction::Shutter);
-    assert(!shutter.request(capture, sdk, 7)); // SDK attempt still in flight.
-    sdk.complete(19);                          // Ambiguous/error return never queues a retry.
-    assert(!shutter.admit(capture, sdk, 8, conn, attr));
-    assert(sdk.snapshot().accepted == 1 && sdk.snapshot().returned == 1);
-    assert(shutter.request(capture, sdk, 9)); // Only a fresh explicit S may try again.
-    assert(shutter.admit(capture, sdk, 10, conn, attr));
-    sdk.complete(0);
-    assert(!shutter.admit(capture, sdk, 11, conn, attr));
-  }
+}
+
+static void test_shutter_admission() {
+  Capture capture;
+  SdkControl sdk;
+  ShutterControl shutter;
+  assert(!shutter.request(capture, sdk, 0)); // Idle is capture-only.
+  assert(capture.begin(0));
+  capture.ready();
+  assert(!shutter.request(capture, sdk, 1)); // No peer.
+  shutter.connected(7);
+  assert(!shutter.request(capture, sdk, 2)); // No CE82 notify subscription.
+  shutter.subscription(8, 18, true);         // Wrong peer cannot grant admission.
+  assert(!shutter.request(capture, sdk, 3));
+  shutter.subscription(7, 18, true);
+  assert(shutter.request(capture, sdk, 4));
+  assert(!shutter.request(capture, sdk, 5)); // One bounded pending slot.
+  uint16_t conn = 0xffff, attr = 0;
+  assert(shutter.admit(capture, sdk, 6, conn, attr));
+  assert(conn == 7);
+  assert(attr == 18);
+  assert(sdk.snapshot().action == SdkAction::Shutter);
+  assert(!shutter.request(capture, sdk, 7)); // SDK attempt still in flight.
+  sdk.complete(19);                          // Ambiguous/error return never queues a retry.
+  assert(!shutter.admit(capture, sdk, 8, conn, attr));
+  assert(sdk.snapshot().accepted == 1);
+  assert(sdk.snapshot().returned == 1);
+  assert(shutter.request(capture, sdk, 9)); // Only a fresh explicit S may try again.
+  assert(shutter.admit(capture, sdk, 10, conn, attr));
+  sdk.complete(0);
+  assert(!shutter.admit(capture, sdk, 11, conn, attr));
+}
+
+static void test_shutter_cancel_before_submission() {
   for (unsigned scenario = 0; scenario < 4; ++scenario) {
     Capture capture;
     SdkControl sdk;
@@ -105,94 +118,113 @@ int main() {
       shutter.subscription(7, 18, false);
     uint16_t conn = 0xffff, attr = 0;
     assert(!shutter.admit(capture, sdk, submission, conn, attr));
-    assert(!shutter.pending() && sdk.snapshot().accepted == 0);
+    assert(!shutter.pending());
+    assert(sdk.snapshot().accepted == 0);
     assert(!shutter.admit(capture, sdk, submission, conn, attr));
   }
-  {
-    Capture capture;
-    SdkControl sdk;
-    ShutterControl shutter;
-    assert(capture.begin(0));
-    capture.ready();
-    shutter.connected(7);
-    shutter.subscription(7, 18, true);
-    assert(shutter.request(capture, sdk, 1));
-    shutter.cancel(); // Allocation failure or synchronous X cannot replay later.
-    uint16_t conn, attr;
-    assert(!shutter.admit(capture, sdk, 2, conn, attr));
-    assert(shutter.request(capture, sdk, 3));
-    assert(shutter.admit(capture, sdk, 4, conn, attr));
-    capture.stop(StopReason::Requested);
-    sdk.requestStop();
-    assert(sdk.snapshot().in_flight && sdk.snapshot().stop_requested);
-    sdk.complete(0); // Accepted-before-stop work remains honest, not retro-cancelled.
-    assert(!shutter.request(capture, sdk, 5));
-  }
-  {
-    // A cancelled/late sync may not even begin preparation; no stop is lost
-    // behind a startup operation whose return publication arrives afterwards.
-    Capture capture;
-    SdkControl sdk;
-    assert(capture.begin(0) && sdk.begin(SdkAction::Startup));
-    capture.stop(StopReason::Requested);
-    sdk.requestStop();
-    sdk.complete(17);
-    assert(!sdk.admitPreparation(capture, 1));
-    assert(sdk.snapshot().last_returned_action == SdkAction::Startup);
-    assert(sdk.snapshot().last_status == 17 && sdk.snapshot().stop_requested);
-  }
-  {
-    // Cancellation during preparation must reject a new advertising submission.
-    Capture capture;
-    SdkControl sdk;
-    assert(capture.begin(100));
-    assert(sdk.admitPreparation(capture, 101));
-    capture.stop(StopReason::Requested);
-    sdk.requestStop();
-    sdk.complete(0); // Preparation returns after X, not camera/SDK success proof.
-    assert(sdk.admitAdvertising(capture, 102) == 0);
-    assert(sdk.snapshot().stop_requested && !sdk.snapshot().in_flight);
-  }
-  {
-    // Fresh time at submission catches startup expiry while preparation stalls.
-    Capture capture;
-    SdkControl sdk;
-    assert(capture.begin(0));
-    assert(sdk.admitPreparation(capture, 14999));
-    sdk.complete(0);
-    assert(sdk.admitAdvertising(capture, 15000) == 0);
-    assert(capture.reason() == StopReason::StartupTimeout && sdk.snapshot().stop_requested);
-  }
-  {
-    // The current remaining duration, not the sync-entry snapshot, is admitted.
-    Capture capture;
-    SdkControl sdk;
-    assert(capture.begin(1000));
-    assert(sdk.admitPreparation(capture, 1001));
-    sdk.complete(0);
-    assert(sdk.admitAdvertising(capture, 11000) == 110000);
-    assert(sdk.snapshot().in_flight && sdk.snapshot().action == SdkAction::Advertise);
-    // Already admitted work can still be pending when X arrives. Keep that
-    // publication until the owner returns, and retain the compensating stop.
-    capture.stop(StopReason::Requested);
-    sdk.requestStop();
-    assert(sdk.snapshot().in_flight && sdk.snapshot().stop_requested);
-    sdk.complete(0);
-    capture.ready();
-    assert(!capture.active() && sdk.snapshot().stop_requested);
-    assert(sdk.snapshot().accepted == 2 && sdk.snapshot().returned == 2);
-  }
-  {
-    // Window expiry between preparation and submission cannot restart work.
-    Capture capture;
-    SdkControl sdk;
-    assert(capture.begin(0));
-    capture.ready();
-    assert(sdk.admitPreparation(capture, 119999));
-    sdk.complete(0);
-    assert(sdk.admitAdvertising(capture, 120000) == 0);
-    assert(capture.reason() == StopReason::Deadline);
-  }
+}
+
+static void test_shutter_cancel_after_acceptance() {
+  Capture capture;
+  SdkControl sdk;
+  ShutterControl shutter;
+  assert(capture.begin(0));
+  capture.ready();
+  shutter.connected(7);
+  shutter.subscription(7, 18, true);
+  assert(shutter.request(capture, sdk, 1));
+  shutter.cancel(); // Allocation failure or synchronous X cannot replay later.
+  uint16_t conn, attr;
+  assert(!shutter.admit(capture, sdk, 2, conn, attr));
+  assert(shutter.request(capture, sdk, 3));
+  assert(shutter.admit(capture, sdk, 4, conn, attr));
+  capture.stop(StopReason::Requested);
+  sdk.requestStop();
+  assert(sdk.snapshot().in_flight);
+  assert(sdk.snapshot().stop_requested);
+  sdk.complete(0); // Accepted-before-stop work remains honest, not retro-cancelled.
+  assert(!shutter.request(capture, sdk, 5));
+}
+
+static void test_late_sync_after_cancel() {
+  // A cancelled/late sync may not even begin preparation; no stop is lost
+  // behind a startup operation whose return publication arrives afterwards.
+  Capture capture;
+  SdkControl sdk;
+  assert(capture.begin(0));
+  assert(sdk.begin(SdkAction::Startup));
+  capture.stop(StopReason::Requested);
+  sdk.requestStop();
+  sdk.complete(17);
+  assert(!sdk.admitPreparation(capture, 1));
+  assert(sdk.snapshot().last_returned_action == SdkAction::Startup);
+  assert(sdk.snapshot().last_status == 17);
+  assert(sdk.snapshot().stop_requested);
+}
+
+static void test_preparation_cancel() {
+  // Cancellation during preparation must reject a new advertising submission.
+  Capture capture;
+  SdkControl sdk;
+  assert(capture.begin(100));
+  assert(sdk.admitPreparation(capture, 101));
+  capture.stop(StopReason::Requested);
+  sdk.requestStop();
+  sdk.complete(0); // Preparation returns after X, not camera/SDK success proof.
+  assert(sdk.admitAdvertising(capture, 102) == 0);
+  assert(sdk.snapshot().stop_requested);
+  assert(!sdk.snapshot().in_flight);
+}
+
+static void test_preparation_expiry() {
+  // Fresh time at submission catches startup expiry while preparation stalls.
+  Capture capture;
+  SdkControl sdk;
+  assert(capture.begin(0));
+  assert(sdk.admitPreparation(capture, 14999));
+  sdk.complete(0);
+  assert(sdk.admitAdvertising(capture, 15000) == 0);
+  assert(capture.reason() == StopReason::StartupTimeout);
+  assert(sdk.snapshot().stop_requested);
+}
+
+static void test_fresh_submit_duration() {
+  // The current remaining duration, not the sync-entry snapshot, is admitted.
+  Capture capture;
+  SdkControl sdk;
+  assert(capture.begin(1000));
+  assert(sdk.admitPreparation(capture, 1001));
+  sdk.complete(0);
+  assert(sdk.admitAdvertising(capture, 11000) == 110000);
+  assert(sdk.snapshot().in_flight);
+  assert(sdk.snapshot().action == SdkAction::Advertise);
+  // Already admitted work can still be pending when X arrives. Keep that
+  // publication until the owner returns, and retain the compensating stop.
+  capture.stop(StopReason::Requested);
+  sdk.requestStop();
+  assert(sdk.snapshot().in_flight);
+  assert(sdk.snapshot().stop_requested);
+  sdk.complete(0);
+  capture.ready();
+  assert(!capture.active());
+  assert(sdk.snapshot().stop_requested);
+  assert(sdk.snapshot().accepted == 2);
+  assert(sdk.snapshot().returned == 2);
+}
+
+static void test_capture_expiry() {
+  // Window expiry between preparation and submission cannot restart work.
+  Capture capture;
+  SdkControl sdk;
+  assert(capture.begin(0));
+  capture.ready();
+  assert(sdk.admitPreparation(capture, 119999));
+  sdk.complete(0);
+  assert(sdk.admitAdvertising(capture, 120000) == 0);
+  assert(capture.reason() == StopReason::Deadline);
+}
+
+static void test_stalled_cleanup() {
   for (unsigned scenario = 0; scenario < 3; ++scenario) {
     // Never returning cleanup cannot consume/hold control admission, deadlines
     // or event reporting. These are policy schedules, not fake SDK executions.
@@ -213,86 +245,137 @@ int main() {
     for (unsigned i = 0; i < 20; ++i) {
       capture.tick(200000 + i * 1000);
       sdk.requestStop(); // Repeated nonblocking admission never clears the latch.
-      assert(!capture.active() && sdk.snapshot().in_flight);
+      assert(!capture.active());
+      assert(sdk.snapshot().in_flight);
       assert(capture.push(Kind::Stop, 200000 + i * 1000, 0xffff, 0, int(capture.reason())));
       char line[768];
       const size_t length = formatEvent(*capture.front(), false, line, sizeof(line));
       assert(canReport(length, sizeof(line)));
       capture.pop();
     }
-    assert(capture.stats().reported == 20 && sdk.snapshot().returned == 0);
-    assert(sdk.snapshot().stop_requested && !capture.begin(300000));
+    assert(capture.stats().reported == 20);
+    assert(sdk.snapshot().returned == 0);
+    assert(sdk.snapshot().stop_requested);
+    assert(!capture.begin(300000));
   }
-  {
-    Capture capture;
-    capture.tick(900000);
-    assert(!capture.used() && !capture.active());
-    assert(capture.begin(100));
-    assert(!capture.begin(101));
-    capture.tick(15099);
-    assert(capture.active());
-    capture.tick(15100);
-    assert(!capture.active() && capture.reason() == StopReason::StartupTimeout);
-    capture.ready();
-    assert(!capture.active() && !capture.begin(20000));
-  }
-  {
-    Capture capture;
-    assert(capture.begin(0xffffff00u));
-    capture.ready();
-    capture.tick(uint32_t(0xffffff00u + 119999u));
-    assert(capture.active());
-    capture.tick(uint32_t(0xffffff00u + 120000u));
-    assert(!capture.active() && capture.reason() == StopReason::Deadline);
-  }
-  {
-    Capture capture;
-    capture.stop(StopReason::Requested);
-    assert(!capture.used()); // X before A does not consume the trial.
-    assert(capture.begin(0));
-    capture.ready();
-    capture.stop(StopReason::Requested);
-    assert(!capture.active() && !capture.begin(1));
-    capture.stop(StopReason::Error);
-    assert(capture.reason() == StopReason::Requested);
-  }
-  {
-    Capture capture;
-    uint8_t ingress[300];
-    std::memset(ingress, 0xa5, sizeof(ingress));
-    assert(capture.push(Kind::Write, 123456, 7, 9, 0, ingress, sizeof(ingress)));
-    ingress[0] = 0; // Queued evidence owns a bounded byte copy.
-    const Event *event = capture.front();
-    assert(event && event->sequence == 1 && event->time_ms == 123456);
-    assert(event->connection == 7 && event->attribute == 9 && event->length == 300);
-    assert(event->copied == 256 && event->bytes[0] == 0xa5 && event->bytes[255] == 0xa5);
-    assert(capture.stats().truncated == 1);
-    char line[768];
-    size_t length = formatEvent(*event, false, line, sizeof(line));
-    assert(length && std::strstr(line, "len=300 copied=256"));
-    assert(!std::strstr(line, "hex=") && !std::strstr(line, "a5a5"));
-    assert(!canReport(length, length - 1) && canReport(length, length));
-    assert(formatEvent(*event, false, line, length) == 0); // Includes newline/NUL bounds.
-    length = formatEvent(*event, true, line, sizeof(line));
-    assert(length && std::strstr(line, "SENSITIVE") && std::strstr(line, "hex_bytes=256 hex="));
-    assert(std::strstr(line, "a5a5"));
+}
+
+static void test_one_shot_deadlines() {
+  Capture capture;
+  capture.tick(900000);
+  assert(!capture.used());
+  assert(!capture.active());
+  assert(capture.begin(100));
+  assert(!capture.begin(101));
+  capture.tick(15099);
+  assert(capture.active());
+  capture.tick(15100);
+  assert(!capture.active());
+  assert(capture.reason() == StopReason::StartupTimeout);
+  capture.ready();
+  assert(!capture.active());
+  assert(!capture.begin(20000));
+}
+
+static void test_rollover_deadlines() {
+  Capture capture;
+  assert(capture.begin(0xffffff00u));
+  capture.ready();
+  capture.tick(uint32_t(0xffffff00u + 119999u));
+  assert(capture.active());
+  capture.tick(uint32_t(0xffffff00u + 120000u));
+  assert(!capture.active());
+  assert(capture.reason() == StopReason::Deadline);
+}
+
+static void test_sticky_stop_reason() {
+  Capture capture;
+  capture.stop(StopReason::Requested);
+  assert(!capture.used()); // X before A does not consume the trial.
+  assert(capture.begin(0));
+  capture.ready();
+  capture.stop(StopReason::Requested);
+  assert(!capture.active());
+  assert(!capture.begin(1));
+  capture.stop(StopReason::Error);
+  assert(capture.reason() == StopReason::Requested);
+}
+
+static void test_bounded_ingress() {
+  Capture capture;
+  uint8_t ingress[300];
+  std::memset(ingress, 0xa5, sizeof(ingress));
+  assert(capture.push(Kind::Write, 123456, 7, 9, 0, ingress, sizeof(ingress)));
+  ingress[0] = 0; // Queued evidence owns a bounded byte copy.
+  const Event *event = capture.front();
+  assert(event);
+  assert(event->sequence == 1);
+  assert(event->time_ms == 123456);
+  assert(event->connection == 7);
+  assert(event->attribute == 9);
+  assert(event->length == 300);
+  assert(event->copied == 256);
+  assert(event->bytes[0] == 0xa5);
+  assert(event->bytes[255] == 0xa5);
+  assert(capture.stats().truncated == 1);
+  char line[768];
+  size_t length = formatEvent(*event, false, line, sizeof(line));
+  assert(length);
+  assert(std::strstr(line, "len=300 copied=256"));
+  assert(!std::strstr(line, "hex="));
+  assert(!std::strstr(line, "a5a5"));
+  assert(!canReport(length, length - 1));
+  assert(canReport(length, length));
+  assert(formatEvent(*event, false, line, length) == 0); // Includes newline/NUL bounds.
+  length = formatEvent(*event, true, line, sizeof(line));
+  assert(length);
+  assert(std::strstr(line, "SENSITIVE"));
+  assert(std::strstr(line, "hex_bytes=256 hex="));
+  assert(std::strstr(line, "a5a5"));
+  capture.pop();
+  assert(!capture.front());
+  assert(capture.stats().reported == 1);
+}
+
+static void test_queue_order_and_loss() {
+  Capture capture;
+  for (unsigned i = 0; i < 32; ++i)
+    assert(capture.push(Kind::Read, i, 1, 3, 0));
+  assert(!capture.push(Kind::Disconnect, 100, 1, 0, 19));
+  assert(capture.stats().seen == 33);
+  assert(capture.stats().dropped == 1);
+  assert(capture.stats().by_kind[unsigned(Kind::Disconnect)] == 1);
+  for (unsigned i = 0; i < 32; ++i) {
+    assert(capture.front());
+    assert(capture.front()->sequence == i + 1);
     capture.pop();
-    assert(!capture.front() && capture.stats().reported == 1);
   }
-  {
-    Capture capture;
-    for (unsigned i = 0; i < 32; ++i)
-      assert(capture.push(Kind::Read, i, 1, 3, 0));
-    assert(!capture.push(Kind::Disconnect, 100, 1, 0, 19));
-    assert(capture.stats().seen == 33 && capture.stats().dropped == 1);
-    assert(capture.stats().by_kind[unsigned(Kind::Disconnect)] == 1);
-    for (unsigned i = 0; i < 32; ++i) {
-      assert(capture.front() && capture.front()->sequence == i + 1);
-      capture.pop();
-    }
-    assert(!capture.front());
-    assert(capture.push(Kind::Mtu, 101, 2, 0, 247));
-    assert(capture.front()->sequence == 34 && capture.front()->value == 247);
-    assert(capture.stats().reported == 32);
-  }
+  assert(!capture.front());
+  assert(capture.push(Kind::Mtu, 101, 2, 0, 247));
+  assert(capture.front()->sequence == 34);
+  assert(capture.front()->value == 247);
+  assert(capture.stats().reported == 32);
+}
+
+int main() {
+  test_private_wake_identifier();
+  test_malformed_private_identifier();
+  const uint8_t expected[] = {0xfc, 0xef, 0xfe, 0x86, 0x00, 0x03, 0x01, 0x02, 0x00};
+  const auto shutter_bytes = ridesync::insta360::encodeShutterEvent();
+  assert(shutter_bytes.size() == sizeof(expected));
+  assert(std::memcmp(shutter_bytes.data(), expected, sizeof(expected)) == 0);
+  test_shutter_admission();
+  test_shutter_cancel_before_submission();
+  test_shutter_cancel_after_acceptance();
+  test_late_sync_after_cancel();
+  test_preparation_cancel();
+  test_preparation_expiry();
+  test_fresh_submit_duration();
+  test_capture_expiry();
+  test_stalled_cleanup();
+  test_one_shot_deadlines();
+  test_rollover_deadlines();
+  test_sticky_stop_reason();
+  test_bounded_ingress();
+  test_queue_order_and_loss();
 }

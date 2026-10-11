@@ -244,6 +244,34 @@ int Esp32X5Peripheral::access(uint16_t connection, uint16_t handle, ble_gatt_acc
   p.enqueue(e);
   return 0;
 }
+void Esp32X5Peripheral::connected(ble_gap_event *event, const ble_gap_conn_desc &desc, int lookup) {
+  advertising_ = false;
+  if (event->connect.status) {
+    emit(X5InputKind::Fault, event->connect.status);
+    terminal();
+    return;
+  }
+  cleanup_handle_ = event->connect.conn_handle;
+  const int rc = lookup;
+  const auto &q = qualification_.identity;
+  const uint8_t type = q.type == IdentityType::Public ? BLE_ADDR_PUBLIC : BLE_ADDR_RANDOM;
+  if (rc || desc.peer_id_addr.type != type ||
+      std::memcmp(desc.peer_id_addr.val, q.address.data(), 6) != 0 ||
+      !policy_.connected(cleanup_handle_, now())) {
+    policy_.seal();
+    stop_pending_ = true;
+    emit(X5InputKind::Fault, rc ? rc : BLE_HS_EDISABLED);
+    return;
+  }
+  if (!Esp32BleHost::instance().peripheralConnected(this, token_.connection)) {
+    policy_.seal();
+    stop_pending_ = true;
+    emit(X5InputKind::Fault, BLE_HS_EDISABLED);
+    return;
+  }
+  emit(X5InputKind::Connected);
+  return;
+}
 int Esp32X5Peripheral::gap(ble_gap_event *event, void *arg) {
   auto &p = *static_cast<Esp32X5Peripheral *>(arg);
   CallbackGuard callback(p);
@@ -254,34 +282,9 @@ int Esp32X5Peripheral::gap(ble_gap_event *event, void *arg) {
     lookup = ble_gap_conn_find(event->connect.conn_handle, &desc);
   Guard lock(p);
   switch (event->type) {
-  case BLE_GAP_EVENT_CONNECT: {
-    p.advertising_ = false;
-    if (event->connect.status) {
-      p.emit(X5InputKind::Fault, event->connect.status);
-      p.terminal();
-      break;
-    }
-    p.cleanup_handle_ = event->connect.conn_handle;
-    const int rc = lookup;
-    const auto &q = p.qualification_.identity;
-    const uint8_t type = q.type == IdentityType::Public ? BLE_ADDR_PUBLIC : BLE_ADDR_RANDOM;
-    if (rc || desc.peer_id_addr.type != type ||
-        std::memcmp(desc.peer_id_addr.val, q.address.data(), 6) != 0 ||
-        !p.policy_.connected(p.cleanup_handle_, now())) {
-      p.policy_.seal();
-      p.stop_pending_ = true;
-      p.emit(X5InputKind::Fault, rc ? rc : BLE_HS_EDISABLED);
-      break;
-    }
-    if (!Esp32BleHost::instance().peripheralConnected(&p, p.token_.connection)) {
-      p.policy_.seal();
-      p.stop_pending_ = true;
-      p.emit(X5InputKind::Fault, BLE_HS_EDISABLED);
-      break;
-    }
-    p.emit(X5InputKind::Connected);
+  case BLE_GAP_EVENT_CONNECT:
+    p.connected(event, desc, lookup);
     break;
-  }
   case BLE_GAP_EVENT_SUBSCRIBE:
     if (event->subscribe.conn_handle == p.cleanup_handle_ &&
         event->subscribe.attr_handle == p.attributes_[1].handle) {
@@ -349,6 +352,17 @@ void Esp32X5Peripheral::barrier(ble_npl_event *event) {
   p.policy_.barrier();
   p.barrier_queued_ = false;
 }
+void Esp32X5Peripheral::cleanupReturned(bool stop, int rc) {
+  Guard lock(*this);
+  policy_.sdkExit();
+  if (stop && !rc) {
+    advertising_ = false;
+    terminal();
+  } else if (rc && rc != BLE_HS_EALREADY && rc != BLE_HS_ENOTCONN) {
+    emit(X5InputKind::Fault, rc);
+  }
+  // A missing SDK connection alone does not establish callback termination.
+}
 void Esp32X5Peripheral::cleanup() {
   uint16_t handle;
   bool stop;
@@ -375,17 +389,7 @@ void Esp32X5Peripheral::cleanup() {
     policy_.sdkEnter();
   }
   const int rc = stop ? ble_gap_adv_stop() : ble_gap_terminate(handle, BLE_ERR_REM_USER_CONN_TERM);
-  {
-    Guard lock(*this);
-    policy_.sdkExit();
-    if (stop && !rc) {
-      advertising_ = false;
-      terminal();
-    } else if (rc && rc != BLE_HS_EALREADY && rc != BLE_HS_ENOTCONN) {
-      emit(X5InputKind::Fault, rc);
-    }
-    // A missing SDK connection alone does not establish callback termination.
-  }
+  cleanupReturned(stop, rc);
 }
 void Esp32X5Peripheral::send() {
   X5ShutterRequest request;
@@ -422,7 +426,7 @@ void Esp32X5Peripheral::send() {
          cutoff);
   }
 }
-void Esp32X5Peripheral::workerStep() {
+void Esp32X5Peripheral::startHost() {
   auto &host = Esp32BleHost::instance();
   bool start = false;
   {
@@ -443,6 +447,42 @@ void Esp32X5Peripheral::workerStep() {
       stop_pending_ = true;
     }
   }
+}
+void Esp32X5Peripheral::submitAdvertising() {
+  auto &host = Esp32BleHost::instance();
+  int rc = ble_gap_adv_set_data(kAdvertisement, sizeof kAdvertisement);
+  if (!rc)
+    rc = ble_gap_adv_rsp_set_data(kName, sizeof kName);
+  bool admit;
+  uint32_t remaining = 0;
+  {
+    Guard lock(*this);
+    admit = !rc && connecting_ && !stop_pending_ && !due(now(), deadline_) &&
+            host.fault() == BleFault::None && nvsBootStatus().persistenceAllowed();
+    if (admit) {
+      remaining = deadline_ - now();
+      gap_entered_ = advertising_ = true;
+    }
+  }
+  if (admit) {
+    ble_gap_adv_params params{};
+    params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    rc = ble_gap_adv_start(host.wakeOwnAddressType(), nullptr, remaining, &params, gap, this);
+  } else if (!rc) {
+    rc = BLE_HS_EDISABLED;
+  }
+  Guard lock(*this);
+  policy_.sdkExit();
+  if (rc) {
+    advertising_ = false;
+    emit(X5InputKind::Fault, rc);
+    policy_.seal();
+    terminal(); // A failed start acquired no ongoing advertising procedure.
+  }
+}
+void Esp32X5Peripheral::startAdvertising() {
+  auto &host = Esp32BleHost::instance();
   bool advertise = false;
   {
     Guard lock(*this);
@@ -455,38 +495,13 @@ void Esp32X5Peripheral::workerStep() {
         policy_.sdkEnter();
     }
   }
-  if (advertise) {
-    int rc = ble_gap_adv_set_data(kAdvertisement, sizeof kAdvertisement);
-    if (!rc)
-      rc = ble_gap_adv_rsp_set_data(kName, sizeof kName);
-    bool admit;
-    uint32_t remaining = 0;
-    {
-      Guard lock(*this);
-      admit = !rc && connecting_ && !stop_pending_ && !due(now(), deadline_) &&
-              host.fault() == BleFault::None && nvsBootStatus().persistenceAllowed();
-      if (admit) {
-        remaining = deadline_ - now();
-        gap_entered_ = advertising_ = true;
-      }
-    }
-    if (admit) {
-      ble_gap_adv_params params{};
-      params.conn_mode = BLE_GAP_CONN_MODE_UND;
-      params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-      rc = ble_gap_adv_start(host.wakeOwnAddressType(), nullptr, remaining, &params, gap, this);
-    } else if (!rc) {
-      rc = BLE_HS_EDISABLED;
-    }
-    Guard lock(*this);
-    policy_.sdkExit();
-    if (rc) {
-      advertising_ = false;
-      emit(X5InputKind::Fault, rc);
-      policy_.seal();
-      terminal(); // A failed start acquired no ongoing advertising procedure.
-    }
-  }
+  if (advertise)
+    submitAdvertising();
+}
+void Esp32X5Peripheral::workerStep() {
+  auto &host = Esp32BleHost::instance();
+  startHost();
+  startAdvertising();
   send();
   cleanup();
   {

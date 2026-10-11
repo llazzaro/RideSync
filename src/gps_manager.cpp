@@ -14,32 +14,30 @@ void GpsManager::cancel() {
   if (release_key)
     power_->key(false);
 }
-void GpsManager::tick() {
-  if (stage_ == PowerStage::Cancelled || stage_ == PowerStage::InvalidClock)
-    return;
-  const auto now = clock_.snapshot();
-  if (now.monotonic_quality != MonotonicQuality::Valid ||
-      (started_ && now.session_id != session_)) {
-    if (power_ && stage_ == PowerStage::KeyActive)
-      power_->key(false);
-    stage_ = PowerStage::InvalidClock;
-    // A session reset during the power sequence must invalidate the modem
-    // even when it has not yet sampled any session; never start AT here.
-    auto invalid = now;
-    invalid.monotonic_quality = MonotonicQuality::InvalidSession;
-    modem_.tick(invalid);
-    if (consumer_)
-      consumer_->cancel();
-    if (completed_ != UINT32_MAX)
-      ++completed_; // Returned terminal AT service, no UART command/restart.
-    return;
-  }
+bool GpsManager::powerTimingValid() const {
+  return !(power_ &&
+           (timing_.key_active_ms == 0 || timing_.settle_ms == 0 || timing_.key_active_ms > 60000 ||
+            timing_.settle_ms > 60000 || timing_.pre_key_ms > 60000));
+}
+void GpsManager::invalidateClock(const RecordTimestamp &now) {
+  if (power_ && stage_ == PowerStage::KeyActive)
+    power_->key(false);
+  stage_ = PowerStage::InvalidClock;
+  // A session reset during the power sequence must invalidate the modem
+  // even when it has not yet sampled any session; never start AT here.
+  auto invalid = now;
+  invalid.monotonic_quality = MonotonicQuality::InvalidSession;
+  modem_.tick(invalid);
+  if (consumer_)
+    consumer_->cancel();
+  if (completed_ != UINT32_MAX)
+    ++completed_; // Returned terminal AT service, no UART command/restart.
+}
+bool GpsManager::startPowerSequence(const RecordTimestamp &now) {
   if (!started_) {
     if (!timing_.qualified || modem_.snapshot(now).state == ModemState::Disabled ||
-        (power_ &&
-         (timing_.key_active_ms == 0 || timing_.settle_ms == 0 || timing_.key_active_ms > 60000 ||
-          timing_.settle_ms > 60000 || timing_.pre_key_ms > 60000)))
-      return;
+        !powerTimingValid())
+      return false;
     started_ = true;
     session_ = now.session_id;
     start_ms_ = now.monotonic_ms;
@@ -55,6 +53,9 @@ void GpsManager::tick() {
     } else
       stage_ = PowerStage::Complete;
   }
+  return true;
+}
+void GpsManager::advancePowerSequence(const RecordTimestamp &now) {
   if (stage_ == PowerStage::PreKey && now.monotonic_ms - start_ms_ >= timing_.pre_key_ms) {
     power_->key(true);
     stage_ = PowerStage::KeyActive;
@@ -67,6 +68,19 @@ void GpsManager::tick() {
   }
   if (stage_ == PowerStage::Settling && now.monotonic_ms - start_ms_ >= timing_.settle_ms)
     stage_ = PowerStage::Complete;
+}
+void GpsManager::tick() {
+  if (stage_ == PowerStage::Cancelled || stage_ == PowerStage::InvalidClock)
+    return;
+  const auto now = clock_.snapshot();
+  if (now.monotonic_quality != MonotonicQuality::Valid ||
+      (started_ && now.session_id != session_)) {
+    invalidateClock(now);
+    return;
+  }
+  if (!startPowerSequence(now))
+    return;
+  advancePowerSequence(now);
   if (stage_ == PowerStage::Complete) {
     modem_.tick(now);
     if (consumer_)
@@ -82,10 +96,7 @@ bool GpsManager::restartAfterVerifiedBarrier() {
     return false;
   const auto now = clock_.snapshot();
   if (!timing_.qualified || now.monotonic_quality != MonotonicQuality::Valid ||
-      now.session_id == 0 ||
-      (power_ &&
-       (timing_.key_active_ms == 0 || timing_.settle_ms == 0 || timing_.key_active_ms > 60000 ||
-        timing_.settle_ms > 60000 || timing_.pre_key_ms > 60000)))
+      now.session_id == 0 || !powerTimingValid())
     return false;
   // Never send an AT command while our previously asserted PWRKEY is active.
   // Even a rejected restart leaves that interrupted power pulse fail-closed.
