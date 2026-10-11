@@ -9,8 +9,8 @@ The final default-threshold scan reports zero findings. All 426 original
 dispositions and the 37 first-pass helper candidates are now fixed in
 [the machine-readable record](2026-10-11-project-health.json). The first pass
 removed 330 candidates and reviewed 96; the subsequent pass also refactored
-those retained candidates and newly exposed functions. No reviewed warning,
-policy acceptance, threshold increase or source exclusion remains.
+those retained candidates and newly exposed functions. No reviewed warning remains. No project-health policy acceptance, threshold
+increase or analyzer exclusion was added.
 
 ## Analysis coverage
 
@@ -62,7 +62,10 @@ unchanged. All six replay tests pass.
 
 ## Verification
 
-The first integrated residual run passed 83 Python tests and 572 native cases.
+The final frozen pre-commit pipeline passed all 83 Python tests, 572 native
+cases, benchmark tests, Linux GCC/libstdc++ portability, Ruff and pinned
+clang-format checks. All 13 pinned firmware build environments passed against
+the final source. GPS resource and benchmark link-boundary audits passed.
 Focused final-tail tests cover commissioning, actual startup/watchdog deadlines,
 benchmark admission, BLE store/reset faults, foreign-membership conservation,
 callback lifetimes and SDK sequencing. Independent reviews checked production,
@@ -74,7 +77,8 @@ includes the extracted service frames, retaining its fixed 1024-byte helper
 reserve, 4096-byte application budget and 8192-byte SDK/RTOS reserve. The worst
 configuration path plus helper reserve uses 3088 bytes.
 
-Final integrated verification is in progress before delivery.
+The verified code commit is `19def7e`. CI is checked after pushing the
+verification record to `origin/main`.
 
 No firmware was flashed, and physical compatibility/support claims are unchanged.
 
