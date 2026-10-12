@@ -79,6 +79,10 @@ Its framing is separate from CE80. We have not validated its compatibility claim
 
 ## Commands and state
 
+Optional X5 timecode is investigated separately in [#50](x5_timecode.md).
+Native camera timecode is documented, but a usable BLE synchronization request
+for the current CE80 route remains unresolved; no clock-setting packet is enabled.
+
 The ESP32 community example reports a shutter button frame:
 `FC EF FE 86 00 03 01 02 00`. Treat it as a **toggle/button event**, not an
 idempotent recording-start command. Mode selection and current recording state
