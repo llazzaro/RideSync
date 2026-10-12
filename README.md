@@ -96,12 +96,16 @@ establish frame-accurate timecode alignment. Reviewed October 12, 2026.
 |---|---|---|---|
 | Insta360 | X5 | [Documented](https://onlinemanual.insta360.com/x5/en-us/operating_tutorials/step/tc): system time, manual alignment or external generator | Not implemented; BLE route unresolved in [#50](https://github.com/llazzaro/RideSync/issues/50) |
 | Insta360 | GO 3S / ONE RS | No native timecode support established in the reviewed documentation | Not implemented; outside current timecode scope |
-| GoPro | HERO12 Black | [Documented](https://www.youtube.com/watch?v=kr1POn9i6bQ): Quik timecode sync via QR | Not implemented; investigation in [#51](https://github.com/llazzaro/RideSync/issues/51) |
-| DJI Osmo | Action 4 / Action 5 Pro / Action 6 | [Documented](https://repair.dji.com/help/content?customId=01700007306&lang=en&paperDocType=ARTICLE&re=US&spaceId=17): model/mode restrictions apply | Not implemented; investigation in [#52](https://github.com/llazzaro/RideSync/issues/52) |
-| DJI Osmo | Osmo 360 | Native timecode support not established in the reviewed sources | Not implemented; assess separately in #52 |
+| GoPro | HERO12 Black | [Documented](https://www.youtube.com/watch?v=kr1POn9i6bQ): Quik timecode sync via QR | Not implemented; [BLE route unresolved](docs/gopro_timecode.md) in [#51](https://github.com/llazzaro/RideSync/issues/51) |
+| DJI Osmo | Action 4 / Action 5 Pro / Action 6 | [Documented](https://repair.dji.com/help/content?customId=01700007306&lang=en&paperDocType=ARTICLE&re=US&spaceId=17): model/mode restrictions apply | Not implemented; [BLE route unresolved per model](docs/dji_timecode.md) in [#52](https://github.com/llazzaro/RideSync/issues/52) |
+| DJI Osmo | Osmo 360 | Native timecode support not established in the reviewed sources | Not implemented; [separate assessment](docs/dji_timecode.md) in #52 |
 
 The [X5 investigation](docs/x5_timecode.md) records SDK leads, transport differences
 and the capture/footage evidence needed before implementing BLE synchronization.
+The [GoPro](docs/gopro_timecode.md) and [DJI](docs/dji_timecode.md) investigations
+inspect existing GitHub clock-setting solutions and distinguish their transport
+and precision from native timecode synchronization. GoPro's manual QR workflow
+is documented; conditional RideSync BLE implementation remains unresolved.
 For GO 3S, [app clock synchronization](https://onlinemanual.insta360.com/goultra/en-us/operating_tutorials/step/time-language)
 is documented; it is distinct from native timecode. See the
 [ONE RS manual](https://onlinemanual.insta360.com/oners/en-us) for that model's features.

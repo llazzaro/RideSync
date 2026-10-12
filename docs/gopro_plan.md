@@ -1,6 +1,9 @@
 # GoPro support plan
 
 Status: **opt-in HERO12 software adapter implemented; no hardware tests**.
+Optional BLE timecode synchronization remains unresolved in the
+[HERO12 investigation (#51)](gopro_timecode.md), which records clock commands,
+existing GitHub solutions and manual QR alternatives separately from support.
 Added 2026-10-07.
 The first target is **GoPro HERO12 Black**; record its installed firmware before
 activation and bench verification. Additional GoPro models require separate qualification. Use the official

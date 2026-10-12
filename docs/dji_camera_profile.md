@@ -3,6 +3,9 @@
 Issue [#47](https://github.com/llazzaro/RideSync/issues/47) implements the initial
 DJI recording adapter in the composed [bench application](bench_test_version.md).
 All four profiles remain **Experimental / Not tested** on physical cameras.
+The [timecode investigation (#52)](dji_timecode.md) finds BLE synchronization
+unresolved independently for Action 4/5 Pro/6; Osmo 360 native timecode capability
+remains unestablished. Clock/GPS timestamps do not establish timecode alignment.
 The first installed model and firmware have not been supplied. Record them in
 [#46](https://github.com/llazzaro/RideSync/issues/46) before bench execution;
 [#22](https://github.com/llazzaro/RideSync/issues/22) owns compatibility acceptance.
