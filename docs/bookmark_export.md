@@ -112,6 +112,10 @@ CSV as an assumed REAPER dialect.
 
 ## Verification and editor status
 
+The [three-marker REAPER acceptance bundle](software-results/2026-10-13-bookmark-editor/README.md)
+provides hashed synthetic inputs, generated outputs and exact expected positions
+for the remaining import check. It does not establish an observed REAPER import.
+
 Synthetic tests cover exact sidecar fields, session/ID/anchor validation,
 malformed middle and final rows, exclusive publication, camera audit skipping,
 explicit alignment, independent chapters, exact-duration/out-of-clip exclusion,

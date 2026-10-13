@@ -1,0 +1,15 @@
+{
+  "schema": "ridesync-alignment-v1",
+  "session_id": 7,
+  "clips": [
+    {
+      "path": "docs/software-results/2026-10-13-bookmark-editor/synthetic-clip.txt",
+      "sha256": "b1da8471a40aad65dd1a04cd77a37270f3be1207358fdf677eb45faa2388df64",
+      "duration_seconds": "5",
+      "clip_zero_session_ms": 10000,
+      "project_start_seconds": "30",
+      "method": "synthetic_fixed_offset",
+      "uncertainty_ms": 0
+    }
+  ]
+}

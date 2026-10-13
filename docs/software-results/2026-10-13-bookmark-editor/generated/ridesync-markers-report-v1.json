@@ -1,0 +1,58 @@
+{
+  "accepted_markers": 3,
+  "editor": {
+    "alignment": "explicit",
+    "clips": [
+      {
+        "clip_zero_session_ms": 10000,
+        "duration_seconds": "5",
+        "index": 1,
+        "method": "synthetic_fixed_offset",
+        "path": "docs/software-results/2026-10-13-bookmark-editor/synthetic-clip.txt",
+        "project_start_seconds": "30",
+        "sha256": "b1da8471a40aad65dd1a04cd77a37270f3be1207358fdf677eb45faa2388df64",
+        "uncertainty_ms": 0
+      }
+    ],
+    "outside_clip": 0,
+    "placed": 3,
+    "preview": [
+      {
+        "bookmark_id": 1,
+        "clip_index": 1,
+        "clip_seconds": "0",
+        "name": "RideSync 7:1 [clip 1]",
+        "project_seconds": "30"
+      },
+      {
+        "bookmark_id": 2,
+        "clip_index": 1,
+        "clip_seconds": "2.5",
+        "name": "RideSync 7:2 [clip 1]",
+        "project_seconds": "32.5"
+      },
+      {
+        "bookmark_id": 3,
+        "clip_index": 1,
+        "clip_seconds": "4.5",
+        "name": "RideSync 7:3 [clip 1]",
+        "project_seconds": "34.5"
+      }
+    ]
+  },
+  "excluded_tail_rows": 0,
+  "input_rows": 3,
+  "loss_evidence": {
+    "accepted": 3,
+    "dropped": 0,
+    "flushed": 3,
+    "lost": 0,
+    "rejected": 0,
+    "written": 3
+  },
+  "loss_evidence_available": true,
+  "schema": "ridesync-markers-v1",
+  "session_id": 7,
+  "source_schema": "#ridesync_telemetry,6",
+  "source_sha256": "1e69aa4ba643805e86482cf4654e5a2a86a9532e1a101daa20687fa9d45f730f"
+}

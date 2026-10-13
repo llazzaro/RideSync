@@ -1,5 +1,31 @@
 # GitHub issue review — 2026-10-07
 
+## Open-ticket readiness — 2026-10-13
+
+The current open inventory is #16, #22, #30, #31, #46, #50, #51, #52,
+#63 and #74. The earlier review below is dated history; #5 is now closed.
+Completed exporter and camera software does not satisfy the remaining editor,
+protocol-capture or physical acceptance criteria.
+
+| Issue | Remaining evidence and next action |
+| --- | --- |
+| [#63](https://github.com/llazzaro/RideSync/issues/63) | Portable bookmark export is delivered. Run one pinned REAPER import with three independently expected marker positions/names and preservation of an existing marker; actual import remains unobserved. See [software evidence](software-results/2026-10-13-bookmarks.md). |
+| [#74](https://github.com/llazzaro/RideSync/issues/74) | GPX components and hashed two-segment specimen are delivered. Observe Tracks and Track points in QGIS, including counts, elevation and disconnected segments, and retain a screenshot. See [software evidence](software-results/2026-10-13-gpx-export/README.md). |
+| [#50](https://github.com/llazzaro/RideSync/issues/50), [#51](https://github.com/llazzaro/RideSync/issues/51), [#52](https://github.com/llazzaro/RideSync/issues/52) | Source investigations have unresolved BLE timecode decisions. Obtain the specific SDK contract or annotated per-model capture described in the [X5](x5_timecode.md), [HERO12](gopro_timecode.md) and [DJI](dji_timecode.md) notes before conditional implementation. Ordinary clock setting does not establish native timecode synchronization. |
+| [#22](https://github.com/llazzaro/RideSync/issues/22), [#46](https://github.com/llazzaro/RideSync/issues/46) | Privately commission available cameras and execute the existing composed camera checks and staged matrix. Reuse matching isolated X5 observations; unavailable models remain Blocked. |
+| [#30](https://github.com/llazzaro/RideSync/issues/30) | Actual installation, protected supply, wiring and measurements remain required. Software shutdown policy does not qualify the electrical installation. |
+| [#31](https://github.com/llazzaro/RideSync/issues/31) | Declare configuration, budgets and fault methods in the [existing finite worksheet](release_bench_checklist.md), then execute the integrated bench campaign and eligible controlled ride. |
+| [#16](https://github.com/llazzaro/RideSync/issues/16) | Keep the roadmap open while required compatibility, installation and release milestones remain unresolved. |
+
+This readiness review creates no new tickets, hardware observations or completion
+claims. Follow the [acceptance policy](acceptance_policy.md) and reuse passing
+evidence for unchanged implementation.
+
+Prepared handoffs: [three-marker REAPER bundle](software-results/2026-10-13-bookmark-editor/README.md),
+[QGIS import worksheet](software-results/2026-10-13-qgis-import/README.md) and
+[per-model BLE timecode capture worksheet](timecode_capture_checklist.md).
+The editor imports and camera captures remain unobserved.
+
 ## Remaining work — 2026-10-10
 
 The owner requested an initial version to test, software-ticket completion with

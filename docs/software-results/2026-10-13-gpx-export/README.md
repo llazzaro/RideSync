@@ -72,6 +72,10 @@ for element in xml.findall(".//{http://www.topografix.com/GPX/1/1}extensions/*")
 
 ## Finite QGIS check — Blocked / Not run
 
+The [QGIS import handoff](../2026-10-13-qgis-import/README.md) provides the
+exact layer/geometry checks and an observation template for this specimen.
+It prepares the existing acceptance row; it records no successful import.
+
 Host: macOS 27.0, build 26A428 (`sw_vers`). No QGIS build/version is installed
 or exposed through the available app/tool inventory. Checks of `/Applications`,
 `command -v qgis`, Spotlight `mdfind 'kMDItemFSName == "QGIS*.app"c'` and Python

@@ -1,0 +1,4 @@
+schema,session_id,bookmark_id,monotonic_ms,source,gesture,anchor_quality,anchor_sequence,anchor_receipt_ms,anchor_utc_ms,anchor_age_ms,uncertainty_known,uncertainty_ms,utc_estimate_ms
+ridesync-markers-v1,7,1,10000,1,0,Missing,,,,,0,,
+ridesync-markers-v1,7,2,12500,1,0,Missing,,,,,0,,
+ridesync-markers-v1,7,3,14500,1,0,Missing,,,,,0,,

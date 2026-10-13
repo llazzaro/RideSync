@@ -1,0 +1,1 @@
+RideSync synthetic clip identity; declared duration 5 seconds.
