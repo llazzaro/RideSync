@@ -237,6 +237,9 @@ enable only qualified profiles through their documented commissioning API.
 the application startup barrier. A separately commissioned provider supplies
 qualified resources and frozen opaque peer mappings; saved settings alone grant
 no hardware admission. See [supervised startup](docs/supervision.md).
+The [guided camera setup investigation](docs/guided_camera_setup.md) recommends
+a serial wizard first, with qualification kept separate from saved preferences;
+the setup interface is planned, not implemented.
 The configurable registry capacity is 1–8 cameras; the shared central currently
 admits at most four peer slots and explicitly refuses a fifth. Neither bound is
 a measured BLE connection limit. See
