@@ -117,6 +117,18 @@ void reportDetails() {
       unsigned(status.gps.validity), unsigned(status.imu), unsigned(status.motion_admission),
       status.storage_error, status.storage.dropped, status.storage.lost,
       unsigned(status.worker_stalls), unsigned(status.worker_refused), unsigned(status.releasable));
+  const auto &bookmarks = status.kinds[static_cast<unsigned>(RecordKind::Bookmark)];
+  Serial.printf("BENCH bookmarks accepted=%u dropped=%u rejected=%u written=%u flushed=%u lost=%u; "
+                "admission is RAM acceptance, not durability.\n",
+                bookmarks.accepted, bookmarks.dropped, bookmarks.rejected, bookmarks.written,
+                bookmarks.flushed, bookmarks.lost);
+  if (application->control()) {
+    const auto marker = application->control()->status().control.bookmark;
+    Serial.printf("BENCH physical_marker outcome=%u session=%llu id=%u monotonic_ms=%llu\n",
+                  unsigned(marker.outcome), static_cast<unsigned long long>(marker.session_id),
+                  marker.bookmark_id,
+                  static_cast<unsigned long long>(marker.timestamp.monotonic_ms));
+  }
   const auto runtime = mixedCameraRuntime();
   const auto group = runtime.group.status();
   Serial.printf("BENCH intent=%s enabled=%u ready=%u observed_recording=%u observed_stopped=%u "
@@ -128,12 +140,12 @@ void reportDetails() {
     const auto &state = *runtime.manager.state(i);
     const auto &peer = group.peers[i];
     Serial.printf("BENCH peer=%u model=%u lifecycle=%u observed=%s acknowledged=%u pending=%u "
-                  "error=%u adapter_fault=%u query=%u wake=%u gps=%u\n",
+                  "error=%u adapter_fault=%u query=%u wake=%u gps=%u hilight=%u\n",
                   unsigned(i), unsigned(runtime.manager.configuredCamera(i)->model),
                   unsigned(state.lifecycle), observed(state.observed), unsigned(peer.acknowledged),
                   unsigned(peer.pending), unsigned(peer.error), unsigned(runtime.adapter.fault(i)),
                   unsigned(state.capabilities.query), unsigned(state.capabilities.wake),
-                  unsigned(state.capabilities.gps));
+                  unsigned(state.capabilities.gps), unsigned(state.capabilities.hilight));
     auto *session = application->telemetry()->owner().session();
     if (health.enabled && session) {
       const auto *current = session->health().snapshot(i);
@@ -233,6 +245,17 @@ void execute(BenchCommand command) {
     Serial.printf("BENCH stationary declaration admitted=%u; next qualified sample initializes "
                   "experimental motion.\n",
                   unsigned(benchArmStationaryReference()));
+    return;
+  }
+  if (command == BenchCommand::Mark) {
+    auto *telemetry = application ? application->telemetry() : nullptr;
+    const auto marker = submitBenchBookmark(telemetry ? &telemetry->owner() : nullptr);
+    Serial.printf("BENCH marker outcome=%u session=%llu id=%u monotonic_ms=%llu; "
+                  "admitted=%u means RAM queue acceptance, not durable storage or camera tag.\n",
+                  unsigned(marker.outcome), static_cast<unsigned long long>(marker.session_id),
+                  marker.bookmark_id,
+                  static_cast<unsigned long long>(marker.timestamp.monotonic_ms),
+                  unsigned(marker.outcome == BookmarkOutcome::Admitted));
     return;
   }
   if (!admitted(application)) {

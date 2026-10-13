@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 namespace ridesync {
-enum class ButtonAction { RecordingIntent, WakeReconnect, Resync };
+enum class ButtonAction { RecordingIntent, WakeReconnect, Resync, Bookmark };
 struct ButtonConfig {
   uint32_t debounce_ms = 20;
   uint32_t long_ms = 800;

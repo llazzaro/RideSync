@@ -52,6 +52,9 @@ public:
   }
   uint32_t healthCoalesced() const override { return hero_.healthCoalesced(); }
   uint32_t healthFailures() const override { return hero_.healthFailures(); }
+  bool attachMarkerAudit(CameraMarkerAudit &audit) override;
+  void detachMarkerAudit(const CameraMarkerAudit *expected) override;
+  CameraError requestHilight(uint8_t peer, CameraMarkerKey key) override;
   bool wakeSupported(uint8_t i) const override {
     return i == 0 && wake_config_.enabled && wake_config_.source_qualified;
   }
@@ -103,6 +106,7 @@ private:
   DjiAdapter dji_;
   CameraManager *manager_ = nullptr;
   RecordingManager *group_ = nullptr;
+  CameraMarkerAudit *marker_audit_ = nullptr;
   SourceConfig source_;
   std::array<bool, kMaxCameras> recovery_{};
   HealthProgress progress_;

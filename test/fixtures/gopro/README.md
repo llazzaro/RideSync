@@ -124,8 +124,9 @@ Observed/Confirmed HERO12 support.
 
 October 13 focused **Synthetic** verification: pinned native PlatformIO
 (`native@1.2.1`, Unity 2.6.1, C++11) with only `gopro_codec.cpp` and
-`gopro_setup_codec.cpp` selected passed 21/21 health-only cases (13 codec, eight setup). The temporary config was
-run with `pio test -c /tmp/ridesync-health-codec-only.ini -e native -f test_gopro_codec
+`gopro_setup_codec.cpp` selected passed 22/22 cases (14 codec, eight setup,
+including the independently concurrent HiLight case). The temporary config was
+run with `pio test -c /tmp/ridesync-health-codec.ini -e native -f test_gopro_codec
 -f test_gopro_setup_codec`; full-project checks remain the integration owner's
 responsibility. Direct Clang builds with `-Wall -Wextra -Werror` and with
 `-fsanitize=address,undefined -fno-omit-frame-pointer` also passed both suites.

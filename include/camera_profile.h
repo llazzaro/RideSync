@@ -45,5 +45,6 @@ struct Capabilities {
   CapabilityState query = CapabilityState::Unknown;
   CapabilityState wake = CapabilityState::Unknown;
   CapabilityState gps = CapabilityState::Unknown;
+  CapabilityState hilight = CapabilityState::Unsupported;
 };
 } // namespace ridesync

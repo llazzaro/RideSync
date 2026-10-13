@@ -11,8 +11,13 @@ enum class BenchCommand : uint8_t {
   Wake,
   Shutdown,
   Clear,
-  Stationary
+  Stationary,
+  Mark
 };
+class LocalTelemetryRuntime;
+struct BookmarkReceipt;
+BookmarkReceipt submitBenchBookmark(LocalTelemetryRuntime *runtime);
+
 enum class BenchConsoleError : uint8_t { None, Invalid, LostInput };
 // One serialized owner. A pass admits at most one complete command; a burst
 // containing another complete line loses admission rather than replaying intent.

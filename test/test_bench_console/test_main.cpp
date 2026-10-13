@@ -71,8 +71,32 @@ void malformed_never_becomes_command() {
   TEST_ASSERT_TRUE(c.take(cmd, error));
   TEST_ASSERT_EQUAL(static_cast<int>(BenchConsoleError::Invalid), static_cast<int>(error));
 }
+void marker_lines_repeat_and_bursts_refuse() {
+  BenchConsole c;
+  BenchCommand cmd;
+  BenchConsoleError error;
+  const char *valid[] = {"MARK\n", "MARK\r\n", "MARK\n"};
+  for (const char *line : valid) {
+    input(c, line);
+    TEST_ASSERT_TRUE(c.take(cmd, error));
+    TEST_ASSERT_EQUAL(static_cast<int>(BenchConsoleError::None), static_cast<int>(error));
+    // MARK appends to the nine existing command codes.
+    TEST_ASSERT_EQUAL(static_cast<int>(BenchCommand::Mark), static_cast<int>(cmd));
+  }
+  input(c, "MARK\nMARK\n");
+  TEST_ASSERT_TRUE(c.take(cmd, error));
+  TEST_ASSERT_EQUAL(static_cast<int>(BenchConsoleError::LostInput), static_cast<int>(error));
+  TEST_ASSERT_FALSE(c.take(cmd, error));
+  const char *invalid[] = {"mark\n", "MARK extra\n", "MARK\r\r\n"};
+  for (const char *line : invalid) {
+    input(c, line);
+    TEST_ASSERT_TRUE(c.take(cmd, error));
+    TEST_ASSERT_EQUAL(static_cast<int>(BenchConsoleError::Invalid), static_cast<int>(error));
+  }
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(marker_lines_repeat_and_bursts_refuse);
   RUN_TEST(exact_commands_and_partial_lines);
   RUN_TEST(burst_discards_intent_and_recovers);
   RUN_TEST(malformed_never_becomes_command);

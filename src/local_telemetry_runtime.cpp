@@ -283,7 +283,7 @@ void LocalTelemetryRuntime::requestStop() {
   status_.phase = TelemetryPhase::Stopping;
   revokeMotion();
   if (control_)
-    control_->revoke();
+    control_->reset(); // Retire a pending gesture even in camera-free sessions.
   if (status_.camera == CameraAdmission::Admitted) {
     group_.cancel();
     adapter_.stop();
@@ -309,6 +309,7 @@ bool LocalTelemetryRuntime::attachControl(HandlebarControl &c) {
   if (control_ || started_ || !c.binds(adapter_, manager_, group_))
     return false;
   control_ = &c;
+  c.bookmarkOwner(this);
   return true;
 }
 void LocalTelemetryRuntime::currentAdmission(bool cameras, bool safe_mode) {
@@ -338,8 +339,10 @@ void LocalTelemetryRuntime::supervision(uint8_t stalls, uint8_t refused, bool fa
     revokeMotion();
 }
 void LocalTelemetryRuntime::detachControl(HandlebarControl &c) {
-  if (control_ == &c && canRelease())
+  if (control_ == &c && canRelease()) {
+    c.bookmarkOwner(nullptr);
     control_ = nullptr;
+  }
 }
 void LocalTelemetryRuntime::observe() {
   status_.sd_completed = sd_.completed();

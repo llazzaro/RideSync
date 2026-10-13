@@ -15,6 +15,7 @@ struct Hero12Qualification {
   uint8_t firmware_size = 0;
   uint64_t api_major = 0, api_minor = 0;
   bool source_qualified = false, classic_profile_confirmed = false;
+  bool hilight_enabled = false;
   bool health_enabled = false;
   // Explicit commissioned ordinary-video premise. Encoding alone proves no mode.
   bool ordinary_video_confirmed = false;
@@ -51,6 +52,9 @@ public:
   Hero12RecoveryState recoveryState(uint8_t peer) const override;
   bool recoveryReady(uint8_t peer) const override;
   bool commandReady(uint8_t peer) const override;
+  bool attachMarkerAudit(CameraMarkerAudit &audit) override;
+  void detachMarkerAudit(const CameraMarkerAudit *expected) override;
+  CameraError requestHilight(uint8_t peer, CameraMarkerKey key) override;
   // Sealed links require replacement; Closed proves final per-peer host release.
   bool linkRetiring(uint8_t peer) const override;
   bool linkReleased(uint8_t peer) const override;
@@ -95,6 +99,8 @@ private:
   void advanceRecoveryPeer(uint8_t i);
   void unsolicitedStatus(uint8_t i, gopro::Channel route, const gopro::Message &message);
   void publishWireAck(uint8_t i);
+  void markerEvent(uint8_t i, CameraMarkerPhase phase, CameraError error, bool delivered = false);
+  void retireMarker(uint8_t i, CameraMarkerPhase phase, CameraError error);
   bool classicResponse(uint8_t i, gopro::Channel route, const gopro::Message &message);
   bool identityResponse(uint8_t i, gopro::Channel route, const gopro::Message &message);
   bool setupResponse(uint8_t i, gopro::Channel route, const gopro::Message &message);
@@ -117,6 +123,8 @@ private:
     ConfirmEncoding,
     QueryEncoding,
     KeepAlive,
+    MarkerCheckEncoding,
+    MarkerCommand,
     HealthRegister,
     HealthQuery
   };
@@ -143,7 +151,9 @@ private:
     bool busy_known = false, busy = false, ready_known = false, camera_ready = false;
     bool encoding_known = false, encoding = false, target_encoding = false;
     bool hardware_not_ready = false;
-    bool deferred_stop = false;
+    bool marker_active = false, marker_poisoned = false, deferred_stop = false;
+    CameraMarkerKey marker_key;
+    uint32_t marker_generation = 0, marker_deadline = 0;
     uint8_t hardware_attempts = 0;
     uint32_t fragment_started = 0;
     gopro::Channel fragment_route = gopro::Channel::Command;
@@ -179,6 +189,8 @@ private:
   uint8_t health_cursor_ = 0;
   bool health_admitted_ = false;
   RecordingManager *group_ = nullptr;
+  CameraMarkerAudit *marker_audit_ = nullptr;
+  uint32_t marker_generation_ = 0;
   HealthProgress progress_;
   BleCentral central_;
   gopro::Reassembler reassembler_;

@@ -32,6 +32,23 @@ ControlAdmission HandlebarControl::submit(ButtonAction action) {
     increment(status_.refused);
     return status_.admission = ControlAdmission::Inactive;
   }
+  if (action == ButtonAction::Bookmark) {
+    status_.bookmark = bookmark_owner_ ? bookmark_owner_->bookmark(BookmarkSource::Physical,
+                                                                   BookmarkGesture::Double)
+                                       : BookmarkReceipt{};
+    if (status_.bookmark.outcome == BookmarkOutcome::Admitted) {
+      increment(status_.accepted);
+      return status_.admission = ControlAdmission::Admitted;
+    }
+    if (status_.bookmark.outcome == BookmarkOutcome::Overflow) {
+      increment(status_.overflow);
+      return status_.admission = ControlAdmission::Overflow;
+    }
+    increment(status_.refused);
+    return status_.admission = status_.bookmark.outcome == BookmarkOutcome::Inactive
+                                   ? ControlAdmission::Inactive
+                                   : ControlAdmission::Refused;
+  }
   if (status_.local.camera != CameraAdmission::Admitted ||
       (action != ButtonAction::RecordingIntent && action != ButtonAction::WakeReconnect &&
        action != ButtonAction::Resync) ||
@@ -53,12 +70,15 @@ void HandlebarControl::beforeAdvance() {
     reset();
     return;
   }
-  if (status_.local.phase != TelemetryPhase::Running ||
-      status_.local.camera != CameraAdmission::Admitted) {
+  if (status_.local.phase != TelemetryPhase::Running) {
     count_ = 0;
     return;
   }
   button_.poll(input_, clock_.now());
+  if (status_.local.camera != CameraAdmission::Admitted) {
+    count_ = 0;
+    return;
+  }
   // Drain the bounded FIFO before the sole advancement. A STOP in this batch
   // retires earlier preparation before any recovery can dispatch REC.
   for (size_t i = 0; i < count_; ++i) {

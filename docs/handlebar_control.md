@@ -28,7 +28,7 @@ no second session, service binding, camera manager, session clock, logger or SD 
 ## Intent and cancellation policy
 
 - Only Running telemetry with CameraAdmission::Admitted and enabled cameras
-  admits actions. Local-only, safe-mode/refused camera, allocation and stopped
+  admits camera actions. Local-only, safe-mode/refused camera, allocation and stopped
   sessions refuse control while eligible independent local logging continues.
 - The first admitted RecordingIntent is explicit REC, even if startup observation
   already says Recording. Each enabled peer independently prepares through the
@@ -106,5 +106,16 @@ GPIO/control composition. Fixed ABI and individual compiler frames are software
 measurements, not physical stack/heap/latency or camera qualification.
 
 Original #22 retains all mixed-brand capacity/timing/logging-continuity work;
-#31 retains the full fault/8-hour-soak/controlled-ride matrix. Insta360 capture,
+#31 retains the finite fault/bench/controlled-ride matrix. Insta360 capture,
 estimator/reference and hardware qualification gates remain unchanged.
+
+## Local bookmark input
+
+The opted-in double Bookmark mapping uses the same serialized owner but bypasses
+the camera-action FIFO and camera admission gate. A Running camera-free session
+polls the button and calls its bound `LocalTelemetryRuntime::bookmark` route;
+REC/STOP/wake/resync retain their existing eligibility. Short/long Bookmark and
+a disabled double Bookmark mapping are refused. Defaults remain unchanged.
+See [activation, feedback and timing](bookmarks.md). Pending gestures are retired
+on reset/shutdown; `ControlStatus::bookmark` retains the physical result.
+No new LED acknowledgement pulse or haptic backend is enabled.

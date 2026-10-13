@@ -1,6 +1,7 @@
 #include "../fixtures/gopro/documentary_vectors.h"
 #include "../fixtures/gopro/health_vectors.h"
 #include "protocol/gopro_codec.h"
+#include <cstring>
 #include <initializer_list>
 
 #include <unity.h>
@@ -46,6 +47,38 @@ Message body(const uint8_t *b, size_t n) {
   for (size_t i = 0; i < n && i < 256; ++i)
     m.bytes[i] = b[i];
   return m;
+}
+void hilight_moment_uses_pinned_command_and_ack_shape() {
+  Packet packet;
+  TEST_ASSERT_TRUE(encode(Request::HilightMoment, packet));
+  TEST_ASSERT_EQUAL_INT((int)Channel::Command, (int)packet.channel);
+  TEST_ASSERT_EQUAL_UINT8(0x18, packet.id);
+  TEST_ASSERT_EQUAL_UINT(sizeof(gopro_fixture::hilight_moment), packet.size);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(gopro_fixture::hilight_moment, packet.bytes, packet.size);
+  TEST_ASSERT_TRUE(encode(Request::HilightMoment, packet, false));
+  const uint8_t compact[] = {0x01, 0x18};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(compact, packet.bytes, sizeof(compact));
+  TEST_ASSERT_EQUAL_UINT(sizeof(compact), packet.size);
+  Reassembler reassembler;
+  Message message;
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete,
+                        (int)reassembler.feed(0, Channel::Command, gopro_fixture::hilight_success,
+                                              sizeof(gopro_fixture::hilight_success), 1, message));
+  auto decoded = decode(Channel::Command, message);
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)decoded.outcome);
+  TEST_ASSERT_EQUAL_UINT8(0x18, decoded.id);
+  TEST_ASSERT_EQUAL_UINT8(0, decoded.result);
+  TEST_ASSERT_FALSE(decoded.encoding_known);
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete,
+                        (int)reassembler.feed(0, Channel::Command, gopro_fixture::hilight_rejected,
+                                              sizeof(gopro_fixture::hilight_rejected), 2, message));
+  decoded = decode(Channel::Command, message);
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)decoded.outcome);
+  TEST_ASSERT_EQUAL_UINT8(2, decoded.result);
+  const uint8_t unexpected_body[] = {0x18, 0, 1};
+  message.size = sizeof(unexpected_body);
+  std::memcpy(message.bytes, unexpected_body, message.size);
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid, (int)decode(Channel::Command, message).outcome);
 }
 void responses_preserve_ack_errors_unknown_and_explicit_state() {
   const uint8_t ack[] = {1, 0};
@@ -485,6 +518,7 @@ int main() {
   RUN_TEST(official_documentary_vectors_decode_end_to_end);
   RUN_TEST(documentary_info_bounds_and_packet_budget);
   RUN_TEST(documented_requests_and_routes);
+  RUN_TEST(hilight_moment_uses_pinned_command_and_ack_shape);
   RUN_TEST(responses_preserve_ack_errors_unknown_and_explicit_state);
   RUN_TEST(fragments_are_isolated_and_counters_tolerant);
   RUN_TEST(malformed_limits_interruption_timeout_reset);

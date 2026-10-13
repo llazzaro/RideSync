@@ -539,8 +539,9 @@ void setup() {
   Serial.println("Parked USB setup-only image: use the host setup wizard within 30 seconds. "
                  "Camera and peripheral workers remain isolated.");
 #elif defined(RIDESYNC_BENCH_APPLICATION)
-  Serial.println("Bench commands: STATUS CONNECT REC STOP QUERY WAKE SHUTDOWN CLEAR STATIONARY. "
-                 "Boot is idle.");
+  Serial.println(
+      "Bench commands: STATUS CONNECT REC STOP QUERY WAKE SHUTDOWN CLEAR STATIONARY MARK. "
+      "Boot is idle.");
 #else
   Serial.println("Optional workers require explicit commissioning. Serial C clears safe mode.");
 #endif

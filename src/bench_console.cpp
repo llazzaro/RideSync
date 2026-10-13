@@ -1,10 +1,16 @@
 #include "bench_console.h"
+#include "local_telemetry_runtime.h"
 #include <cstring>
 namespace ridesync {
+BookmarkReceipt submitBenchBookmark(LocalTelemetryRuntime *runtime) {
+  return runtime ? runtime->bookmark(BookmarkSource::Serial, BookmarkGesture::Serial)
+                 : BookmarkReceipt{};
+}
+
 void BenchConsole::parseCommand() {
-  const char *names[] = {"STATUS", "CONNECT",  "REC",   "STOP",      "QUERY",
-                         "WAKE",   "SHUTDOWN", "CLEAR", "STATIONARY"};
-  for (unsigned i = 0; i < 9; ++i)
+  const char *names[] = {"STATUS", "CONNECT",  "REC",   "STOP",       "QUERY",
+                         "WAKE",   "SHUTDOWN", "CLEAR", "STATIONARY", "MARK"};
+  for (unsigned i = 0; i < 10; ++i)
     if (!std::strcmp(line_, names[i])) {
       command_ = static_cast<BenchCommand>(i);
       error_ = BenchConsoleError::None;

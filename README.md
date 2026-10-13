@@ -260,6 +260,11 @@ button-to-camera wiring remain open.
 
 ## Implementation plan
 
+The [local bookmark implementation](docs/bookmarks.md) provides an opt-in serial
+`MARK` command, explicit double-press mapping and [offline marker export](docs/bookmark_export.md).
+[Optional HERO12 HiLights](docs/hero12_hilight.md) keep local admission, wire ACK
+and saved-clip confirmation separate; physical support remains unqualified.
+
 [Experimental camera health alerts](docs/camera_health_runtime.md) provide opt-in
 unexpected-stop/stale-evidence alerts and qualified HERO12 resource status through
 coherent serial/LED output and versioned logs. The [investigation](docs/camera_health_alerts.md)

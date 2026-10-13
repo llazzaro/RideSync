@@ -1,4 +1,5 @@
 #include "../fixtures/motion/evidence.h"
+#include "bench_console.h"
 #include "handlebar_control.h"
 #include "local_telemetry_runtime.h"
 #include "session_storage_owner.h"
@@ -781,7 +782,8 @@ void runtime_dynamic_options_reach_disk_and_missing_reference_is_refused() {
 void setUp() {}
 void tearDown() {}
 struct ControlInput : ButtonInput {
-  bool pressed() override { return false; }
+  bool down = false;
+  bool pressed() override { return down; }
 };
 struct ControlLed : LedSink {
   unsigned writes = 0;
@@ -790,6 +792,145 @@ struct ControlLed : LedSink {
     return 0;
   }
 };
+void serial_bookmark_owner_route_works_without_camera_or_utc() {
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Inactive, submitBenchBookmark(nullptr).outcome);
+  Rig f;
+  auto c = qualified();
+  c.bookmark_enabled = true;
+  c.imu_enabled = c.imu_qualified = false;
+  c.gps_record_ms = 60000;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Inactive, submitBenchBookmark(&r).outcome);
+  TEST_ASSERT_TRUE(r.start());
+  for (unsigned i = 0; i < 100 && r.status().phase != TelemetryPhase::Running; ++i)
+    f.pass(r);
+  const auto first = submitBenchBookmark(&r);
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Admitted, first.outcome);
+  TEST_ASSERT_FALSE(first.timestamp.has_utc_estimate);
+  const auto second = submitBenchBookmark(&r);
+  TEST_ASSERT_EQUAL_UINT32(first.bookmark_id + 1, second.bookmark_id);
+  TEST_ASSERT_EQUAL_UINT64(first.timestamp.monotonic_ms, second.timestamp.monotonic_ms);
+  TEST_ASSERT_EQUAL_UINT(0, f.host.calls);
+  f.finish(r);
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Inactive, submitBenchBookmark(&r).outcome);
+}
+void camera_free_bookmark_gesture_routes_locally_and_reset_drops_pending() {
+  Rig f;
+  auto c = qualified();
+  c.bookmark_enabled = true;
+  c.imu_enabled = c.imu_qualified = false;
+  c.gps_record_ms = 60000;
+  LocalTelemetryRuntime r(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  ControlInput input;
+  ControlLed sink;
+  HandlebarControl control(f.raw, f.adapter, f.manager, f.group, input, sink);
+  ButtonConfig buttons;
+  buttons.double_enabled = true;
+  buttons.double_action = ButtonAction::Bookmark;
+  TEST_ASSERT_TRUE(control.begin(buttons));
+  TEST_ASSERT_TRUE(r.attachControl(control));
+  TEST_ASSERT_TRUE(r.start());
+  for (unsigned i = 0; i < 100 && r.status().phase != TelemetryPhase::Running; ++i)
+    f.pass(r);
+  TEST_ASSERT_EQUAL_INT(TelemetryPhase::Running, r.status().phase);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Admitted, control.submit(ButtonAction::Bookmark));
+  TEST_ASSERT_EQUAL_UINT32(1, r.session()->storage().kindHealth(RecordKind::Bookmark).accepted);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Refused, control.submit(ButtonAction::RecordingIntent));
+  auto advance = [&](uint32_t dt, bool down) {
+    f.raw.value += dt;
+    input.down = down;
+    f.pass(r);
+  };
+  advance(21, false);
+  advance(1, true);
+  advance(21, true);
+  advance(1, false);
+  advance(21, false);
+  advance(1, true);
+  advance(21, true);
+  advance(1, false);
+  advance(21, false);
+  TEST_ASSERT_EQUAL_UINT32(2, r.session()->storage().kindHealth(RecordKind::Bookmark).accepted);
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Admitted, control.status().bookmark.outcome);
+  TEST_ASSERT_EQUAL_UINT32(2, control.status().bookmark.bookmark_id);
+  TEST_ASSERT_EQUAL_UINT(0, f.host.calls);
+  advance(1, true);
+  advance(21, true);
+  advance(1, false);
+  advance(21, false);
+  control.reset();
+  advance(400, false);
+  TEST_ASSERT_EQUAL_UINT32(2, r.session()->storage().kindHealth(RecordKind::Bookmark).accepted);
+  f.finish(r);
+  TEST_ASSERT_EQUAL_INT(ControlAdmission::Inactive, control.submit(ButtonAction::Bookmark));
+  r.detachControl(control);
+  TEST_ASSERT_TRUE(f.sd.fs.bytes.find("bookmark,") != std::string::npos);
+}
+void shutdown_rebinding_control_retires_camera_free_pending_gesture() {
+  Rig f;
+  auto c = qualified();
+  c.bookmark_enabled = true;
+  c.imu_enabled = c.imu_qualified = false;
+  c.gps_record_ms = 60000;
+  ControlInput input;
+  ControlLed sink;
+  HandlebarControl control(f.raw, f.adapter, f.manager, f.group, input, sink);
+  ButtonConfig buttons;
+  buttons.double_enabled = true;
+  buttons.double_action = ButtonAction::Bookmark;
+  TEST_ASSERT_TRUE(control.begin(buttons));
+  LocalTelemetryRuntime first(f.raw, f.uart, f.sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_TRUE(first.attachControl(control));
+  TEST_ASSERT_TRUE(first.start());
+  for (unsigned i = 0; i < 100 && first.status().phase != TelemetryPhase::Running; ++i)
+    f.pass(first);
+  auto press = [&](LocalTelemetryRuntime &runtime) {
+    input.down = true;
+    ++f.raw.value;
+    runtime.service();
+    f.raw.value += 21;
+    runtime.service();
+    input.down = false;
+    ++f.raw.value;
+    runtime.service();
+    f.raw.value += 21;
+    runtime.service();
+  };
+  f.raw.value += 21;
+  f.pass(first); // Arm the input before its first debounced press.
+  press(first);  // Pending first release of a possible double.
+  const auto old_session = first.session()->storage().sessionId();
+  f.finish(first);
+  first.detachControl(control);
+  SdWorker next_sd;
+  next_sd.ledger.slots = f.sd.ledger.slots; // Preserve the allocated identity namespace.
+  LocalTelemetryRuntime next(f.raw, f.uart, next_sd, f.imu, f.adapter, f.manager, f.group, c);
+  TEST_ASSERT_TRUE(next.attachControl(control));
+  TEST_ASSERT_TRUE(next.start());
+  for (unsigned i = 0; i < 100 && next.status().phase != TelemetryPhase::Running; ++i) {
+    next.service();
+    next_sd.step();
+    ++f.raw.value;
+  }
+  TEST_ASSERT_EQUAL_INT(TelemetryPhase::Running, next.status().phase);
+  TEST_ASSERT_NOT_EQUAL(old_session, next.session()->storage().sessionId());
+  f.raw.value += 21;
+  next.service(); // Re-arm a retired gesture manager while released.
+  press(next);    // Must be a fresh first press, not half of the old double.
+  TEST_ASSERT_EQUAL_UINT32(0, next.session()->storage().kindHealth(RecordKind::Bookmark).accepted);
+  press(next);
+  TEST_ASSERT_EQUAL_UINT32(1, next.session()->storage().kindHealth(RecordKind::Bookmark).accepted);
+  TEST_ASSERT_EQUAL_UINT32(1, control.status().bookmark.bookmark_id);
+  TEST_ASSERT_EQUAL_UINT(0, f.host.calls);
+  next.requestStop();
+  for (unsigned i = 0; i < 1000 && !next.canRelease(); ++i) {
+    next.service();
+    next_sd.step();
+    ++f.raw.value;
+  }
+  TEST_ASSERT_TRUE(next.canRelease());
+  next.detachControl(control);
+}
 void runtime_control_reuses_one_camera_pass_and_copied_local_observations() {
   Rig f;
   SourceConfig cameras;
@@ -1039,6 +1180,9 @@ int main() {
   RUN_TEST(late_identity_completion_cannot_bypass_owner_startup_deadline);
   RUN_TEST(blocked_identity_startup_cancels_at_deadline_without_releasing_worker);
   RUN_TEST(control_copies_terminal_startup_refusal_even_without_worker);
+  RUN_TEST(serial_bookmark_owner_route_works_without_camera_or_utc);
+  RUN_TEST(camera_free_bookmark_gesture_routes_locally_and_reset_drops_pending);
+  RUN_TEST(shutdown_rebinding_control_retires_camera_free_pending_gesture);
   RUN_TEST(runtime_control_reuses_one_camera_pass_and_copied_local_observations);
   RUN_TEST(local_camera_refusal_keeps_control_ineligible_and_local_storage_running);
   RUN_TEST(runtime_stop_before_gps_startup_never_touches_power_or_uart);

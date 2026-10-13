@@ -92,6 +92,37 @@ void MixedCameraAdapter::detachGroup(const RecordingManager *g) {
     dji_.detachGroup(g);
   }
 }
+bool MixedCameraAdapter::attachMarkerAudit(CameraMarkerAudit &audit) {
+  if (marker_audit_ && marker_audit_ != &audit)
+    return false;
+  if (!hero_.attachMarkerAudit(audit))
+    return false;
+  marker_audit_ = &audit;
+  return true;
+}
+void MixedCameraAdapter::detachMarkerAudit(const CameraMarkerAudit *expected) {
+  if (marker_audit_ != expected)
+    return;
+  hero_.detachMarkerAudit(expected);
+  marker_audit_ = nullptr;
+}
+CameraError MixedCameraAdapter::requestHilight(uint8_t peer, CameraMarkerKey key) {
+  if (!key.session_id || !key.bookmark_id || peer >= source_.count)
+    return CameraError::InvalidPeer;
+  if (stopped_ || !source_.cameras[peer].enabled)
+    return CameraError::Disabled;
+  if (source_.cameras[peer].model == CameraModel::HERO12_BLACK)
+    return hero_.requestHilight(peer, key);
+  if (marker_audit_) {
+    CameraMarkerEvent event;
+    event.key = key;
+    event.peer = peer;
+    event.phase = CameraMarkerPhase::RequestRefused;
+    event.error = static_cast<uint8_t>(CameraError::Unsupported);
+    marker_audit_->markerEvent(event);
+  }
+  return CameraError::Unsupported;
+}
 RetryPolicy MixedCameraAdapter::managerPolicy() {
   RetryPolicy p;
   p.timeout_ms = 120000;

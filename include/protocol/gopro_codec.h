@@ -18,7 +18,8 @@ enum class Request {
   RegisterEncoding,
   RegisterReady,
   GetHealth,
-  RegisterHealth
+  RegisterHealth,
+  HilightMoment
 };
 // Classic one-byte IDs, qualified against the pinned Open GoPro SDK. Resource
 // semantics still require the adapter's exact-model and ordinary-video profile.

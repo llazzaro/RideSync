@@ -417,8 +417,29 @@ void appended_models_roundtrip_and_legacy_bytes_remain_identical() {
     TEST_ASSERT_EQUAL_UINT8_ARRAY(record.bytes.data(), again.bytes.data(), record.size);
   }
 }
+void bookmark_mapping_roundtrips_without_changing_defaults() {
+  auto c = camera();
+  c.button.double_enabled = true;
+  c.button.double_action = ButtonAction::Bookmark;
+  ConfigRecord record;
+  TEST_ASSERT_EQUAL_INT(PersistStatus::Encoded, encodeConfig(c, 8, record).status);
+  SourceConfig out;
+  uint64_t generation = 0;
+  TEST_ASSERT_EQUAL_INT(PersistStatus::Loaded, decodeConfig(record, out, generation).status);
+  TEST_ASSERT_EQUAL_UINT64(8, generation);
+  TEST_ASSERT_TRUE(out.button.double_enabled);
+  TEST_ASSERT_EQUAL_INT(ButtonAction::Bookmark, out.button.double_action);
+  TEST_ASSERT_EQUAL_INT(ButtonAction::RecordingIntent, out.button.short_action);
+  TEST_ASSERT_EQUAL_INT(ButtonAction::WakeReconnect, out.button.long_action);
+  ConfigRecord again;
+  TEST_ASSERT_EQUAL_INT(PersistStatus::Encoded, encodeConfig(out, 8, again).status);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(record.bytes.data(), again.bytes.data(), record.size);
+  c.button.double_enabled = false;
+  TEST_ASSERT_EQUAL_INT(PersistStatus::Invalid, encodeConfig(c, 8, again).status);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(bookmark_mapping_roundtrips_without_changing_defaults);
   RUN_TEST(appended_models_roundtrip_and_legacy_bytes_remain_identical);
   RUN_TEST(wake_identifiers_roundtrip_without_schema_change);
   RUN_TEST(refusal_during_write_must_discard_pending);

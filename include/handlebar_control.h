@@ -15,6 +15,7 @@ struct ControlStatus {
   LedState led = LedState::Off;
   int led_error = 0;
   ControlAdmission admission = ControlAdmission::Inactive;
+  BookmarkReceipt bookmark;
   uint32_t accepted = 0, refused = 0, overflow = 0, discarded = 0;
 };
 // Same serialized application owner as LocalTelemetryRuntime. No tasks, clocks,
@@ -32,6 +33,8 @@ public:
   bool retiring(size_t) const override;
   bool released(size_t) const override;
   ControlAdmission submit(ButtonAction);
+  // Bound by the one telemetry owner; cleared only after its final release.
+  void bookmarkOwner(LocalTelemetryRuntime *owner) { bookmark_owner_ = owner; }
   void beforeAdvance() override;
   void admission(const LocalTelemetryStatus &);
   bool binds(const CameraRuntimePort &, const CameraManager &, const RecordingManager &) const;
@@ -42,6 +45,7 @@ public:
 
 private:
   void observeDevices(const LocalTelemetryStatus &);
+  LocalTelemetryRuntime *bookmark_owner_ = nullptr;
   Clock &clock_;
   CameraRuntimePort &adapter_;
   CameraManager &manager_;

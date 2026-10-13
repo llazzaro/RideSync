@@ -152,7 +152,7 @@ void invalid_configuration_and_gpio() {
   c.long_action = static_cast<ButtonAction>(-1);
   TEST_ASSERT_FALSE(validateButtonConfig(c));
   c = ButtonConfig();
-  c.double_action = static_cast<ButtonAction>(3);
+  c.double_action = static_cast<ButtonAction>(4);
   TEST_ASSERT_FALSE(validateButtonConfig(c));
   ButtonGpioConfig g;
   TEST_ASSERT_FALSE(validateButtonGpioConfig(g));
@@ -176,8 +176,44 @@ void invalid_configuration_and_gpio() {
   g.board_qualified = false;
   TEST_ASSERT_FALSE(validateButtonGpioConfig(g));
 }
+void opt_in_double_bookmark_preserves_single_and_long() {
+  Harness h;
+  ButtonConfig c;
+  c.debounce_ms = 10;
+  c.long_ms = 100;
+  c.double_ms = 50;
+  c.double_enabled = true;
+  c.double_action = ButtonAction::Bookmark;
+  TEST_ASSERT_TRUE(h.manager.begin(c, Harness::event, &h));
+  h.arm();
+  h.press(20);
+  h.release(40);
+  h.press(79);
+  h.release(100);
+  TEST_ASSERT_EQUAL_UINT(1, h.count);
+  TEST_ASSERT_EQUAL_INT(ButtonAction::Bookmark, h.actions[0]);
+  h.press(200);
+  h.release(220);
+  h.tick(280, false);
+  TEST_ASSERT_EQUAL_UINT(2, h.count);
+  TEST_ASSERT_EQUAL_INT(ButtonAction::RecordingIntent, h.actions[1]);
+  h.press(300);
+  h.tick(410, true);
+  h.release(420);
+  TEST_ASSERT_EQUAL_UINT(3, h.count);
+  TEST_ASSERT_EQUAL_INT(ButtonAction::WakeReconnect, h.actions[2]);
+  c.double_enabled = false;
+  TEST_ASSERT_FALSE(validateButtonConfig(c));
+  c.double_enabled = true;
+  c.short_action = ButtonAction::Bookmark;
+  TEST_ASSERT_FALSE(validateButtonConfig(c));
+  c.short_action = ButtonAction::RecordingIntent;
+  c.long_action = ButtonAction::Bookmark;
+  TEST_ASSERT_FALSE(validateButtonConfig(c));
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(opt_in_double_bookmark_preserves_single_and_long);
   RUN_TEST(bounce_and_repeated_short);
   RUN_TEST(held_startup_and_long_boundary);
   RUN_TEST(short_before_long_and_release_at_long);

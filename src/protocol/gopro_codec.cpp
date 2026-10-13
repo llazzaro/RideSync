@@ -70,6 +70,7 @@ bool encode(Request request, Packet &packet, bool extended) {
       {Request::RegisterBusy, Channel::Query, {0x53, 0x8}, 2},
       {Request::RegisterEncoding, Channel::Query, {0x53, 0xa}, 2},
       {Request::RegisterReady, Channel::Query, {0x53, 0x52}, 2},
+      {Request::HilightMoment, Channel::Command, {0x18}, 1},
   };
   const WireRequest *spec = nullptr;
   for (const auto &candidate : requests)
@@ -101,7 +102,7 @@ bool recognizedResponse(Channel channel, uint8_t id) {
   case Channel::Query:
     return queryResponse(channel, id);
   case Channel::Command:
-    return id == 1 || id == 0x3e || id == 0x3c || id == 0x51;
+    return id == 1 || id == 0x18 || id == 0x3e || id == 0x3c || id == 0x51;
   case Channel::Settings:
     return id == 0x5b;
   default:

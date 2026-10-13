@@ -59,6 +59,14 @@ struct Peripheral : X5PeripheralPort {
   bool released(uint32_t) const override { return true; }
   void service(uint32_t) override {}
 };
+struct MarkerSink : CameraMarkerAudit {
+  unsigned unsupported = 0;
+  void markerEvent(const CameraMarkerEvent &event) override {
+    if (event.phase == CameraMarkerPhase::RequestRefused &&
+        event.error == static_cast<uint8_t>(CameraError::Unsupported))
+      ++unsupported;
+  }
+};
 void test_mixed_connect_routes_and_advances_once() {
   Time t;
   Host h;
@@ -116,6 +124,12 @@ void test_mixed_connect_routes_and_advances_once() {
   TEST_ASSERT_TRUE(m.configure(c).ok());
   TEST_ASSERT_TRUE(a.configure(c, q));
   TEST_ASSERT_TRUE(a.start(true, true));
+  MarkerSink marker_sink;
+  TEST_ASSERT_TRUE(a.attachMarkerAudit(marker_sink));
+  for (uint8_t i = 0; i < 3; ++i)
+    TEST_ASSERT_EQUAL(CameraError::Unsupported, a.requestHilight(i, CameraMarkerKey(42, i + 1)));
+  TEST_ASSERT_EQUAL_UINT(3, marker_sink.unsupported);
+  TEST_ASSERT_EQUAL_UINT(0, h.commands.size());
   TEST_ASSERT_EQUAL(GroupError::None, g.request(RecordingState::Recording));
   auto ticks = m.ticks();
   auto advances = g.advancements();

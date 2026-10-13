@@ -57,6 +57,8 @@ unsigned action(ButtonAction a) {
     return 1;
   case ButtonAction::Resync:
     return 2;
+  case ButtonAction::Bookmark:
+    return 3;
   }
   return 255;
 }
@@ -140,9 +142,9 @@ bool decodeButtonSettings(Reader &reader, SourceConfig &c) {
   b.double_ms = uint32_t(reader.number(4));
   b.double_enabled = reader.boolean();
   const ButtonAction actions[] = {ButtonAction::RecordingIntent, ButtonAction::WakeReconnect,
-                                  ButtonAction::Resync};
+                                  ButtonAction::Resync, ButtonAction::Bookmark};
   auto a = reader.number(1), l = reader.number(1), d = reader.number(1);
-  if (a > 2 || l > 2 || d > 2)
+  if (a > 3 || l > 3 || d > 3)
     return false;
   b.short_action = actions[a];
   b.long_action = actions[l];

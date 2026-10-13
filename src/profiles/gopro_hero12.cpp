@@ -100,6 +100,88 @@ void Hero12Adapter::detachHealthSink(const CameraHealthSampleSink *expected) {
     h.registered = h.bootstrapped = true; // No replay into a replacement owner.
   }
 }
+bool Hero12Adapter::attachMarkerAudit(CameraMarkerAudit &audit) {
+  if (marker_audit_ && marker_audit_ != &audit)
+    return false;
+  marker_audit_ = &audit;
+  return true;
+}
+void Hero12Adapter::detachMarkerAudit(const CameraMarkerAudit *expected) {
+  if (marker_audit_ != expected)
+    return;
+  for (uint8_t i = 0; i < kBlePeers; ++i)
+    retireMarker(i, CameraMarkerPhase::Cancelled, CameraError::Cancelled);
+  marker_audit_ = nullptr;
+}
+void Hero12Adapter::markerEvent(uint8_t i, CameraMarkerPhase phase, CameraError error,
+                                bool delivered) {
+  if (!marker_audit_)
+    return;
+  const auto &p = peers_[i];
+  CameraMarkerEvent event;
+  event.key = p.marker_key;
+  event.peer = i;
+  event.connection_generation = p.connection;
+  event.operation_generation = p.marker_generation;
+  event.phase = phase;
+  event.error = static_cast<uint8_t>(error);
+  event.delivery_admitted = delivered;
+  marker_audit_->markerEvent(event);
+}
+void Hero12Adapter::retireMarker(uint8_t i, CameraMarkerPhase phase, CameraError error) {
+  auto &p = peers_[i];
+  if (!p.marker_active)
+    return;
+  // An unanswered Hilight command may still be applied by the camera. Do not
+  // accept another marker on this connection after that ambiguity.
+  if (p.step == Step::MarkerCommand && phase != CameraMarkerPhase::WireAck)
+    p.marker_poisoned = true;
+  markerEvent(i, phase, error);
+  p.marker_active = false;
+  if (p.step == Step::MarkerCheckEncoding || p.step == Step::MarkerCommand)
+    p.step = Step::None;
+  if (p.resume == Step::MarkerCheckEncoding || p.resume == Step::MarkerCommand)
+    p.resume = Step::None;
+  reassembler_.reset(i, gopro::Channel::Command);
+  reassembler_.reset(i, gopro::Channel::Query);
+}
+CameraError Hero12Adapter::requestHilight(uint8_t i, CameraMarkerKey key) {
+  if (i >= kBlePeers || !key.session_id || !key.bookmark_id)
+    return CameraError::InvalidPolicy;
+  auto &p = peers_[i];
+  auto refuse = [&](CameraError error) {
+    if (marker_audit_) {
+      CameraMarkerEvent event;
+      event.key = key;
+      event.peer = i;
+      event.phase = CameraMarkerPhase::RequestRefused;
+      event.error = static_cast<uint8_t>(error);
+      marker_audit_->markerEvent(event);
+    }
+    return error;
+  };
+  if (!p.qualification.hilight_enabled)
+    return refuse(CameraError::Unsupported);
+  if (!marker_audit_ || !enabled_ || !manager_ || p.sealed || !p.ready || !p.qualified ||
+      manager_->sealed(i) || !manager_->state(i) ||
+      manager_->state(i)->lifecycle != Lifecycle::Ready)
+    return refuse(CameraError::NotConnected);
+  if ((p.busy_known && p.busy) || p.marker_poisoned || p.marker_active || p.step != Step::None ||
+      p.deferred_stop || !central_.admissionOpen(i) ||
+      (group_ && group_->status().intent == RecordingState::Stopped))
+    return refuse(CameraError::Busy);
+  if (marker_generation_ >= UINT32_MAX - Token::kHeadroom)
+    return refuse(CameraError::InvalidPolicy);
+  p.marker_key = key;
+  p.marker_generation = ++marker_generation_;
+  p.marker_deadline = clock_.now() + 1500;
+  p.marker_active = true;
+  if (!send(i, Step::MarkerCheckEncoding)) {
+    retireMarker(i, CameraMarkerPhase::RequestRefused, CameraError::Busy);
+    return CameraError::Busy;
+  }
+  return CameraError::None;
+}
 RetryPolicy Hero12Adapter::managerPolicy() {
   RetryPolicy p;
   p.timeout_ms = 120000;
@@ -152,7 +234,10 @@ bool Hero12Adapter::admitPacket(uint8_t i, Step step, const OutgoingPacket &out)
   p.expected_id = out.id;
   p.expected_status = out.status;
   p.write_endpoint = endpoint;
-  p.deadline = clock_.now() + (healthStep(step) ? 1000 : kCameraResponseMs);
+  p.deadline = clock_.now() + (healthStep(step) ? 1000
+                               : step == Step::MarkerCheckEncoding || step == Step::MarkerCommand
+                                   ? 600
+                                   : kCameraResponseMs);
   if (out.route == gopro::Channel::Query && out.id == 0x13) {
     auto &health = health_poll_[i];
     health.query_known = true;
@@ -163,6 +248,8 @@ bool Hero12Adapter::admitPacket(uint8_t i, Step step, const OutgoingPacket &out)
   p.att_done = p.camera_done = false;
   p.waiting_write = true;
   p.fragment = false;
+  if (step == Step::MarkerCommand)
+    markerEvent(i, CameraMarkerPhase::Attempt, CameraError::None, true);
   return true;
 }
 bool Hero12Adapter::reached(uint32_t now, uint32_t deadline) {
@@ -352,6 +439,8 @@ bool Hero12Adapter::beginConnection(uint8_t i, Token token) {
 }
 bool Hero12Adapter::beginCommand(uint8_t i, Operation op, Token token) {
   auto &p = peers_[i];
+  if (p.marker_active)
+    retireMarker(i, CameraMarkerPhase::Cancelled, CameraError::Cancelled);
   if (!p.ready || p.sealed ||
       (p.step != Step::None && p.step != Step::KeepAlive && !healthStep(p.step)) ||
       p.connection != token.connection ||
@@ -413,6 +502,7 @@ void Hero12Adapter::retire(uint8_t i, Hero12Fault fault) {
   auto &p = peers_[i];
   if (p.sealed)
     return;
+  retireMarker(i, CameraMarkerPhase::Cancelled, CameraError::Cancelled);
   p.sealed = true;
   p.connecting = p.ready = false;
   p.step = Step::None;
@@ -513,6 +603,9 @@ const Hero12Adapter::StepSpec &Hero12Adapter::stepSpec(Step step) {
       {gopro::Request::GetEncoding, 10, CameraAckAction::QueryEncoding, Step::None,
        true},                                                                  // QueryEncoding
       {gopro::Request::KeepAlive, 0, CameraAckAction::None, Step::None, true}, // KeepAlive
+      {gopro::Request::GetEncoding, 10, CameraAckAction::None, Step::None,
+       true}, // MarkerCheckEncoding
+      {gopro::Request::HilightMoment, 0, CameraAckAction::None, Step::None, true}, // MarkerCommand
   };
   const auto index = static_cast<size_t>(step);
   return specs[index < sizeof(specs) / sizeof(specs[0]) ? index : 0];
@@ -615,6 +708,7 @@ bool Hero12Adapter::requestedStatusPresent(const Peer &p, const gopro::Response 
   case Step::GetEncoding:
   case Step::QueryEncoding:
   case Step::ConfirmEncoding:
+  case Step::MarkerCheckEncoding:
     return r.encoding_known;
   case Step::GetReady:
     return r.ready_known;
@@ -678,6 +772,21 @@ bool Hero12Adapter::classicResponse(uint8_t i, gopro::Channel route,
       ++health_failures_;
     return false;
   }
+  if (p.step == Step::MarkerCheckEncoding || p.step == Step::MarkerCommand) {
+    if (p.step == Step::MarkerCheckEncoding && r.outcome == gopro::Outcome::Complete &&
+        r.result == 0 && !requestedStatusPresent(p, r))
+      return false; // A late multi-field health reply cannot authorize this marker.
+    if (r.outcome != gopro::Outcome::Complete || r.result != 0 ||
+        (p.step == Step::MarkerCheckEncoding && !r.encoding_known)) {
+      retireMarker(i, CameraMarkerPhase::Failed,
+                   r.outcome == gopro::Outcome::Complete ? CameraError::Transport
+                                                         : CameraError::InvalidPolicy);
+      return false;
+    }
+    if (r.encoding_known)
+      observe(i, r.encoding, false);
+    return true;
+  }
   if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
     retire(i, r.outcome == gopro::Outcome::Complete ? Hero12Fault::CameraRejected
                                                     : Hero12Fault::Protocol);
@@ -717,6 +826,10 @@ bool Hero12Adapter::completeCameraResponse(uint8_t i, gopro::Channel route,
 }
 void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::Message &message) {
   auto &p = peers_[i];
+  if (p.marker_active && reached(clock_.now(), p.marker_deadline)) {
+    retireMarker(i, CameraMarkerPhase::Failed, CameraError::Timeout);
+    return;
+  }
   // Central dispatches queued notifications before service() checks deadlines.
   // Retire the expired transaction before any status mutation or wire-ACK hook.
   if (p.step != Step::None && reached(clock_.now(), p.deadline)) {
@@ -724,7 +837,10 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
       finishHealth(i, true);
       return;
     }
-    retire(i, Hero12Fault::Timeout);
+    if (p.marker_active)
+      retireMarker(i, CameraMarkerPhase::Failed, CameraError::Timeout);
+    else
+      retire(i, Hero12Fault::Timeout);
     return;
   }
   if (route == gopro::Channel::Query && message.size >= 2 && message.bytes[0] == 0x93) {
@@ -735,7 +851,8 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
     return; // Unrelated notification is never a transaction completion.
   if (!completeCameraResponse(i, route, message))
     return;
-  publishWireAck(i);
+  if (p.step != Step::MarkerCheckEncoding && p.step != Step::MarkerCommand)
+    publishWireAck(i);
   p.camera_done = true;
 }
 Hero12Adapter::Step Hero12Adapter::advanceHardware(uint8_t i) {
@@ -764,6 +881,8 @@ Hero12Adapter::Step Hero12Adapter::advanceReady(uint8_t i) {
     p.keepalive_due = clock_.now() + kKeepAliveMs;
     Event e(i, p.token, EventKind::Completed);
     e.capabilities.start = e.capabilities.stop = e.capabilities.query = CapabilityState::Supported;
+    e.capabilities.hilight =
+        p.qualification.hilight_enabled ? CapabilityState::Supported : CapabilityState::Unsupported;
     enqueue(e);
     // Publish initial state only after the manager accepts Connect completion.
     Event observed(i, p.connection, EventKind::RecordingObserved);
@@ -822,7 +941,23 @@ Hero12Adapter::Step Hero12Adapter::nextStep(uint8_t i, Step done) {
     p.keepalive_due = clock_.now() + kKeepAliveMs;
     next = p.resume;
     p.resume = Step::None;
+    if (next == Step::MarkerCommand &&
+        (!p.marker_active || !p.encoding_known || !p.encoding || (p.busy_known && p.busy))) {
+      retireMarker(i, CameraMarkerPhase::RequestRefused, CameraError::Busy);
+      return Step::None;
+    }
     break;
+  case Step::MarkerCheckEncoding:
+    if (!p.marker_active || !p.encoding_known || !p.encoding || !manager_ ||
+        manager_->state(i)->lifecycle != Lifecycle::Ready) {
+      retireMarker(i, CameraMarkerPhase::RequestRefused, CameraError::NotConnected);
+      return Step::None;
+    }
+    return Step::MarkerCommand;
+  case Step::MarkerCommand:
+    if (p.marker_active)
+      retireMarker(i, CameraMarkerPhase::WireAck, CameraError::None);
+    return Step::None;
   default:
     break;
   }
@@ -839,8 +974,12 @@ void Hero12Adapter::advance(uint8_t i) {
   }
   p.step = Step::None;
   const auto next = nextStep(i, done);
-  if (next != Step::None && !send(i, next))
-    retire(i, Hero12Fault::DeliveryUncertain);
+  if (next != Step::None && !send(i, next)) {
+    if (p.marker_active)
+      retireMarker(i, CameraMarkerPhase::Failed, CameraError::Transport);
+    else
+      retire(i, Hero12Fault::DeliveryUncertain);
+  }
 }
 bool Hero12Adapter::acknowledged(uint8_t i) const {
   const auto &p = peers_[i];
@@ -887,6 +1026,8 @@ void Hero12Adapter::notification(uint8_t i, const BleResult &r) {
   } else {
     if (healthStep(p.step))
       finishHealth(i, true);
+    else if (p.marker_active)
+      retireMarker(i, CameraMarkerPhase::Failed, CameraError::Transport);
     else
       retire(i, Hero12Fault::Protocol);
   }
@@ -1228,12 +1369,17 @@ void Hero12Adapter::servicePeer(uint8_t i) {
   auto &p = peers_[i];
   if (p.sealed)
     return;
+  if (p.marker_active && reached(clock_.now(), p.marker_deadline))
+    retireMarker(i, CameraMarkerPhase::Failed, CameraError::Timeout);
   if (transactionExpired(i)) {
     if (healthStep(p.step)) {
       finishHealth(i, true);
       return;
     }
-    retire(i, Hero12Fault::Timeout);
+    if (p.marker_active)
+      retireMarker(i, CameraMarkerPhase::Failed, CameraError::Timeout);
+    else
+      retire(i, Hero12Fault::Timeout);
     return;
   }
   if (p.step != Step::None) {

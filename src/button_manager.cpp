@@ -6,14 +6,16 @@ namespace ridesync {
 namespace {
 bool validAction(ButtonAction a) {
   return a == ButtonAction::RecordingIntent || a == ButtonAction::WakeReconnect ||
-         a == ButtonAction::Resync;
+         a == ButtonAction::Resync || a == ButtonAction::Bookmark;
 }
 bool interval(uint32_t n) { return n > 0 && n < 0x80000000u; }
 } // namespace
 bool validateButtonConfig(const ButtonConfig &c) {
   return interval(c.debounce_ms) && interval(c.long_ms) && interval(c.double_ms) &&
-         c.long_ms > c.debounce_ms && c.double_ms > c.debounce_ms && validAction(c.short_action) &&
-         validAction(c.long_action) && validAction(c.double_action);
+         c.long_ms > c.debounce_ms && c.double_ms > c.debounce_ms &&
+         c.short_action != ButtonAction::Bookmark && c.long_action != ButtonAction::Bookmark &&
+         (c.double_action != ButtonAction::Bookmark || c.double_enabled) &&
+         validAction(c.short_action) && validAction(c.long_action) && validAction(c.double_action);
 }
 bool ButtonManager::begin(const ButtonConfig &c, ButtonCallback cb, void *context) {
   *this = ButtonManager();

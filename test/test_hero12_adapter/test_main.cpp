@@ -88,7 +88,7 @@ struct ScriptHost : SilentHost {
   uint8_t hardware_model = 62, api_major = 1;
   bool reject_pair = false, reject_claim = false, wrong_pair_route = false,
        wrong_query_status = false;
-  bool fragment_hardware = false;
+  bool fragment_hardware = false, drop_hilight_ack = false;
   uint32_t health_floor = 5000;
   bool health_reject = false, health_silent = false;
   bool battery_present = true;
@@ -186,6 +186,8 @@ bool commandReply(Rig &rig, const uint8_t *payload, BleContext &ctx, std::vector
     break;
   default:
     reply = {payload[0], 0};
+    if (payload[0] == 0x18 && rig.host.drop_hilight_ack)
+      return false;
     if (payload[0] == 1 && !applyShutter(rig, payload, ctx))
       return false;
     break;
@@ -409,7 +411,7 @@ struct Rig {
   unsigned peer_count = 1;
   BleContext *links[4] = {};
   explicit Rig(RetryPolicy policy = Hero12Adapter::managerPolicy(), unsigned peers = 1,
-               bool health = false, bool video = false)
+               bool hilight = false, bool health = false, bool video = false)
       : adapter(host, clock), manager(clock, adapter, policy), peer_count(peers) {
     adapter.attach(manager);
     SourceConfig config;
@@ -431,6 +433,7 @@ struct Rig {
     q.api_major = 1;
     q.api_minor = 0;
     q.source_qualified = q.classic_profile_confirmed = true;
+    q.hilight_enabled = hilight;
     q.health_enabled = health;
     q.ordinary_video_confirmed = video;
     for (unsigned i = 0; i < peers; ++i) {
@@ -1960,6 +1963,51 @@ void maintenance_retires_actual_target_context_and_keeps_foreign_ready() {
   r.pump();
   TEST_ASSERT_TRUE(r.manager.state(1)->has_observation);
 }
+struct MarkerAuditSpy : CameraMarkerAudit {
+  std::vector<CameraMarkerEvent> events;
+  void markerEvent(const CameraMarkerEvent &event) override { events.push_back(event); }
+  unsigned count(CameraMarkerPhase phase) const {
+    unsigned n = 0;
+    for (const auto &event : events)
+      n += event.phase == phase;
+    return n;
+  }
+};
+void hilight_requires_opt_in_and_fresh_encoding_then_matches_ack() {
+  CameraMarkerKey key;
+  key.session_id = 42;
+  key.bookmark_id = 7;
+  {
+    Rig disabled;
+    MarkerAuditSpy audit;
+    TEST_ASSERT_TRUE(disabled.adapter.attachMarkerAudit(audit));
+    TEST_ASSERT_EQUAL_INT(CameraError::None, disabled.manager.request(0, Operation::Connect));
+    disabled.host.encoding = true;
+    disabled.pump();
+    TEST_ASSERT_EQUAL_INT(CameraError::Unsupported, disabled.adapter.requestHilight(0, key));
+    TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  }
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, key));
+  r.pump(20);
+  unsigned marker_writes = 0;
+  for (const auto &command : r.host.commands)
+    if (command.phase == BlePhase::Write && command.handle == 3 && command.size >= 3 &&
+        command.bytes[2] == 0x18)
+      ++marker_writes;
+  TEST_ASSERT_EQUAL_UINT(1, marker_writes);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::WireAck));
+  TEST_ASSERT_EQUAL_UINT64(42, audit.events.back().key.session_id);
+  TEST_ASSERT_EQUAL_UINT32(7, audit.events.back().key.bookmark_id);
+  TEST_ASSERT_TRUE(audit.events.back().connection_generation > 0);
+  TEST_ASSERT_TRUE(audit.events.back().operation_generation > 0);
+}
 struct HealthSinkSpy : CameraHealthSampleSink {
   std::vector<QualifiedHealthSample> samples;
   std::vector<uint32_t> floors;
@@ -1968,9 +2016,40 @@ struct HealthSinkSpy : CameraHealthSampleSink {
   }
   void healthPollPeriod(uint8_t, uint32_t floor, uint32_t) override { floors.push_back(floor); }
 };
+void stale_health_status_cannot_authorize_pending_hilight_encoding_check() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  TEST_ASSERT_TRUE(r.adapter.attachHealthSink(sink));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+
+  // Hold the requested single-field reply while a late background 0x13
+  // response (also carrying Encoding=true) reaches the same query endpoint.
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, CameraMarkerKey(42, 14)));
+  r.pump(5);
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1, 60, 4, 0, 0, 0x13, 0x88});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  for (const auto &command : r.host.commands)
+    TEST_ASSERT_FALSE(command.phase == BlePhase::Write && command.handle == 3 &&
+                      command.size >= 3 && command.bytes[2] == 0x18);
+
+  // The actual foreground single-field result is still accepted.
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1});
+  r.adapter.service();
+  r.auto_camera = true;
+  r.pump(20);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::WireAck));
+  r.adapter.detachHealthSink(&sink);
+}
 void optional_health_failure_keeps_control_link_and_shutter_operable() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   TEST_ASSERT_TRUE(r.adapter.attachHealthSink(sink));
   TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
   r.pump();
@@ -1982,6 +2061,212 @@ void optional_health_failure_keeps_control_link_and_shutter_operable() {
   r.pump();
   TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.manager.state(0)->observed);
   r.adapter.detachHealthSink(&sink);
+}
+void hilight_rechecks_encoding_after_due_keepalive() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump(80);
+  r.auto_camera = false;
+  r.clock.value += 2800;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, CameraMarkerKey(42, 15)));
+  r.pump(5);            // Encoding query ATT completes, camera response remains pending.
+  r.clock.value += 200; // Keepalive becomes due while the fresh query is pending.
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1});
+  r.adapter.service();
+  r.pump(5); // Keepalive takes precedence over the marker command.
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 0});
+  r.host.notification(*r.link, 12, {0x5b, 0});
+  r.adapter.service();
+  r.pump(5);
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  for (const auto &command : r.host.commands)
+    TEST_ASSERT_FALSE(command.phase == BlePhase::Write && command.handle == 3 &&
+                      command.size >= 3 && command.bytes[2] == 0x18);
+}
+void hilight_missing_encoding_reply_times_out_without_tag_or_link_loss() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump(80);
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, CameraMarkerKey(42, 16)));
+  TEST_ASSERT_EQUAL_INT(CameraError::Busy, r.adapter.requestHilight(0, CameraMarkerKey(42, 17)));
+  r.pump(5);
+  r.host.notification(*r.link, 18, {0x13, 0}); // No Encoding value; cached true is insufficient.
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  r.clock.value += 601;
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Failed));
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(0)->lifecycle);
+}
+void hilight_wire_ack_waits_for_att_completion() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump(80);
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, CameraMarkerKey(42, 18)));
+  r.pump(5);
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+  const auto marker_write = r.host.commands.size() - 1;
+  r.host.notification(*r.link, 6, {0x18, 0});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  r.host.complete(marker_write);
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::WireAck));
+  r.handled = r.host.commands.size();
+}
+void hilight_disconnect_reset_shutdown_and_audit_detach_cancel_without_replay() {
+  for (unsigned cause = 0; cause < 4; ++cause) {
+    Rig r(Hero12Adapter::managerPolicy(), 1, true);
+    MarkerAuditSpy audit;
+    TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+    r.host.encoding = true;
+    TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+    r.pump(80);
+    r.host.drop_hilight_ack = true;
+    TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, CameraMarkerKey(42, 19)));
+    r.pump(10);
+    TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+    if (cause == 0) {
+      BleResult closed;
+      closed.kind = BleResultKind::LinkClosed;
+      closed.event.peer = 0;
+      closed.event.generation = r.manager.state(0)->token.connection;
+      r.adapter.result(closed);
+    } else if (cause == 1) {
+      r.manager.reset();
+    } else if (cause == 2) {
+      r.adapter.stop();
+    } else {
+      r.adapter.detachMarkerAudit(&audit);
+    }
+    TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Cancelled));
+    r.pump(40);
+    unsigned marker_writes = 0;
+    for (const auto &command : r.host.commands)
+      marker_writes += command.phase == BlePhase::Write && command.handle == 3 &&
+                       command.size >= 3 && command.bytes[2] == 0x18;
+    TEST_ASSERT_EQUAL_UINT(1, marker_writes);
+    TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+    r.adapter.detachMarkerAudit(&audit);
+  }
+}
+void hilight_refuses_stopped_and_never_writes_marker() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  CameraMarkerKey key;
+  key.session_id = 42;
+  key.bookmark_id = 8;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, key));
+  r.pump(20);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::RequestRefused));
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  for (const auto &command : r.host.commands)
+    TEST_ASSERT_FALSE(command.phase == BlePhase::Write && command.handle == 3 &&
+                      command.size >= 3 && command.bytes[2] == 0x18);
+}
+void hilight_refuses_observed_busy_before_query() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  r.host.notification(*r.link, 18, {0x93, 0, 8, 1, 1});
+  r.adapter.service();
+  const auto before = r.host.commands.size();
+  TEST_ASSERT_EQUAL_INT(CameraError::Busy, r.adapter.requestHilight(0, CameraMarkerKey(42, 13)));
+  TEST_ASSERT_EQUAL_UINT(before, r.host.commands.size());
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::RequestRefused));
+}
+void unanswered_hilight_ack_times_out_without_retry_or_stale_credit() {
+  Rig r(Hero12Adapter::managerPolicy(), 2, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(1, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_NOT_NULL(r.link);
+  TEST_ASSERT_NOT_NULL(r.links[1]);
+  r.host.drop_hilight_ack = true;
+  CameraMarkerKey key;
+  key.session_id = 42;
+  key.bookmark_id = 9;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, key));
+  r.pump(20);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+  BleResult wrong_peer;
+  wrong_peer.kind = BleResultKind::Notification;
+  wrong_peer.event.peer = 1;
+  wrong_peer.event.generation = r.manager.state(1)->token.connection;
+  wrong_peer.endpoint = 1;
+  wrong_peer.event.size = 3;
+  wrong_peer.event.bytes[0] = 2;
+  wrong_peer.event.bytes[1] = 0x18;
+  wrong_peer.event.bytes[2] = 0;
+  r.adapter.result(wrong_peer); // Correct ID on wrong peer.
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  BleResult stale = wrong_peer;
+  stale.event.peer = 0;
+  stale.event.generation = r.manager.state(0)->token.connection - 1;
+  r.adapter.result(stale); // Wrong connection generation.
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  r.host.notification(*r.link, 6, {1, 0}); // Wrong command ID.
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  r.clock.value += 601;
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Failed));
+  r.host.notification(*r.link, 6, {0x18, 0}); // Late success cannot credit key.
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  key.bookmark_id = 10;
+  TEST_ASSERT_EQUAL_INT(CameraError::Busy, r.adapter.requestHilight(0, key));
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+}
+void stop_preempts_unanswered_marker_without_replaying_it() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  MarkerAuditSpy audit;
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  r.host.drop_hilight_ack = true;
+  CameraMarkerKey key;
+  key.session_id = 42;
+  key.bookmark_id = 11;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, key));
+  r.pump(20);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Attempt));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Stop));
+  r.pump(40);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::Cancelled));
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::WireAck));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.manager.state(0)->observed);
+  unsigned marker_writes = 0;
+  for (const auto &command : r.host.commands)
+    if (command.phase == BlePhase::Write && command.handle == 3 && command.size >= 3 &&
+        command.bytes[2] == 0x18)
+      ++marker_writes;
+  TEST_ASSERT_EQUAL_UINT(1, marker_writes);
 }
 unsigned backgroundWrites(const Rig &r) {
   unsigned n = 0;
@@ -2003,7 +2288,7 @@ void health_requires_both_opt_in_and_owner_attachment() {
 }
 void health_registers_once_and_uses_qualified_floor_and_video_guard() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, false);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, false);
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
   r.pump(240);
@@ -2032,7 +2317,7 @@ void health_registers_once_and_uses_qualified_floor_and_video_guard() {
 void invalid_health_floor_stays_unavailable_without_invented_poll_period() {
   for (uint32_t floor : {uint32_t(0), uint32_t(30001)}) {
     HealthSinkSpy sink;
-    Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+    Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
     r.host.health_floor = floor;
     r.adapter.attachHealthSink(sink);
     r.manager.request(0, Operation::Connect);
@@ -2050,7 +2335,7 @@ void invalid_health_floor_stays_unavailable_without_invented_poll_period() {
 }
 void health_poll_timeout_isolated_and_next_period_has_no_catchup_burst() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
   r.pump(240);
@@ -2070,9 +2355,108 @@ void health_poll_timeout_isolated_and_next_period_has_no_catchup_burst() {
   TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.manager.state(0)->observed);
   r.adapter.detachHealthSink(&sink);
 }
+void admitted_hilight_attempt_and_ack_are_separate_v6_audit_rows() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  r.host.encoding = true;
+  RecordingManager group(r.manager, r.clock);
+  r.adapter.attachGroup(group);
+  CameraInbox inbox;
+  CameraEventLogger logger(inbox, r.clock, 42, group);
+  TEST_ASSERT_TRUE(logger.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(logger));
+  CameraLogSink sink;
+  Storage storage(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::BookmarkV6});
+  SessionClock session_clock(r.clock, 42, 1000);
+  ImuInbox imu;
+  TelemetryAdmission admission(session_clock, storage, imu, &inbox);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  CameraMarkerKey key(42, 12);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, key));
+  r.pump(20);
+  for (unsigned i = 0; i < 100; ++i) {
+    admission.tick();
+    storage.workerStep();
+  }
+  size_t rows = 0;
+  size_t offset = 0;
+  while ((offset = sink.bytes.find("marker,", offset)) != std::string::npos) {
+    ++rows;
+    offset += 7;
+  }
+  TEST_ASSERT_EQUAL_UINT(2, rows);
+  TEST_ASSERT_TRUE(sink.bytes.find(",12,0,301,") != std::string::npos);
+  r.adapter.detachMarkerAudit(&logger);
+  r.adapter.detachGroup(&group);
+}
+void admitted_session_bookmark_dispatches_one_native_marker_and_retains_local_row() {
+  Rig r(Hero12Adapter::managerPolicy(), 1, true);
+  r.host.encoding = true;
+  RecordingManager group(r.manager, r.clock);
+  CameraLogSink sink;
+  CameraEventSession session(r.clock, sink, r.adapter, r.manager, group, 42, "fw", "synthetic",
+                             MotionAdmissionConfig{}, nullptr, true, true);
+  TEST_ASSERT_TRUE(session.configurePeer(0, 301, CameraModel::HERO12_BLACK));
+  TEST_ASSERT_TRUE(session.activate());
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  const auto before_refusal = r.host.commands.size();
+  TEST_ASSERT_EQUAL_INT(
+      BookmarkOutcome::Inactive,
+      session.bookmark(BookmarkSource::Serial, BookmarkGesture::Serial, 43).outcome);
+  TEST_ASSERT_EQUAL_UINT(before_refusal, r.host.commands.size());
+  const auto receipt = session.bookmark(BookmarkSource::Serial, BookmarkGesture::Serial);
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Admitted, receipt.outcome);
+  TEST_ASSERT_EQUAL_UINT64(42, receipt.session_id);
+  TEST_ASSERT_EQUAL_UINT32(1, receipt.bookmark_id);
+  r.pump(20);
+  for (unsigned i = 0; i < 100; ++i) {
+    session.service();
+    session.storage().workerStep();
+  }
+  TEST_ASSERT_TRUE(sink.bytes.find("bookmark,") != std::string::npos);
+  TEST_ASSERT_TRUE(sink.bytes.find("marker,") != std::string::npos);
+  unsigned marker_writes = 0;
+  for (const auto &command : r.host.commands)
+    if (command.phase == BlePhase::Write && command.handle == 3 && command.size >= 3 &&
+        command.bytes[2] == 0x18)
+      ++marker_writes;
+  TEST_ASSERT_EQUAL_UINT(1, marker_writes);
+  BleResult closed;
+  closed.kind = BleResultKind::LinkClosed;
+  closed.event.peer = 0;
+  closed.event.generation = r.manager.state(0)->token.connection;
+  r.adapter.result(closed);
+  const auto after_loss = session.bookmark(BookmarkSource::Serial, BookmarkGesture::Serial);
+  TEST_ASSERT_EQUAL_INT(BookmarkOutcome::Admitted, after_loss.outcome);
+  TEST_ASSERT_EQUAL_UINT32(2, after_loss.bookmark_id);
+  for (unsigned i = 0; i < 100; ++i) {
+    session.service();
+    session.storage().workerStep();
+  }
+  unsigned local_rows = 0;
+  size_t row_offset = 0;
+  while ((row_offset = sink.bytes.find("bookmark,", row_offset)) != std::string::npos) {
+    ++local_rows;
+    row_offset += 9;
+  }
+  TEST_ASSERT_EQUAL_UINT(2, local_rows);
+  marker_writes = 0;
+  for (const auto &command : r.host.commands)
+    marker_writes += command.phase == BlePhase::Write && command.handle == 3 && command.size >= 3 &&
+                     command.bytes[2] == 0x18;
+  TEST_ASSERT_EQUAL_UINT(1, marker_writes);
+  session.requestStop();
+  session.finishImu();
+  for (unsigned i = 0; i < 500 && !session.stopped(); ++i) {
+    session.service();
+    session.storage().workerStep();
+  }
+  TEST_ASSERT_TRUE(session.stopped());
+}
 void health_control_preempts_polling_floor_and_late_health_reply_cannot_complete_query() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.host.health_floor = 30000;
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
@@ -2100,7 +2484,7 @@ void health_control_preempts_polling_floor_and_late_health_reply_cannot_complete
 }
 void health_active_query_yields_to_admitted_stop_at_bounded_deadline() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
   r.pump();
@@ -2119,7 +2503,7 @@ void health_active_query_yields_to_admitted_stop_at_bounded_deadline() {
 }
 void health_resources_without_battery_and_unqualified_video_remain_unavailable() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, false);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, false);
   r.host.battery_present = false;
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
@@ -2137,7 +2521,7 @@ void health_resources_without_battery_and_unqualified_video_remain_unavailable()
 }
 void health_notifications_coalesce_with_visible_loss_and_preserve_old_receipt() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
   r.pump();
@@ -2156,7 +2540,7 @@ void health_notifications_coalesce_with_visible_loss_and_preserve_old_receipt() 
 }
 void health_four_peers_rotate_under_one_aggregate_admission_per_500ms() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 4, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 4, false, true, true);
   r.adapter.attachHealthSink(sink);
   for (uint8_t i = 0; i < 4; ++i)
     r.manager.request(i, Operation::Connect);
@@ -2179,7 +2563,7 @@ void health_four_peers_rotate_under_one_aggregate_admission_per_500ms() {
 }
 void health_reset_disconnect_and_owner_detach_never_replay_background_or_shutter() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
   r.pump();
@@ -2200,7 +2584,7 @@ void health_reset_disconnect_and_owner_detach_never_replay_background_or_shutter
 }
 void changed_qualified_floor_reschedules_normal_period_without_immediate_burst() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.host.health_floor = 30000;
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
@@ -2222,7 +2606,7 @@ void changed_qualified_floor_reschedules_normal_period_without_immediate_burst()
 }
 void scheduled_health_requests_fit_four_per_15seconds_and_refresh_resources() {
   HealthSinkSpy sink;
-  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  Rig r(Hero12Adapter::managerPolicy(), 1, false, true, true);
   r.adapter.attachHealthSink(sink);
   r.manager.request(0, Operation::Connect);
   r.pump();
@@ -2251,22 +2635,65 @@ void scheduled_health_requests_fit_four_per_15seconds_and_refresh_resources() {
   TEST_ASSERT_TRUE(batched);
   r.adapter.detachHealthSink(&sink);
 }
+void late_full_health_reply_cannot_authorize_hilight_encoding_check() {
+  HealthSinkSpy sink;
+  MarkerAuditSpy audit;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true, true);
+  r.host.encoding = true;
+  TEST_ASSERT_TRUE(r.adapter.attachHealthSink(sink));
+  TEST_ASSERT_TRUE(r.adapter.attachMarkerAudit(audit));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  r.pump();
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestHilight(0, CameraMarkerKey(42, 7)));
+  r.pump(5);
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1, 60, 4, 0, 0, 0x13, 0x88});
+  r.pump(2);
+  unsigned markers = 0;
+  for (const auto &c : r.host.commands)
+    markers += c.phase == BlePhase::Write && c.handle == 3 && c.size >= 3 && c.bytes[2] == 0x18;
+  TEST_ASSERT_EQUAL_UINT(0, markers);
+  TEST_ASSERT_EQUAL_UINT(0, audit.count(CameraMarkerPhase::Attempt));
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1});
+  r.auto_camera = true;
+  r.pump(20);
+  markers = 0;
+  for (const auto &c : r.host.commands)
+    markers += c.phase == BlePhase::Write && c.handle == 3 && c.size >= 3 && c.bytes[2] == 0x18;
+  TEST_ASSERT_EQUAL_UINT(1, markers);
+  TEST_ASSERT_EQUAL_UINT(1, audit.count(CameraMarkerPhase::WireAck));
+  r.adapter.detachMarkerAudit(&audit);
+  r.adapter.detachHealthSink(&sink);
+}
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(optional_health_failure_keeps_control_link_and_shutter_operable);
-  RUN_TEST(health_requires_both_opt_in_and_owner_attachment);
-  RUN_TEST(health_registers_once_and_uses_qualified_floor_and_video_guard);
-  RUN_TEST(invalid_health_floor_stays_unavailable_without_invented_poll_period);
-  RUN_TEST(health_poll_timeout_isolated_and_next_period_has_no_catchup_burst);
+  RUN_TEST(hilight_rechecks_encoding_after_due_keepalive);
+  RUN_TEST(hilight_missing_encoding_reply_times_out_without_tag_or_link_loss);
+  RUN_TEST(hilight_wire_ack_waits_for_att_completion);
+  RUN_TEST(hilight_disconnect_reset_shutdown_and_audit_detach_cancel_without_replay);
+  RUN_TEST(late_full_health_reply_cannot_authorize_hilight_encoding_check);
+  RUN_TEST(changed_qualified_floor_reschedules_normal_period_without_immediate_burst);
+  RUN_TEST(scheduled_health_requests_fit_four_per_15seconds_and_refresh_resources);
   RUN_TEST(health_control_preempts_polling_floor_and_late_health_reply_cannot_complete_query);
   RUN_TEST(health_active_query_yields_to_admitted_stop_at_bounded_deadline);
   RUN_TEST(health_resources_without_battery_and_unqualified_video_remain_unavailable);
   RUN_TEST(health_notifications_coalesce_with_visible_loss_and_preserve_old_receipt);
   RUN_TEST(health_four_peers_rotate_under_one_aggregate_admission_per_500ms);
   RUN_TEST(health_reset_disconnect_and_owner_detach_never_replay_background_or_shutter);
-  RUN_TEST(changed_qualified_floor_reschedules_normal_period_without_immediate_burst);
-  RUN_TEST(scheduled_health_requests_fit_four_per_15seconds_and_refresh_resources);
-
+  RUN_TEST(admitted_session_bookmark_dispatches_one_native_marker_and_retains_local_row);
+  RUN_TEST(admitted_hilight_attempt_and_ack_are_separate_v6_audit_rows);
+  RUN_TEST(stop_preempts_unanswered_marker_without_replaying_it);
+  RUN_TEST(unanswered_hilight_ack_times_out_without_retry_or_stale_credit);
+  RUN_TEST(hilight_refuses_stopped_and_never_writes_marker);
+  RUN_TEST(hilight_refuses_observed_busy_before_query);
+  RUN_TEST(hilight_requires_opt_in_and_fresh_encoding_then_matches_ack);
+  RUN_TEST(stale_health_status_cannot_authorize_pending_hilight_encoding_check);
+  RUN_TEST(health_requires_both_opt_in_and_owner_attachment);
+  RUN_TEST(health_registers_once_and_uses_qualified_floor_and_video_guard);
+  RUN_TEST(invalid_health_floor_stays_unavailable_without_invented_poll_period);
+  RUN_TEST(health_poll_timeout_isolated_and_next_period_has_no_catchup_burst);
+  RUN_TEST(optional_health_failure_keeps_control_link_and_shutter_operable);
   RUN_TEST(maintenance_retires_actual_target_context_and_keeps_foreign_ready);
   RUN_TEST(stop_waits_for_actual_host_release_and_rejects_late_query_without_blocking_peer);
   RUN_TEST(cancellation_retirement_wait_times_out_without_fabricated_stop_or_forced_release);

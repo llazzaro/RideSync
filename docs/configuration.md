@@ -430,3 +430,14 @@ reusing #43/#44. Installed-firmware reboot/power-failure recovery, actual bond
 restoration/scoped reset and physical capacity/watchdog/task-memory/latency checks
 are owned by #22/#31. Host fault injection and pinned ESP32 compilation are
 software evidence only. No physical camera/bond qualification is claimed.
+
+### Bookmark action code
+
+The existing persisted action codes 0 RecordingIntent, 1 WakeReconnect and
+2 Resync are unchanged; 3 Bookmark is appended. Bookmark is accepted only for
+the enabled double slot. It displaces double Resync and retains the double-window
+delay of a lone short REC/STOP gesture. Older firmware rejects the new code;
+reverting to old firmware requires restoring an old action mapping. Saved
+preferences still grant no pin or telemetry/storage qualification. The separate
+commissioned `LocalTelemetryConfig::bookmark_enabled` flag selects the new log
+format. See [local bookmarks](bookmarks.md).
