@@ -1,9 +1,13 @@
 # Session time and record contract
 
-The [portable ride-log export investigation](ride_log_export.md) defines a
-future offline GPX-first CLI for GPS rows in all five storage formats, including
-time, segmentation, loss and import-verification policy. The exporter is not
-implemented; the original CSV remains the evidence record.
+The implemented [offline GPX CLI](ride_log_export.md#implemented-cli-usage--october-13-2026)
+exports validated GPS rows in GpsV1 through MotionV5 with explicit time,
+segmentation and loss policy. Use `python3.11 scripts/export_gpx.py --input
+ride.csv --output ride.gpx --report ride-report.json` on one command line.
+The original CSV remains the evidence record; coordinates, times and extensions
+do not establish hardware accuracy or footage synchronization. The
+[dated synthetic export evidence](software-results/2026-10-13-gpx-export/README.md)
+is schema-valid; the required QGIS observation remains Blocked / Not run.
 
 `SessionClock` is a C++11 clock/record contract for local GPS, raw IMU, derived
 motion and camera event producers. It has no camera connection dependency;

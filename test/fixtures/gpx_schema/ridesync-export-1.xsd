@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:rs="urn:ridesync:gpx:export:1" targetNamespace="urn:ridesync:gpx:export:1" elementFormDefault="qualified">
+<xs:simpleType name="basis"><xs:restriction base="xs:string"><xs:enumeration value="solution"/><xs:enumeration value="receipt_estimate"/><xs:enumeration value="absent"/></xs:restriction></xs:simpleType>
+<xs:element name="point"><xs:complexType><xs:sequence>
+<xs:element name="session_id" type="xs:unsignedLong"/>
+<xs:element name="input_line" type="xs:positiveInteger"/>
+<xs:element name="monotonic_ms" type="xs:unsignedLong"/>
+<xs:element name="monotonic_quality" type="xs:unsignedByte"/>
+<xs:element name="fix_receipt_ms" type="xs:unsignedLong"/>
+<xs:element name="fix_age_ms" type="xs:unsignedLong" minOccurs="0"/>
+<xs:element name="fix_validity" type="xs:unsignedByte"/>
+<xs:element name="fix_valid" type="xs:boolean"/>
+<xs:element name="fix_quality" type="xs:unsignedByte" minOccurs="0"/>
+<xs:element name="time_basis" type="rs:basis"/>
+<xs:element name="source_utc_date" type="xs:date" minOccurs="0"/>
+<xs:element name="source_utc_time" type="xs:string" minOccurs="0"/>
+<xs:element name="anchor_quality" type="xs:unsignedByte"/>
+<xs:element name="anchor_sequence" type="xs:unsignedLong" minOccurs="0"/>
+<xs:element name="anchor_receipt_ms" type="xs:unsignedLong" minOccurs="0"/>
+<xs:element name="anchor_utc_ms" type="xs:long" minOccurs="0"/>
+<xs:element name="anchor_age_ms" type="xs:unsignedLong" minOccurs="0"/>
+<xs:element name="has_utc_estimate" type="xs:boolean"/>
+<xs:element name="utc_estimate_ms" type="xs:long" minOccurs="0"/>
+<xs:element name="uncertainty_known" type="xs:boolean"/>
+<xs:element name="uncertainty_ms" type="xs:unsignedLong" minOccurs="0"/>
+<xs:element name="speed_m_s" type="xs:decimal" minOccurs="0"/>
+<xs:element name="course_deg" type="xs:decimal" minOccurs="0"/>
+</xs:sequence></xs:complexType></xs:element>
+</xs:schema>

@@ -32,7 +32,9 @@ jobs:
         run: python -m ruff check scripts test tools
       - name: Linux C++ portability check
         run: python scripts/check_cpp_portability.py
-      - name: Repository configuration unit tests
+      - name: Prepare pinned GPX schema for development validation
+        run: python scripts/prepare_gpx_schema.py
+      - name: Repository configuration and offline GPX export tests
         run: python -m unittest discover -s test -v
       - name: SD bench admission and lifetime checks
         run: python tools/bench/sd_logging/test_run.py -v

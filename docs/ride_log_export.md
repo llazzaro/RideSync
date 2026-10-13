@@ -6,13 +6,79 @@ Decision: **Implement an offline, dependency-free Python GPX 1.1 exporter next;
 defer FIT.** Accept GPS records from all five current storage schemas. Export
 only evidenced current positions, preserve session identity, split discontinuous
 spans, and omit unavailable absolute time. This is a design and finite delivery
-plan, **not an implemented exporter or observed import result**.
+plan as recorded for #54, **not an implementation or observed import result at
+that investigation boundary**. The later implementation status and usage below
+are a separate October 13, 2026 software update.
 
 This finding completes the investigation boundary of
 [#54](https://github.com/llazzaro/RideSync/issues/54) under
 [acceptance_policy.md](acceptance_policy.md). No firmware changes, new issues,
 camera qualification or ride-readiness claims follow from it. Existing physical
 owners in #22/#31/#46 retain their checks.
+
+## Implemented CLI usage — October 13, 2026
+
+`scripts/export_gpx.py` and `tools/ride_export/` now implement the GPX-first
+reader, projection, report and publication path described here. #54 remains a
+completed design investigation. #70–#73 software completion awaits final
+candidate review/checks and CI; their software boundary is independent of #74.
+The [dated evidence](software-results/2026-10-13-gpx-export/README.md) records an
+actual Python 3.11 CLI export and schema validation. **#74 remains open: QGIS
+is unavailable, and its required observed import is Blocked / Not run.**
+
+From the repository root, with Python 3.11 (standard library runtime only):
+
+```sh
+python3.11 scripts/export_gpx.py --input ride.csv --output ride.gpx --report ride-report.json
+python3.11 scripts/export_gpx.py --help
+```
+
+One invocation reads one session in GpsV1, MixedV2, CameraV3, MotionV4 or
+MotionV5, using the exact schema/header/markers in the table below. It writes
+GPX 1.1 and JSON report version 1. All three paths must be distinct, including
+symlink/hardlink aliases; existing destinations are refused. Use fresh output
+and report names for every run. The report includes input basename/size/SHA-256,
+metadata, selected options, streamed diagnostics, point/segment counts and
+counter observations. Treat source and outputs as location-bearing private
+artifacts unless explicitly declared synthetic/public.
+
+Default `--time-source solution` emits only complete validated solution UTC.
+`--time-source receipt-estimate` instead uses eligible copied row associations,
+with explicit uncertainty and unmeasured receipt latency/drift. Neither fills
+missing time or establishes camera alignment. `--max-gap-ms 10000` is the
+default; a GPS receipt gap strictly greater than the positive threshold splits
+the track. Changes in emitted-time availability/basis also split it.
+Untimed GPX remains useful for mapping; it is not promised video-overlay input.
+
+Strict mode rejects malformed data and unterminated tails before publication.
+`--salvage` discards malformed complete data rows/final unterminated tails with
+diagnostics and segment breaks. Header/version/session errors, invalid encoding
+and overlong lines remain fatal. No points is an error. Exit codes are:
+
+| Status | Meaning |
+| --- | --- |
+| `0` | Published GPX/report, no malformed rows discarded; excluded fixes, duplicates and untimed points may still exist |
+| `2` | CLI, format or no-point error; no completed GPX is published |
+| `3` | Published salvage result with discarded malformed rows/tail |
+| `4` | I/O or publication failure; stderr identifies an already-published GPX if report publication fails |
+
+Input bytes are preserved and a detected concurrent input change aborts the
+export. Complete staged files are published exclusively. The two output files
+are **not an atomic transaction**; a report publication failure can leave a
+complete GPX, which is retained. This provides no physical power-loss durability
+promise. Global GPS and per-kind counters are separate scopes, can overlap and
+must not be summed into exact missing positions. Silent losses and plausible
+newline-terminated tears can remain undetectable.
+
+Memory checks compare 100 and 20,000 discarded-row diagnostic streams with
+`tracemalloc`, using a declared 32 MiB incremental and total Python-allocation
+budget; measured results and their limits are in the dated evidence. This is a
+host software check, not a firmware memory or whole-process RSS guarantee.
+Development schema checks use pinned lxml and an ignored official XSD cache
+prepared by `scripts/prepare_gpx_schema.py`; the exporter never downloads files
+or accesses the network at runtime. FIT stays deferred; generated-file
+Insta360/VIRB acceptance, extension support and footage alignment remain
+unresolved. No hardware-confirmed evidence is added.
 
 ## Audited inputs and existing tools
 
@@ -141,12 +207,15 @@ an invented motorcycle speed bound, or bridge a known gap.
   payload is malformed; a later receipt with the same location is a valid
   stationary sample. Across a break, allow a fresh segment to begin at that
   location. No unbounded deduplication set is needed.
-- Require six observational counters to be bounded uint32 values. Expect them
-  nondecreasing in file order; decreases break continuity and diagnose possible
-  corruption without guessing a reset identity. Record each maximum, initial
-  nonzero loss and later increases.
-  Saturation is a lower bound. Counters cover all record kinds and are sampled
-  before writes; do not sum snapshots, subtract them to claim exact missing GPS
+- Require six observational counters to be bounded uint32 values. GPS rows use
+  global `Storage::health()` counters; other kinds use their own
+  `Storage::kindHealth(kind)` counters. Compare snapshots only within the same
+  scope (global, imu, config, health, control or camera), in file order. Decreases
+  within a scope break continuity and diagnose possible corruption without
+  guessing a reset identity; differences between scopes do not. Report maxima,
+  initial nonzero loss, later increases/decreases and saturation per scope.
+  Saturation is a lower bound. Counters are sampled before writes; do not sum
+  snapshots or overlapping global/per-kind counts, claim exact missing GPS
   points, or treat `flushed` as physical durability. An increase seen on a skipped
   non-GPS row still schedules a break before the next point.
 
@@ -174,7 +243,11 @@ the already-created GPX; never overwrite or remove preexisting data.
 Use Python 3.11 standard library (`argparse`, `csv`, `decimal`, `datetime`,
 `hashlib`, XML escaping). Read at most 4096 bytes per physical line (including
 newline), enough for the current 3072-byte firmware buffer; strict ASCII/LF,
-unquoted single-line CSV with exact versioned field counts. Overlong lines and
+unquoted single-line CSV with exact versioned field counts. GPS numbers must
+be plain decimals; coordinates have at most eight fractional digits, matching
+the firmware's serialization. Reject unsupported exponent/extra-precision forms
+instead of guessing or rounding positions across the GPX longitude boundary.
+Overlong lines and
 invalid encoding fail without reading the remainder into memory. Stream GPX,
 SHA-256 provenance and JSON diagnostics to temporary files; hold one row and the
 previous solution/clock/counters, not the complete log, XML tree or list of errors.
@@ -246,8 +319,10 @@ validity or promotional lists of available gauges.
 
 ## Finite implementation plan
 
-All steps below are future work. Complete them in order, without firmware
-changes or hardware prerequisites; each stops at its stated boundary.
+The table preserves the original #54 implementation plan. Steps 1–4 now have
+software implementations; final candidate checks/CI determine #70–#73 delivery.
+Step 5 has reproducible synthetic export evidence, but its required QGIS import
+is Blocked / Not run, so #74 is unfulfilled. Each boundary remains unchanged.
 
 | Step | Behavior and affected modules | Verification | Completion boundary |
 | --- | --- | --- | --- |
@@ -262,7 +337,7 @@ do not schedule rides or expand to a matrix of editors. If it fails, diagnose th
 specific exporter/consumer discrepancy and record it before claiming map delivery.
 Passing unaffected firmware evidence is reused under the acceptance policy.
 
-## Investigation acceptance evidence
+## Investigation acceptance evidence — historical #54 boundary
 
 - **Documented/source-audited:** five storage formats and common GPS payload,
   immutable time contract, stale-fix distinction, replay limitations, GPX schema,

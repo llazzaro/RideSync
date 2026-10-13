@@ -1,0 +1,492 @@
+{
+  "gpsv1.csv": {
+    "schema": "GpsV1",
+    "gps_rows": 2,
+    "admitted_points": 2,
+    "excluded_points": 0,
+    "segments": 1,
+    "segment_reasons": [],
+    "ignored_kinds": [],
+    "normalized_points": [
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:00.00Z"
+      },
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:01.00Z"
+      }
+    ]
+  },
+  "mixedv2.csv": {
+    "schema": "MixedV2",
+    "gps_rows": 2,
+    "admitted_points": 2,
+    "excluded_points": 0,
+    "segments": 1,
+    "segment_reasons": [],
+    "ignored_kinds": [
+      "imu",
+      "config",
+      "health",
+      "control"
+    ],
+    "normalized_points": [
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:00.00Z"
+      },
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:01.00Z"
+      }
+    ]
+  },
+  "camerav3.csv": {
+    "schema": "CameraV3",
+    "gps_rows": 2,
+    "admitted_points": 2,
+    "excluded_points": 0,
+    "segments": 1,
+    "segment_reasons": [],
+    "ignored_kinds": [
+      "imu",
+      "config",
+      "health",
+      "control",
+      "camera"
+    ],
+    "normalized_points": [
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:00.00Z"
+      },
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:01.00Z"
+      }
+    ]
+  },
+  "motionv4.csv": {
+    "schema": "MotionV4",
+    "gps_rows": 2,
+    "admitted_points": 2,
+    "excluded_points": 0,
+    "segments": 1,
+    "segment_reasons": [],
+    "ignored_kinds": [
+      "imu",
+      "config",
+      "health",
+      "control",
+      "camera"
+    ],
+    "normalized_points": [
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:00.00Z"
+      },
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:01.00Z"
+      }
+    ]
+  },
+  "motionv5.csv": {
+    "schema": "MotionV5",
+    "gps_rows": 2,
+    "admitted_points": 2,
+    "excluded_points": 0,
+    "segments": 1,
+    "segment_reasons": [],
+    "ignored_kinds": [
+      "imu",
+      "config",
+      "health",
+      "control",
+      "camera"
+    ],
+    "normalized_points": [
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:00.00Z"
+      },
+      {
+        "latitude": "52.00000000",
+        "longitude": "4.00000000",
+        "elevation": "-2.5",
+        "speed": "0",
+        "course": "360",
+        "satellites": 0,
+        "quality": 0,
+        "time": "2024-02-29T12:00:01.00Z"
+      }
+    ]
+  },
+  "coordinates.csv": {
+    "gps_rows": 5,
+    "admitted_points": 5,
+    "excluded_points": 0,
+    "segments": 1,
+    "normalized_longitudes": 1,
+    "segment_reasons": [],
+    "normalized_points": [
+      {
+        "latitude": "90.00000000",
+        "longitude": "-180.00000000",
+        "elevation": "100000",
+        "satellites": 65535,
+        "quality": 255
+      },
+      {
+        "latitude": "-90.00000000",
+        "longitude": "-180.00000000",
+        "elevation": "-100000"
+      },
+      {
+        "latitude": "0.00000000",
+        "longitude": "0.00000000",
+        "elevation": "0"
+      },
+      {
+        "latitude": "1.00000000",
+        "longitude": "-1.00000000",
+        "elevation": null,
+        "speed": null,
+        "course": null,
+        "satellites": null,
+        "quality": null
+      },
+      {
+        "latitude": "-1.00000000",
+        "longitude": "1.00000000",
+        "elevation": "-2.5"
+      }
+    ]
+  },
+  "continuity.csv": {
+    "gps_rows": 8,
+    "admitted_points": 6,
+    "excluded_points": 1,
+    "duplicate_points": 1,
+    "segments": 5,
+    "segment_reasons": [
+      "stale_fix",
+      "gap",
+      "counter_increase",
+      "monotonic_backward",
+      "fix_receipt_backward"
+    ],
+    "notes": "Exact 10000 ms gap connects; 10001 ms splits. Reset is identity misuse."
+  },
+  "clock_variants.csv": {
+    "gps_rows": 5,
+    "admitted_points": 5,
+    "excluded_points": 0,
+    "solution": {
+      "segments": 2,
+      "untimed_points": 2,
+      "segment_reasons": [
+        "time_availability"
+      ],
+      "times": [
+        null,
+        null,
+        "2024-02-29T12:00:03.00Z",
+        "2024-02-29T12:00:04.00Z",
+        "2024-02-29T12:00:05.00Z"
+      ]
+    },
+    "receipt_estimate": {
+      "segments": 4,
+      "untimed_points": 3,
+      "unknown_uncertainty_points": 1,
+      "segment_reasons": [
+        "time_availability",
+        "anchor_change",
+        "utc_nonincreasing"
+      ],
+      "times": [
+        null,
+        null,
+        "2024-02-29T12:00:00.000Z",
+        "2024-02-29T11:59:59.000Z",
+        null
+      ]
+    }
+  },
+  "counter_saturation.csv": {
+    "gps_rows": 3,
+    "admitted_points": 3,
+    "excluded_points": 0,
+    "segments": 2,
+    "segment_reasons": [
+      "counter_decrease"
+    ],
+    "saturated_counters": [
+      "accepted",
+      "dropped"
+    ],
+    "initial_nonzero_loss": [
+      "dropped"
+    ]
+  },
+  "latitude_out_of_range.csv": {
+    "strict": "fatal",
+    "field": "latitude_deg",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "longitude_out_of_range.csv": {
+    "strict": "fatal",
+    "field": "longitude_deg",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "altitude_out_of_range.csv": {
+    "strict": "fatal",
+    "field": "altitude_msl_m",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "nonfinite.csv": {
+    "strict": "fatal",
+    "field": "speed_m_s",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "illegal_boolean.csv": {
+    "strict": "fatal",
+    "field": "gnss_power",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "session_mismatch.csv": {
+    "strict": "fatal",
+    "field": "session_id",
+    "salvage": "fatal",
+    "salvage_admitted_points": null,
+    "salvage_segments": null
+  },
+  "session_zero.csv": {
+    "strict": "fatal",
+    "field": "session_id",
+    "salvage": "fatal",
+    "salvage_admitted_points": null,
+    "salvage_segments": null
+  },
+  "session_overflow.csv": {
+    "strict": "fatal",
+    "field": "session_id",
+    "salvage": "fatal",
+    "salvage_admitted_points": null,
+    "salvage_segments": null
+  },
+  "leap_second.csv": {
+    "strict": "fatal",
+    "field": "source_utc_time",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "bad_calendar.csv": {
+    "strict": "fatal",
+    "field": "source_utc_date",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "anchor_equation.csv": {
+    "strict": "fatal",
+    "field": "anchor_age_ms",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "counter_overflow.csv": {
+    "strict": "fatal",
+    "field": "lost",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "missing_receipt.csv": {
+    "strict": "fatal",
+    "field": "fix_receipt_ms",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "conflicting_solution.csv": {
+    "strict": "fatal",
+    "field": "fix_receipt_ms",
+    "notes": "Writer owns conflicting payload detection."
+  },
+  "extra_column.csv": {
+    "strict": "fatal",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "missing_column.csv": {
+    "strict": "fatal",
+    "salvage": "discard",
+    "salvage_admitted_points": 2,
+    "salvage_segments": 2
+  },
+  "unknown_kind.csv": {
+    "strict": "fatal",
+    "salvage": "fatal"
+  },
+  "tail_delimiter.csv": {
+    "strict": "fatal",
+    "salvage": "discard",
+    "salvage_admitted_points": 1,
+    "salvage_segments": 1,
+    "truncated_rows": 1
+  },
+  "tail_digit.csv": {
+    "strict": "fatal",
+    "salvage": "discard",
+    "salvage_admitted_points": 1,
+    "salvage_segments": 1,
+    "truncated_rows": 1
+  },
+  "tail_complete.csv": {
+    "strict": "fatal",
+    "salvage": "discard",
+    "salvage_admitted_points": 1,
+    "salvage_segments": 1,
+    "truncated_rows": 1
+  },
+  "duplicate_header.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "header"
+  },
+  "unknown_version.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "version"
+  },
+  "missing_marker.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "header"
+  },
+  "duplicate_marker.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "header"
+  },
+  "bad_header.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "header"
+  },
+  "fix_exclusions.csv": {
+    "gps_rows": 5,
+    "admitted_points": 2,
+    "excluded_points": 3,
+    "segments": 2,
+    "segment_reasons": [
+      "missing_fix",
+      "no_fix",
+      "invalid_fix"
+    ]
+  },
+  "solution_utc_correction.csv": {
+    "gps_rows": 3,
+    "admitted_points": 3,
+    "excluded_points": 0,
+    "segments": 3,
+    "segment_reasons": [
+      "utc_nonincreasing",
+      "utc_nonincreasing"
+    ]
+  },
+  "interleaved_loss.csv": {
+    "schema": "MixedV2",
+    "gps_rows": 3,
+    "admitted_points": 3,
+    "excluded_points": 0,
+    "segments": 2,
+    "segment_reasons": [
+      "counter_increase"
+    ],
+    "ignored_kinds": [
+      "imu",
+      "control"
+    ],
+    "notes": "GPS global accepted20 followed by IMU accepted1 is legal; control dropped1 schedules next segment."
+  },
+  "non_ascii.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "encoding"
+  },
+  "overlong.csv": {
+    "strict": "fatal",
+    "salvage": "fatal",
+    "category": "line_length"
+  }
+}

@@ -217,9 +217,14 @@ camera and local logging bench observations before motorcycle installation.
 
 ## Optional code navigation
 
-The [portable ride-log export plan](docs/ride_log_export.md) recommends an
-offline GPX-first exporter for current CSV schemas. This is a completed
-investigation; GPX/FIT export and video-editor import are not delivered yet.
+The offline Python 3.11 [GPX exporter](docs/ride_log_export.md#implemented-cli-usage--october-13-2026)
+accepts GPS rows in GpsV1 through MotionV5. Run `python3.11 scripts/export_gpx.py
+--input ride.csv --output ride.gpx --report ride-report.json` (on one command
+line). It preserves source logs, refuses existing outputs and reports time/loss
+limits. [Synthetic software evidence](docs/software-results/2026-10-13-gpx-export/README.md)
+records two segments; QGIS import is Blocked / Not run, so #74 remains open.
+Untimed GPX is useful for mapping; FIT remains deferred and video-editor
+compatibility remains unresolved.
 
 [Graphify setup](docs/graphify.md) provides a project-scoped Codex skill and a
 local C/C++ knowledge graph for queries about symbols and relationships.
