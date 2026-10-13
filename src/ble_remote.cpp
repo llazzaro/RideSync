@@ -1,4 +1,5 @@
 #include "ble_remote.h"
+#include "camera_manager.h"
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -71,8 +72,9 @@ bool BleBondAdmission::allowed() const {
          admitBond(stack_ready, restore_verified, refusal_installed, used, capacity,
                    existing_verified_identity);
 }
-BleCentral::BleCentral(BleHost &host, BleResultSink &sink, HealthProgress *health)
-    : host_(host), sink_(sink), health_(health) {}
+BleCentral::BleCentral(BleHost &host, BleResultSink &sink, HealthProgress *health,
+                       Clock *receipt_clock)
+    : host_(host), sink_(sink), health_(health), receipt_clock_(receipt_clock) {}
 BleCentral::~BleCentral() {
   // Runtime callers must keep this fixed object alive while cleanup is unresolved.
   // No destructor may free callback contexts merely because stop was requested.
@@ -322,7 +324,9 @@ bool BleCentral::read(uint8_t i, uint8_t endpoint, uint32_t now) {
   return launch(i, c, now);
 }
 bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t size, uint32_t now,
-                       const void *stream_owner) {
+                       const void *stream_owner, uint32_t timeout_ms) {
+  if (!timeout_ms || timeout_ms > kPhaseDeadlineMs)
+    return false;
   if (!admissionOpen(i) || peers_[i].write_owner != stream_owner ||
       endpoint >= peers_[i].spec.endpoint_count || !data || !size || size > kBlePayload ||
       !(peers_[i].spec.endpoints[endpoint].properties & 8))
@@ -333,6 +337,7 @@ bool BleCentral::write(uint8_t i, uint8_t endpoint, const uint8_t *data, size_t 
   c.phase = BlePhase::Write;
   c.handle = p.endpoints[endpoint].value;
   c.size = size;
+  c.duration_ms = timeout_ms;
   std::memcpy(c.bytes.data(), data, size);
   return launch(i, c, now);
 }
@@ -426,6 +431,8 @@ void BleCentral::captureLinkEvent(BleContext &c, const BleEvent &e) {
 }
 void BleCentral::copied(BleContext &c, BleEvent e) {
   // Metadata comes only from the immutable initiating context, never a live map.
+  if (receipt_clock_)
+    e.received_ms = receipt_clock_->now();
   e.peer = c.peer;
   e.generation = c.generation;
   e.phase = c.phase;
@@ -467,6 +474,7 @@ void BleCentral::emit(uint8_t i, BleResultKind kind, const BleEvent &event) {
   BleResult r;
   r.kind = kind;
   r.event = event;
+  r.receipt_known = receipt_clock_ != nullptr && kind == BleResultKind::Notification;
   if (i < kBlePeers) {
     const auto &p = peers_[i];
     r.event.peer = i;
@@ -525,7 +533,7 @@ bool BleCentral::launch(uint8_t i, BleCommand c, uint32_t now) {
   }
   p.phase = c.phase;
   if (!p.deferred)
-    p.deadline = now + kPhaseDeadlineMs;
+    p.deadline = now + (profileIo(c.phase) && c.duration_ms ? c.duration_ms : kPhaseDeadlineMs);
   p.deferred = true;
   p.deferred_command = c;
   const auto mtu = checkMtu(i, c);
@@ -653,6 +661,7 @@ bool BleCentral::eventNotification(const BleEvent &e) {
     if (p.spec.endpoints[n].subscribe && p.endpoints[n].value == e.handle) {
       BleResult r;
       r.kind = BleResultKind::Notification;
+      r.receipt_known = receipt_clock_ != nullptr;
       r.event = e;
       r.endpoint = n;
       sink_.result(r);

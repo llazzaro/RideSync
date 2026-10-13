@@ -221,6 +221,18 @@ void X5Adapter::publishObservation() {
     return;
   Event e(0, token_.connection, EventKind::RecordingObserved);
   e.recording = observed();
+  if (has_observation_ && e.recording != RecordingState::Unknown) {
+    e.has_health = true;
+    e.health.field = HealthField::Recording;
+    e.health.capability = CapabilityState::Supported;
+    e.health.validity = HealthValidity::Valid;
+    e.health.profile = HealthProfile::X5Ce80;
+    e.health.unit = HealthUnit::RecordingState;
+    e.health.value = static_cast<uint64_t>(e.recording);
+    e.health.connection = token_.connection;
+    e.health.sequence = observation_sequence_;
+    e.health.received_ms = observed_ms_;
+  }
   publish(e);
 }
 void X5Adapter::invalidate(bool mode, bool publish) {

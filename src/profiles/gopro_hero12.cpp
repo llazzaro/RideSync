@@ -1,6 +1,7 @@
 #include "profiles/gopro_hero12.h"
 #include "profiles/qualification.h"
 #include "recording_manager.h"
+#include <algorithm>
 #include <cstring>
 
 namespace ridesync {
@@ -57,7 +58,7 @@ uint8_t channelEndpoint(gopro::Channel c, bool write) {
 } // namespace
 
 Hero12Adapter::Hero12Adapter(BleHost &host, Clock &clock)
-    : clock_(clock), central_(host, *this, &progress_) {}
+    : clock_(clock), central_(host, *this, &progress_, &clock) {}
 void Hero12Adapter::advanceManagers(bool advance_managers) {
   if (advance_managers && group_)
     group_->tick();
@@ -80,6 +81,25 @@ void Hero12Adapter::cancelRecoveryOperation(uint8_t i) {
     manager_->cancel(i);
 }
 void Hero12Adapter::attach(CameraManager &manager) { manager_ = &manager; }
+bool Hero12Adapter::attachHealthSink(CameraHealthSampleSink &sink) {
+  if (health_sink_ && health_sink_ != &sink)
+    return false;
+  health_sink_ = &sink;
+  return true;
+}
+void Hero12Adapter::detachHealthSink(const CameraHealthSampleSink *expected) {
+  if (health_sink_ != expected)
+    return;
+  health_sink_ = nullptr;
+  for (uint8_t i = 0; i < kBlePeers; ++i) {
+    if (healthStep(peers_[i].step))
+      finishHealth(i, false);
+    auto &h = health_poll_[i];
+    h.floor = 0;
+    h.receipt_known = false;
+    h.registered = h.bootstrapped = true; // No replay into a replacement owner.
+  }
+}
 RetryPolicy Hero12Adapter::managerPolicy() {
   RetryPolicy p;
   p.timeout_ms = 120000;
@@ -122,7 +142,8 @@ bool Hero12Adapter::admitPacket(uint8_t i, Step step, const OutgoingPacket &out)
   const uint8_t endpoint = channelEndpoint(out.route, true);
   if (step == Step::Hardware && p.hardware_attempts >= kHardwarePolls)
     return false;
-  if (!central_.write(i, endpoint, out.bytes, out.length, clock_.now()))
+  if (!central_.write(i, endpoint, out.bytes, out.length, clock_.now(), nullptr,
+                      healthStep(step) ? 1000 : 5000))
     return false;
   if (step == Step::Hardware)
     ++p.hardware_attempts;
@@ -131,7 +152,14 @@ bool Hero12Adapter::admitPacket(uint8_t i, Step step, const OutgoingPacket &out)
   p.expected_id = out.id;
   p.expected_status = out.status;
   p.write_endpoint = endpoint;
-  p.deadline = clock_.now() + kCameraResponseMs;
+  p.deadline = clock_.now() + (healthStep(step) ? 1000 : kCameraResponseMs);
+  if (out.route == gopro::Channel::Query && out.id == 0x13) {
+    auto &health = health_poll_[i];
+    health.query_known = true;
+    health.query_at = clock_.now();
+    if (!healthStep(step) && health.floor)
+      health.encoding_due = clock_.now() + std::max(uint32_t(5000), health.floor);
+  }
   p.att_done = p.camera_done = false;
   p.waiting_write = true;
   p.fragment = false;
@@ -308,6 +336,8 @@ bool Hero12Adapter::beginConnection(uint8_t i, Token token) {
     p.fault = Hero12Fault::Transport;
     return false;
   }
+  health_poll_[i] = HealthPoll{};
+  health_poll_[i].video_valid = p.qualification.ordinary_video_confirmed;
   p = [&] {
     Peer fresh;
     fresh.qualification = p.qualification;
@@ -322,12 +352,18 @@ bool Hero12Adapter::beginConnection(uint8_t i, Token token) {
 }
 bool Hero12Adapter::beginCommand(uint8_t i, Operation op, Token token) {
   auto &p = peers_[i];
-  if (!p.ready || p.sealed || p.step != Step::None || p.connection != token.connection ||
+  if (!p.ready || p.sealed ||
+      (p.step != Step::None && p.step != Step::KeepAlive && !healthStep(p.step)) ||
+      p.connection != token.connection ||
       (op != Operation::Start && op != Operation::Stop && op != Operation::Query))
     return false;
   p.operation = op;
   p.token = token;
   p.target_encoding = op == Operation::Start;
+  if (p.step == Step::KeepAlive || healthStep(p.step) || !central_.admissionOpen(i)) {
+    p.deferred_stop = true;
+    return true;
+  }
   // A fresh encoding query avoids redundant shutter delivery. Start then gets
   // fresh Busy and Ready before video mode; Stop can proceed while encoding.
   return send(i, Step::QueryEncoding);
@@ -381,6 +417,7 @@ void Hero12Adapter::retire(uint8_t i, Hero12Fault fault) {
   p.connecting = p.ready = false;
   p.step = Step::None;
   p.fault = fault;
+  health_poll_[i] = HealthPoll{};
   reassembler_.resetPeer(i);
   disconnect_pending_[i] = true;
   central_.disconnect(i);
@@ -390,12 +427,27 @@ void Hero12Adapter::enqueue(Event e) {
     retire(static_cast<uint8_t>(e.peer), Hero12Fault::Protocol);
     return;
   }
-  auto &slot = events_[event_count_++];
+  uint8_t target = event_count_;
+  if (healthEnabled(static_cast<uint8_t>(e.peer)) && e.kind == EventKind::RecordingObserved) {
+    for (uint8_t n = 0; n < event_count_; ++n)
+      if (events_[n].peer == e.peer && events_[n].kind == EventKind::RecordingObserved) {
+        target = n;
+        if (health_coalesced_ != UINT32_MAX)
+          ++health_coalesced_;
+        break;
+      }
+  }
+  if (target == event_count_)
+    ++event_count_;
+  auto &slot = events_[target];
   slot.peer = static_cast<uint8_t>(e.peer);
   slot.token = e.token;
   slot.kind = e.kind;
   slot.recording = e.recording;
   slot.capabilities = e.capabilities;
+  slot.qualified_receipt = e.has_health;
+  slot.received_ms = e.health.received_ms;
+  slot.sequence = e.health.sequence;
 }
 void Hero12Adapter::drain() {
   if (!manager_)
@@ -417,6 +469,18 @@ void Hero12Adapter::drain() {
     Event e(slot.peer, slot.token, slot.kind);
     e.recording = slot.recording;
     e.capabilities = slot.capabilities;
+    if (slot.qualified_receipt) {
+      e.has_health = true;
+      e.health.field = HealthField::Recording;
+      e.health.value = static_cast<uint64_t>(e.recording);
+      e.health.connection = e.token.connection;
+      e.health.received_ms = slot.received_ms;
+      e.health.sequence = slot.sequence;
+      e.health.capability = CapabilityState::Supported;
+      e.health.validity = HealthValidity::Valid;
+      e.health.profile = HealthProfile::Hero12V1;
+      e.health.unit = HealthUnit::RecordingState;
+    }
     if (group_)
       group_->event(e);
     else
@@ -455,7 +519,29 @@ const Hero12Adapter::StepSpec &Hero12Adapter::stepSpec(Step step) {
 }
 bool Hero12Adapter::preparePacket(uint8_t i, Step step, OutgoingPacket &out) const {
   const auto &p = peers_[i];
-  if (setupStep(step)) {
+  if (healthStep(step)) {
+    static const gopro::StatusId ids[] = {gopro::StatusId::BatteryPresent,
+                                          gopro::StatusId::Overheating,
+                                          gopro::StatusId::Encoding,
+                                          gopro::StatusId::RemainingVideoSeconds,
+                                          gopro::StatusId::SdRemainingKilobytes,
+                                          gopro::StatusId::MinimumPollPeriodMs,
+                                          gopro::StatusId::BatteryPercentage};
+    gopro::StatusId selected[7];
+    size_t count = 0;
+    for (uint8_t n = 0; n < 7; ++n)
+      if (health_poll_[i].query_mask & (1 << n))
+        selected[count++] = ids[n];
+    gopro::Packet encoded;
+    if (!gopro::encodeStatuses(step == Step::HealthRegister ? gopro::StatusOperation::Register
+                                                            : gopro::StatusOperation::Get,
+                               selected, count, encoded))
+      return false;
+    out.route = encoded.channel;
+    out.id = encoded.id;
+    out.length = encoded.size;
+    std::memcpy(out.bytes, encoded.bytes, out.length);
+  } else if (setupStep(step)) {
     gopro::SetupPacket encoded;
     const auto op = step == Step::Pair ? gopro::SetupOperation::PairingFinish
                                        : gopro::SetupOperation::ClaimExternalControl;
@@ -508,9 +594,21 @@ void Hero12Adapter::observe(uint8_t i, bool value, bool command) {
   Event e(i, observed_token,
           command ? EventKind::CommandRecordingObserved : EventKind::RecordingObserved);
   e.recording = value ? RecordingState::Recording : RecordingState::Stopped;
+  const auto &h = health_poll_[i];
+  if (healthEnabled(i) && h.receipt_known && h.sequence && h.floor) {
+    e.has_health = true;
+    e.health.received_ms = h.received_ms;
+    e.health.sequence = h.sequence;
+  }
   enqueue(e);
 }
 bool Hero12Adapter::requestedStatusPresent(const Peer &p, const gopro::Response &r) {
+  // Background queries include floor 60. Their full response shape cannot own
+  // the later single-field foreground query, even though both use classic 0x13.
+  if (r.battery_present_known || r.overheating_known || r.remaining_video_seconds_known ||
+      r.sd_remaining_kilobytes_known || r.minimum_poll_period_ms_known ||
+      r.battery_percentage_known)
+    return false;
   switch (p.step) {
   case Step::GetBusy:
     return r.busy_known;
@@ -554,6 +652,32 @@ bool Hero12Adapter::classicResponse(uint8_t i, gopro::Channel route,
   auto &p = peers_[i];
 
   const auto r = gopro::decode(route, message);
+  if (healthStep(p.step)) {
+    if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
+      finishHealth(i, true);
+      return false;
+    }
+    const auto mask = health_poll_[i].query_mask;
+    if ((mask & 0x20) && !r.minimum_poll_period_ms_known)
+      return false;
+    if ((mask & 0x04) && !r.encoding_known)
+      return false;
+    healthResponse(i, r);
+    if (r.encoding_known)
+      observe(i, r.encoding, false);
+    return true;
+  }
+  if (healthEnabled(i) && r.outcome == gopro::Outcome::Complete && !r.result)
+    healthResponse(i, r);
+  if (healthEnabled(i) && r.outcome == gopro::Outcome::Complete && r.result && r.id == 0x13 &&
+      p.expected_status) {
+    // Classic Get errors carry no request identity. A late optional rejection
+    // cannot be assigned to the current foreground read. Await its qualified
+    // field or the unchanged finite foreground deadline; never infer success.
+    if (health_failures_ != UINT32_MAX)
+      ++health_failures_;
+    return false;
+  }
   if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
     retire(i, r.outcome == gopro::Outcome::Complete ? Hero12Fault::CameraRejected
                                                     : Hero12Fault::Protocol);
@@ -596,6 +720,10 @@ void Hero12Adapter::cameraMessage(uint8_t i, gopro::Channel route, const gopro::
   // Central dispatches queued notifications before service() checks deadlines.
   // Retire the expired transaction before any status mutation or wire-ACK hook.
   if (p.step != Step::None && reached(clock_.now(), p.deadline)) {
+    if (healthStep(p.step)) {
+      finishHealth(i, true);
+      return;
+    }
     retire(i, Hero12Fault::Timeout);
     return;
   }
@@ -705,6 +833,10 @@ void Hero12Adapter::advance(uint8_t i) {
   if (!acknowledged(i))
     return;
   const auto done = p.step;
+  if (healthStep(done)) {
+    finishHealth(i, false);
+    return;
+  }
   p.step = Step::None;
   const auto next = nextStep(i, done);
   if (next != Step::None && !send(i, next))
@@ -724,6 +856,13 @@ void Hero12Adapter::notification(uint8_t i, const BleResult &r) {
     retire(i, Hero12Fault::Protocol);
     return;
   }
+  auto &h = health_poll_[i];
+  if (!p.fragment) {
+    h.receipt_known = r.receipt_known;
+    h.received_ms = r.event.received_ms;
+  } else {
+    h.receipt_known = h.receipt_known && r.receipt_known;
+  }
   gopro::Message message;
   const auto outcome =
       reassembler_.feed(i, route, r.event.bytes.data(), r.event.size, clock_.now(), message);
@@ -740,9 +879,16 @@ void Hero12Adapter::notification(uint8_t i, const BleResult &r) {
   } else if (outcome == gopro::Outcome::Complete) {
     if (p.fragment && p.fragment_route == route)
       p.fragment = false;
+    if (h.sequence != UINT32_MAX)
+      ++h.sequence;
+    else
+      h.receipt_known = false;
     cameraMessage(i, route, message);
   } else {
-    retire(i, Hero12Fault::Protocol);
+    if (healthStep(p.step))
+      finishHealth(i, true);
+    else
+      retire(i, Hero12Fault::Protocol);
   }
 }
 void Hero12Adapter::writeComplete(uint8_t i, const BleResult &r) {
@@ -791,7 +937,7 @@ bool Hero12Adapter::identityResponse(uint8_t i, gopro::Channel route,
 }
 void Hero12Adapter::publishWireAck(uint8_t i) {
   auto &p = peers_[i];
-  if (!manager_ || p.step == Step::KeepAlive)
+  if (!manager_ || p.step == Step::KeepAlive || healthStep(p.step))
     return;
 
   CameraAckDomain domain =
@@ -806,6 +952,11 @@ void Hero12Adapter::unsolicitedStatus(uint8_t i, gopro::Channel route,
 
   const auto r = gopro::decode(route, message);
   if (r.outcome != gopro::Outcome::Complete || r.result != 0) {
+    if (healthEnabled(i)) {
+      if (health_failures_ != UINT32_MAX)
+        ++health_failures_;
+      return;
+    }
     retire(i, Hero12Fault::Protocol);
     return;
   }
@@ -817,6 +968,8 @@ void Hero12Adapter::unsolicitedStatus(uint8_t i, gopro::Channel route,
     p.ready_known = true;
     p.camera_ready = r.ready;
   }
+  if (healthEnabled(i))
+    healthResponse(i, r);
   if (r.encoding_known)
     observe(i, r.encoding, false);
   return;
@@ -1076,11 +1229,28 @@ void Hero12Adapter::servicePeer(uint8_t i) {
   if (p.sealed)
     return;
   if (transactionExpired(i)) {
+    if (healthStep(p.step)) {
+      finishHealth(i, true);
+      return;
+    }
     retire(i, Hero12Fault::Timeout);
     return;
   }
   if (p.step != Step::None) {
     advance(i);
+    return;
+  }
+  if (p.resume != Step::None && central_.admissionOpen(i)) {
+    const auto step = p.resume;
+    p.resume = Step::None;
+    if (!send(i, step))
+      retire(i, Hero12Fault::DeliveryUncertain);
+    return;
+  }
+  if (p.deferred_stop && central_.admissionOpen(i)) {
+    p.deferred_stop = false;
+    if (!send(i, Step::QueryEncoding))
+      retire(i, Hero12Fault::DeliveryUncertain);
     return;
   }
   if (hardwareRetryReady(i)) {
@@ -1111,6 +1281,137 @@ void Hero12Adapter::service(CameraServiceAction *action, bool advance_managers) 
   advanceManagers(advance_managers);
   if (manager_ && enabled_)
     advanceRecovery();
+  serviceHealth();
   servicing_ = false;
+}
+bool Hero12Adapter::healthStep(Step step) {
+  return step == Step::HealthRegister || step == Step::HealthQuery;
+}
+bool Hero12Adapter::healthEnabled(uint8_t i) const {
+  return health_sink_ && i < kBlePeers && peers_[i].qualification.health_enabled &&
+         peers_[i].qualified && peers_[i].ready && !peers_[i].sealed;
+}
+bool Hero12Adapter::querySpacingReady(uint8_t i) const {
+  const auto &h = health_poll_[i];
+  return !h.floor || !h.query_known || clock_.now() - h.query_at >= h.floor;
+}
+void Hero12Adapter::healthField(uint8_t i, HealthField field, HealthUnit unit, uint64_t value,
+                                HealthValidity validity) {
+  if (!healthEnabled(i))
+    return;
+  const auto &h = health_poll_[i];
+  if (!h.receipt_known || !h.sequence)
+    return;
+  QualifiedHealthSample sample;
+  sample.connection = peers_[i].connection;
+  sample.received_ms = h.received_ms;
+  sample.sequence = h.sequence;
+  sample.field = field;
+  sample.unit = unit;
+  sample.profile = HealthProfile::Hero12V1;
+  sample.capability = CapabilityState::Supported;
+  sample.validity = h.floor ? validity : HealthValidity::Unavailable;
+  sample.value = value;
+  health_sink_->healthSample(i, sample);
+}
+void Hero12Adapter::healthResponse(uint8_t i, const gopro::Response &r) {
+  if (!healthEnabled(i))
+    return;
+  auto &h = health_poll_[i];
+  // Never replace an old queued receipt with owner-service time. Unknown receipt,
+  // backwards clocks and data beyond the maximum declared age cannot qualify.
+  if (!h.receipt_known || clock_.now() - h.received_ms >= 61000)
+    return;
+  if (r.minimum_poll_period_ms_known) {
+    h.bootstrapped = true;
+    const uint32_t previous = h.floor;
+    h.floor = r.minimum_poll_period_ms >= 1 && r.minimum_poll_period_ms <= 30000
+                  ? r.minimum_poll_period_ms
+                  : 0;
+    health_sink_->healthPollPeriod(i, h.floor, clock_.now());
+    if (h.floor != previous || !h.encoding_due)
+      h.encoding_due = clock_.now() + std::max(uint32_t(5000), h.floor);
+    if (h.floor != previous || !h.resource_due)
+      h.resource_due = clock_.now() + std::max(uint32_t(15000), h.floor);
+  }
+  if (r.battery_present_known) {
+    h.battery_known = true;
+    h.battery_present = r.battery_present;
+    h.battery_received_ms = h.received_ms;
+  }
+  if (r.battery_percentage_known || (r.battery_present_known && !r.battery_present))
+    healthField(i, HealthField::BatteryPercent, HealthUnit::Percent, r.battery_percentage,
+                h.battery_known && h.battery_present && r.battery_percentage_known &&
+                        clock_.now() - h.battery_received_ms <
+                            2 * std::max(uint32_t(15000), h.floor) + 1000
+                    ? HealthValidity::Valid
+                    : HealthValidity::Unavailable);
+  if (r.remaining_video_seconds_known)
+    healthField(i, HealthField::RemainingVideoSeconds, HealthUnit::Seconds,
+                r.remaining_video_seconds,
+                h.video_valid ? HealthValidity::Valid : HealthValidity::Unavailable);
+  if (r.sd_remaining_kilobytes_known)
+    healthField(i, HealthField::SdRemainingKilobytes, HealthUnit::Kilobytes,
+                r.sd_remaining_kilobytes, HealthValidity::Valid);
+  if (r.overheating_known)
+    healthField(i, HealthField::Overheating, HealthUnit::Boolean, r.overheating,
+                HealthValidity::Valid);
+}
+void Hero12Adapter::finishHealth(uint8_t i, bool failure) {
+  auto &p = peers_[i];
+  if (failure && health_failures_ != UINT32_MAX)
+    ++health_failures_;
+  p.step = Step::None;
+  p.fragment = false;
+  reassembler_.reset(i, gopro::Channel::Query);
+}
+void Hero12Adapter::serviceHealth() {
+  const uint32_t now = clock_.now();
+  if (!enabled_ || !manager_ || !health_sink_ ||
+      (health_admitted_ && now - health_admitted_ms_ < 500))
+    return;
+  for (uint8_t n = 0; n < kBlePeers; ++n) {
+    const uint8_t i = (health_cursor_ + n) % kBlePeers;
+    auto &p = peers_[i];
+    auto &h = health_poll_[i];
+    if (!healthEnabled(i) || p.step != Step::None || p.resume != Step::None || p.deferred_stop ||
+        !central_.admissionOpen(i) || manager_->state(i)->lifecycle != Lifecycle::Ready ||
+        reached(now, p.keepalive_due) || !querySpacingReady(i))
+      continue;
+    Step step = Step::HealthQuery;
+    if (!h.registered) {
+      h.registered = true; // One bounded attempt for this connection.
+      h.query_mask = 0x7b; // IDs 1,6,35,54,60,70; Encoding already registered.
+      step = Step::HealthRegister;
+    } else if (!h.floor && !h.bootstrapped) {
+      h.bootstrapped = true; // One floor bootstrap, then unavailable without a valid floor.
+      h.query_mask = 0x7f;
+    } else {
+      if (!h.floor)
+        continue;
+      h.query_mask = 0;
+      if (reached(now, h.encoding_due))
+        h.query_mask |= 0x24;
+      if (reached(now, h.resource_due))
+        h.query_mask |= 0x7b;
+      if (!h.query_mask)
+        continue;
+    }
+    // Admission time anchors the next normal period, including rejected/timed-out
+    // queries. There is no retry queue and no catch-up schedule.
+    if (h.query_mask & 0x04)
+      h.encoding_due = now + std::max(uint32_t(5000), h.floor);
+    if (h.query_mask & 0x5b)
+      h.resource_due = now + std::max(uint32_t(15000), h.floor);
+    health_admitted_ = true;
+    health_admitted_ms_ = now;
+    health_cursor_ = (i + 1) % kBlePeers;
+    OutgoingPacket out;
+    if (!preparePacket(i, step, out) || !admitPacket(i, step, out)) {
+      if (health_failures_ != UINT32_MAX)
+        ++health_failures_;
+    }
+    break;
+  }
 }
 } // namespace ridesync

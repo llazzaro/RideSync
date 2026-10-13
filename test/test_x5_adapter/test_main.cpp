@@ -1,4 +1,5 @@
 #include "../fixtures/insta360/ce80_display.h"
+#include "camera_health.h"
 #include "profiles/insta360_x5.h"
 #include <cstring>
 #include <deque>
@@ -119,6 +120,23 @@ struct Harness {
     service();
   }
 };
+void qualified_health_recording_uses_transport_receipt_not_later_service() {
+  Harness h;
+  CameraHealthEvaluator evaluator;
+  TEST_ASSERT_TRUE(h.manager.attachHealthObserver(evaluator));
+  h.connected();
+  h.clock.time = 2000;
+  h.frame(kCe80Timer);
+  h.clock.time = 2400;
+  h.service();
+  const auto *p = evaluator.snapshot(0);
+  TEST_ASSERT_NOT_NULL(p);
+  const auto &f = p->fields[static_cast<size_t>(HealthField::Recording)];
+  TEST_ASSERT_EQUAL_INT(HealthValidity::Valid, f.validity);
+  TEST_ASSERT_EQUAL_UINT32(2000, f.received_ms);
+  TEST_ASSERT_EQUAL_UINT64(static_cast<uint64_t>(RecordingState::Recording), f.value);
+  h.manager.detachHealthObserver(&evaluator);
+}
 void connect_does_not_prove_recording() {
   Harness h;
   h.connected(false);
@@ -463,6 +481,7 @@ void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(qualified_health_recording_uses_transport_receipt_not_later_service);
   RUN_TEST(connect_does_not_prove_recording);
   RUN_TEST(send_acceptance_does_not_prove_recording);
   RUN_TEST(ambiguous_send_never_retries);

@@ -5,7 +5,7 @@
 namespace ridesync {
 
 DjiAdapter::DjiAdapter(BleHost &host, Clock &clock)
-    : host_(host), clock_(clock), central_(host, *this, &progress_) {}
+    : host_(host), clock_(clock), central_(host, *this, &progress_, &clock) {}
 bool DjiAdapter::acknowledged(uint8_t i) const {
   const auto &p = peers_[i];
   return p.step != Step::None && p.att_done && p.camera_done && central_.admissionOpen(i) &&
@@ -263,6 +263,8 @@ void DjiAdapter::complete(uint8_t i) {
       observed.token.connection = p.token.connection;
       observed.kind = EventKind::RecordingObserved;
       observed.recording = p.observed;
+      observed.health.received_ms = p.status_seen;
+      observed.health.sequence = p.health_sequence;
     }
   }
   p.poll_due = clock_.now() + kPollMs;
@@ -308,7 +310,8 @@ void DjiAdapter::observe(uint8_t i, const dji::Decoded &d) {
   p.mode = d.camera_mode;
   p.camera_status = d.camera_status;
   p.power = d.power_mode;
-  p.status_seen = clock_.now();
+  p.status_seen = notification_receipt_;
+  ++p.health_sequence;
   p.has_status = true;
   if (p.connecting)
     return;
@@ -322,6 +325,8 @@ void DjiAdapter::observe(uint8_t i, const dji::Decoded &d) {
   e.token.connection = p.token.connection;
   e.kind = EventKind::RecordingObserved;
   e.recording = d.recording;
+  e.health.received_ms = p.status_seen;
+  e.health.sequence = p.health_sequence;
   if (p.step == Step::Query)
     p.camera_done = true;
 }
@@ -358,6 +363,7 @@ bool DjiAdapter::cameraResponse(uint8_t i, const dji::Decoded &d) {
 }
 void DjiAdapter::notification(uint8_t i, const BleResult &r) {
   auto &p = peers_[i];
+  notification_receipt_ = r.receipt_known ? r.event.received_ms : clock_.now();
 
   if (r.endpoint != 1 || !r.event.size || r.event.size > r.event.bytes.size() ||
       (p.receiver.pending() && reached(clock_.now(), p.fragment_started + kFragmentMs))) {
@@ -486,8 +492,22 @@ void DjiAdapter::drain() {
     if (peers_[pending.peer].sealed)
       continue;
     Event e(pending.peer, pending.token, pending.kind);
-    e.capabilities = pending.capabilities;
+    if (pending.kind == EventKind::Completed)
+      e.capabilities = pending.capabilities;
     e.recording = pending.recording;
+    if (pending.kind == EventKind::RecordingObserved &&
+        pending.recording != RecordingState::Unknown && pending.health.sequence) {
+      e.has_health = true;
+      e.health.field = HealthField::Recording;
+      e.health.capability = CapabilityState::Supported;
+      e.health.validity = HealthValidity::Valid;
+      e.health.profile = HealthProfile::DjiStatus;
+      e.health.unit = HealthUnit::RecordingState;
+      e.health.value = static_cast<uint64_t>(pending.recording);
+      e.health.connection = pending.token.connection;
+      e.health.sequence = pending.health.sequence;
+      e.health.received_ms = pending.health.received_ms;
+    }
     if (group_)
       group_->event(e);
     else

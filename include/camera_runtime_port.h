@@ -2,6 +2,13 @@
 #include "camera_manager.h"
 namespace ridesync {
 class RecordingManager;
+// Serialized owner delivery; callbacks never touch evaluator or storage.
+class CameraHealthSampleSink {
+public:
+  virtual ~CameraHealthSampleSink() = default;
+  virtual void healthSample(uint8_t peer, const QualifiedHealthSample &) = 0;
+  virtual void healthPollPeriod(uint8_t peer, uint32_t floor_ms, uint32_t now) = 0;
+};
 class CameraServiceAction {
 public:
   virtual ~CameraServiceAction() = default;
@@ -51,6 +58,10 @@ struct Hero12RecoveryState {
 class CameraRuntimePort {
 public:
   virtual ~CameraRuntimePort() = default;
+  virtual bool attachHealthSink(CameraHealthSampleSink &) { return false; }
+  virtual void detachHealthSink(const CameraHealthSampleSink *) {}
+  virtual uint32_t healthCoalesced() const { return 0; }
+  virtual uint32_t healthFailures() const { return 0; }
   virtual void attachGroup(RecordingManager &) = 0;
   virtual void detachGroup(const RecordingManager *) = 0;
   virtual void service(CameraServiceAction *action = nullptr) = 0;

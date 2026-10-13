@@ -89,6 +89,9 @@ struct ScriptHost : SilentHost {
   bool reject_pair = false, reject_claim = false, wrong_pair_route = false,
        wrong_query_status = false;
   bool fragment_hardware = false;
+  uint32_t health_floor = 5000;
+  bool health_reject = false, health_silent = false;
+  bool battery_present = true;
   bool fail_scan_submit = false;
   uint8_t empty_register_target = 0, wrong_register_target = 0;
   BleBondAdmission bond;
@@ -138,9 +141,12 @@ struct ScriptHost : SilentHost {
     e.kind = BleEventKind::Notification;
     e.connection = link.connection.load();
     e.handle = handle;
-    e.size = static_cast<uint8_t>(body.size() + 1);
-    e.bytes[0] = static_cast<uint8_t>(body.size());
-    std::copy(body.begin(), body.end(), e.bytes.begin() + 1);
+    const size_t header = body.size() >= 32 ? 2 : 1;
+    e.size = static_cast<uint8_t>(body.size() + header);
+    e.bytes[0] = header == 2 ? 0x20 : static_cast<uint8_t>(body.size());
+    if (header == 2)
+      e.bytes[1] = static_cast<uint8_t>(body.size());
+    std::copy(body.begin(), body.end(), e.bytes.begin() + header);
     deliver(link, e);
   }
 };
@@ -199,7 +205,43 @@ template <typename Rig> uint8_t queryValue(Rig &rig, uint8_t target, uint8_t pee
   return target == 82 ? rig.host.ready : rig.host.busy;
 }
 template <typename Rig>
-void queryReply(Rig &rig, const uint8_t *payload, BleContext &ctx, std::vector<uint8_t> &reply) {
+void queryReply(Rig &rig, const uint8_t *payload, BleContext &ctx, std::vector<uint8_t> &reply,
+                size_t count) {
+  if (payload[1] == 1 || count > 1) {
+    reply = {payload[0], static_cast<uint8_t>(rig.host.health_reject ? 1 : 0)};
+    if (rig.host.health_reject)
+      return;
+    for (size_t n = 0; n < count; ++n) {
+      const uint8_t id = payload[n + 1];
+      switch (id) {
+      case 1:
+        reply.insert(reply.end(), {1, 1, static_cast<uint8_t>(rig.host.battery_present)});
+        break;
+      case 6:
+        reply.insert(reply.end(), {6, 1, 0});
+        break;
+      case 10:
+        reply.insert(reply.end(), {10, 1, queryValue(rig, 10, ctx.peer)});
+        break;
+      case 35:
+        reply.insert(reply.end(), {35, 4, 0, 0, 1, 44});
+        break;
+      case 54:
+        reply.insert(reply.end(), {54, 8, 0, 0, 0, 0, 0, 0, 1, 0});
+        break;
+      case 60:
+        reply.insert(reply.end(), {60, 4, static_cast<uint8_t>(rig.host.health_floor >> 24),
+                                   static_cast<uint8_t>(rig.host.health_floor >> 16),
+                                   static_cast<uint8_t>(rig.host.health_floor >> 8),
+                                   static_cast<uint8_t>(rig.host.health_floor)});
+        break;
+      case 70:
+        reply.insert(reply.end(), {70, 1, 20});
+        break;
+      }
+    }
+    return;
+  }
   if (payload[0] == 0x53) {
     reply = registerReply(rig, payload[1]);
     return;
@@ -310,7 +352,9 @@ template <typename Rig> void write(Rig &rig, size_t n, const BleCommand &c, BleC
     break;
   case 15:
     notify_handle = 18;
-    queryReply(rig, payload, ctx, reply);
+    if (rig.host.health_silent && (payload[1] == 1 || c.size > 4))
+      return;
+    queryReply(rig, payload, ctx, reply, c.size - 3);
     break;
   default:
     break;
@@ -364,7 +408,8 @@ struct Rig {
   bool omit_cccd = false;
   unsigned peer_count = 1;
   BleContext *links[4] = {};
-  explicit Rig(RetryPolicy policy = Hero12Adapter::managerPolicy(), unsigned peers = 1)
+  explicit Rig(RetryPolicy policy = Hero12Adapter::managerPolicy(), unsigned peers = 1,
+               bool health = false, bool video = false)
       : adapter(host, clock), manager(clock, adapter, policy), peer_count(peers) {
     adapter.attach(manager);
     SourceConfig config;
@@ -386,6 +431,8 @@ struct Rig {
     q.api_major = 1;
     q.api_minor = 0;
     q.source_qualified = q.classic_profile_confirmed = true;
+    q.health_enabled = health;
+    q.ordinary_video_confirmed = video;
     for (unsigned i = 0; i < peers; ++i) {
       q.identity.address[0] = i + 1;
       TEST_ASSERT_TRUE(adapter.configurePeer(i, q));
@@ -1913,8 +1960,313 @@ void maintenance_retires_actual_target_context_and_keeps_foreign_ready() {
   r.pump();
   TEST_ASSERT_TRUE(r.manager.state(1)->has_observation);
 }
+struct HealthSinkSpy : CameraHealthSampleSink {
+  std::vector<QualifiedHealthSample> samples;
+  std::vector<uint32_t> floors;
+  void healthSample(uint8_t, const QualifiedHealthSample &sample) override {
+    samples.push_back(sample);
+  }
+  void healthPollPeriod(uint8_t, uint32_t floor, uint32_t) override { floors.push_back(floor); }
+};
+void optional_health_failure_keeps_control_link_and_shutter_operable() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  TEST_ASSERT_TRUE(r.adapter.attachHealthSink(sink));
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  // A rejected optional update must not retire functioning recording control.
+  r.host.notification(*r.link, 18, {0x93, 1});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(0)->lifecycle);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Start));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.manager.state(0)->observed);
+  r.adapter.detachHealthSink(&sink);
+}
+unsigned backgroundWrites(const Rig &r) {
+  unsigned n = 0;
+  for (const auto &c : r.host.commands)
+    n += c.phase == BlePhase::Write && c.handle == 15 && c.size > 4;
+  return n;
+}
+void health_requires_both_opt_in_and_owner_attachment() {
+  HealthSinkSpy sink;
+  Rig r;
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.clock.value += 20000;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(0, backgroundWrites(r));
+  TEST_ASSERT_TRUE(sink.samples.empty());
+  r.adapter.detachHealthSink(&sink);
+}
+void health_registers_once_and_uses_qualified_floor_and_video_guard() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, false);
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump(240);
+  r.pump(240);
+  TEST_ASSERT_EQUAL_UINT(1, backgroundWrites(r));
+  TEST_ASSERT_EQUAL_UINT(1, sink.floors.size());
+  TEST_ASSERT_EQUAL_UINT32(5000, sink.floors.back());
+  bool saw_battery = false, saw_time = false;
+  for (const auto &sample : sink.samples) {
+    TEST_ASSERT_EQUAL_INT(HealthProfile::Hero12V1, sample.profile);
+    TEST_ASSERT_EQUAL_UINT32(r.manager.state(0)->token.connection, sample.connection);
+    TEST_ASSERT_TRUE(sample.sequence > 0);
+    if (sample.field == HealthField::BatteryPercent) {
+      saw_battery = true;
+      TEST_ASSERT_EQUAL_INT(HealthValidity::Valid, sample.validity);
+      TEST_ASSERT_EQUAL_UINT64(20, sample.value);
+    }
+    if (sample.field == HealthField::RemainingVideoSeconds) {
+      saw_time = true;
+      TEST_ASSERT_EQUAL_INT(HealthValidity::Unavailable, sample.validity);
+    }
+  }
+  TEST_ASSERT_TRUE(saw_battery && saw_time);
+  r.adapter.detachHealthSink(&sink);
+}
+void invalid_health_floor_stays_unavailable_without_invented_poll_period() {
+  for (uint32_t floor : {uint32_t(0), uint32_t(30001)}) {
+    HealthSinkSpy sink;
+    Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+    r.host.health_floor = floor;
+    r.adapter.attachHealthSink(sink);
+    r.manager.request(0, Operation::Connect);
+    r.pump(240);
+    r.pump(240);
+    TEST_ASSERT_FALSE(sink.floors.empty());
+    TEST_ASSERT_EQUAL_UINT32(0, sink.floors.back());
+    const unsigned writes = backgroundWrites(r);
+    r.clock.value += 40000;
+    r.pump(240);
+    TEST_ASSERT_EQUAL_UINT(writes, backgroundWrites(r));
+    TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(0)->lifecycle);
+    r.adapter.detachHealthSink(&sink);
+  }
+}
+void health_poll_timeout_isolated_and_next_period_has_no_catchup_burst() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump(240);
+  r.pump(240);
+  r.host.health_silent = true;
+  r.clock.value += 15000;
+  r.pump(40);
+  const unsigned writes = backgroundWrites(r);
+  r.clock.value += 1000;
+  r.pump(40);
+  TEST_ASSERT_TRUE(r.adapter.healthFailures() > 0);
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(0)->lifecycle);
+  TEST_ASSERT_EQUAL_UINT(writes, backgroundWrites(r));
+  r.host.health_silent = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Stop));
+  r.pump(240);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.manager.state(0)->observed);
+  r.adapter.detachHealthSink(&sink);
+}
+void health_control_preempts_polling_floor_and_late_health_reply_cannot_complete_query() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.host.health_floor = 30000;
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  const uint32_t before = r.clock.value;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Start));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.manager.state(0)->observed);
+  TEST_ASSERT_TRUE(r.clock.value - before < 1000);
+  r.auto_camera = false;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Query));
+  r.pump(5);
+  r.host.notification(*r.link, 18, {0x13, 1});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Operating, r.manager.state(0)->lifecycle);
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 0, 60, 4, 0, 0, 0x75, 0x30});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Operating, r.manager.state(0)->lifecycle);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.manager.state(0)->observed);
+  r.host.notification(*r.link, 18, {0x13, 0, 10, 1, 1});
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(0)->lifecycle);
+  r.adapter.detachHealthSink(&sink);
+}
+void health_active_query_yields_to_admitted_stop_at_bounded_deadline() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  r.host.encoding = true;
+  r.host.health_silent = true;
+  r.clock.value += 5000;
+  r.pump(10);
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Stop));
+  r.clock.value += 1000;
+  r.host.health_silent = false;
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.manager.state(0)->observed);
+  TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(0)->lifecycle);
+  r.adapter.detachHealthSink(&sink);
+}
+void health_resources_without_battery_and_unqualified_video_remain_unavailable() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, false);
+  r.host.battery_present = false;
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  unsigned unavailable = 0;
+  for (const auto &sample : sink.samples)
+    if (sample.field == HealthField::BatteryPercent ||
+        sample.field == HealthField::RemainingVideoSeconds) {
+      ++unavailable;
+      TEST_ASSERT_EQUAL_INT(HealthValidity::Unavailable, sample.validity);
+    }
+  TEST_ASSERT_EQUAL_UINT(2, unavailable);
+  r.adapter.detachHealthSink(&sink);
+}
+void health_notifications_coalesce_with_visible_loss_and_preserve_old_receipt() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  const uint32_t received = r.clock.value;
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 1});
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 0});
+  r.host.notification(*r.link, 18, {0x93, 0, 10, 1, 1});
+  r.clock.value += 12000;
+  r.adapter.service();
+  TEST_ASSERT_TRUE(r.adapter.healthCoalesced() >= 2);
+  TEST_ASSERT_EQUAL_UINT32(received, r.manager.state(0)->last_observed_ms);
+  TEST_ASSERT_TRUE(r.manager.state(0)->has_qualified_observation);
+  r.pump();
+  r.adapter.detachHealthSink(&sink);
+}
+void health_four_peers_rotate_under_one_aggregate_admission_per_500ms() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 4, true, true);
+  r.adapter.attachHealthSink(sink);
+  for (uint8_t i = 0; i < 4; ++i)
+    r.manager.request(i, Operation::Connect);
+  r.pump();
+  r.pump();
+  unsigned seen = backgroundWrites(r);
+  for (unsigned n = 0; n < 20; ++n) {
+    r.clock.value += 100;
+    r.pump();
+    r.pump();
+    const unsigned current = backgroundWrites(r);
+    TEST_ASSERT_TRUE(current - seen <= 1);
+    seen = current;
+  }
+  TEST_ASSERT_EQUAL_UINT(4, seen);
+  TEST_ASSERT_EQUAL_UINT(4, sink.floors.size());
+  for (uint8_t i = 0; i < 4; ++i)
+    TEST_ASSERT_EQUAL_INT(Lifecycle::Ready, r.manager.state(i)->lifecycle);
+  r.adapter.detachHealthSink(&sink);
+}
+void health_reset_disconnect_and_owner_detach_never_replay_background_or_shutter() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  const unsigned before = backgroundWrites(r);
+  r.adapter.detachHealthSink(&sink);
+  r.clock.value += 20000;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(before, backgroundWrites(r));
+  r.manager.reset();
+  r.pump();
+  r.adapter.attachHealthSink(sink);
+  r.clock.value += 20000;
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(before, backgroundWrites(r));
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.manager.state(0)->observed);
+  r.adapter.detachHealthSink(&sink);
+}
+void changed_qualified_floor_reschedules_normal_period_without_immediate_burst() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.host.health_floor = 30000;
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  r.host.health_floor = 5000;
+  r.host.notification(*r.link, 18, {0x93, 0, 60, 4, 0, 0, 0x13, 0x88});
+  r.adapter.service();
+  const unsigned before = backgroundWrites(r);
+  r.pump();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(before, backgroundWrites(r));
+  r.clock.value += 5001;
+  r.pump();
+  r.pump();
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(before + 1, backgroundWrites(r));
+  r.adapter.detachHealthSink(&sink);
+}
+void scheduled_health_requests_fit_four_per_15seconds_and_refresh_resources() {
+  HealthSinkSpy sink;
+  Rig r(Hero12Adapter::managerPolicy(), 1, true, true);
+  r.adapter.attachHealthSink(sink);
+  r.manager.request(0, Operation::Connect);
+  r.pump();
+  r.pump();
+  const unsigned initial = backgroundWrites(r);
+  const size_t initial_samples = sink.samples.size();
+  for (unsigned n = 0; n < 30; ++n) {
+    r.clock.value += 500;
+    r.pump();
+    r.pump();
+  }
+  const unsigned scheduled = backgroundWrites(r) - initial;
+  TEST_ASSERT_TRUE(scheduled >= 3 && scheduled <= 4);
+  TEST_ASSERT_TRUE(sink.samples.size() > initial_samples);
+  bool batched = false;
+  for (const auto &c : r.host.commands) {
+    if (c.phase != BlePhase::Write || c.handle != 15 || c.bytes[2] != 0x13)
+      continue;
+    bool encoding = false, seconds = false;
+    for (size_t i = 3; i < c.size; ++i) {
+      encoding |= c.bytes[i] == 10;
+      seconds |= c.bytes[i] == 35;
+    }
+    batched |= encoding && seconds;
+  }
+  TEST_ASSERT_TRUE(batched);
+  r.adapter.detachHealthSink(&sink);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(optional_health_failure_keeps_control_link_and_shutter_operable);
+  RUN_TEST(health_requires_both_opt_in_and_owner_attachment);
+  RUN_TEST(health_registers_once_and_uses_qualified_floor_and_video_guard);
+  RUN_TEST(invalid_health_floor_stays_unavailable_without_invented_poll_period);
+  RUN_TEST(health_poll_timeout_isolated_and_next_period_has_no_catchup_burst);
+  RUN_TEST(health_control_preempts_polling_floor_and_late_health_reply_cannot_complete_query);
+  RUN_TEST(health_active_query_yields_to_admitted_stop_at_bounded_deadline);
+  RUN_TEST(health_resources_without_battery_and_unqualified_video_remain_unavailable);
+  RUN_TEST(health_notifications_coalesce_with_visible_loss_and_preserve_old_receipt);
+  RUN_TEST(health_four_peers_rotate_under_one_aggregate_admission_per_500ms);
+  RUN_TEST(health_reset_disconnect_and_owner_detach_never_replay_background_or_shutter);
+  RUN_TEST(changed_qualified_floor_reschedules_normal_period_without_immediate_burst);
+  RUN_TEST(scheduled_health_requests_fit_four_per_15seconds_and_refresh_resources);
+
   RUN_TEST(maintenance_retires_actual_target_context_and_keeps_foreign_ready);
   RUN_TEST(stop_waits_for_actual_host_release_and_rejects_late_query_without_blocking_peer);
   RUN_TEST(cancellation_retirement_wait_times_out_without_fabricated_stop_or_forced_release);

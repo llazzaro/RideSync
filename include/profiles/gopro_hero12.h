@@ -15,6 +15,9 @@ struct Hero12Qualification {
   uint8_t firmware_size = 0;
   uint64_t api_major = 0, api_minor = 0;
   bool source_qualified = false, classic_profile_confirmed = false;
+  bool health_enabled = false;
+  // Explicit commissioned ordinary-video premise. Encoding alone proves no mode.
+  bool ordinary_video_confirmed = false;
 };
 // One serialized owner calls start, service, manager request/event/tick and
 // configurePeer. Host callbacks enter only BleCentral's fixed copied queue.
@@ -25,6 +28,10 @@ public:
   Hero12Adapter(const Hero12Adapter &) = delete;
   Hero12Adapter &operator=(const Hero12Adapter &) = delete;
   void attach(CameraManager &);
+  bool attachHealthSink(CameraHealthSampleSink &) override;
+  void detachHealthSink(const CameraHealthSampleSink *) override;
+  uint32_t healthCoalesced() const override { return health_coalesced_; }
+  uint32_t healthFailures() const override { return health_failures_; }
   void attachGroup(RecordingManager &group) override { group_ = &group; }
   void detachGroup(const RecordingManager *expected) override {
     if (group_ == expected)
@@ -109,7 +116,9 @@ private:
     Shutter,
     ConfirmEncoding,
     QueryEncoding,
-    KeepAlive
+    KeepAlive,
+    HealthRegister,
+    HealthQuery
   };
   struct StepSpec {
     gopro::Request request;
@@ -134,6 +143,7 @@ private:
     bool busy_known = false, busy = false, ready_known = false, camera_ready = false;
     bool encoding_known = false, encoding = false, target_encoding = false;
     bool hardware_not_ready = false;
+    bool deferred_stop = false;
     uint8_t hardware_attempts = 0;
     uint32_t fragment_started = 0;
     gopro::Channel fragment_route = gopro::Channel::Command;
@@ -144,7 +154,18 @@ private:
     EventKind kind = EventKind::Failed;
     RecordingState recording = RecordingState::Unknown;
     Capabilities capabilities;
+    uint32_t received_ms = 0, sequence = 0;
+    bool qualified_receipt = false;
   };
+  struct HealthPoll {
+    uint32_t floor = 0, query_at = 0, encoding_due = 0, resource_due = 0;
+    uint32_t sequence = 0, received_ms = 0, battery_received_ms = 0;
+    uint8_t query_mask = 0;
+    bool query_known = false, registered = false, bootstrapped = false;
+    bool receipt_known = false, video_valid = false;
+    bool battery_known = false, battery_present = false;
+  };
+  static_assert(sizeof(HealthPoll) <= 36, "bounded health polling state");
   struct Recovery {
     Hero12RecoveryState state;
     uint32_t deadline = 0, operation = 0, connection = 0, source_connection = 0;
@@ -152,6 +173,11 @@ private:
   };
   Clock &clock_;
   CameraManager *manager_ = nullptr;
+  CameraHealthSampleSink *health_sink_ = nullptr;
+  std::array<HealthPoll, kBlePeers> health_poll_{};
+  uint32_t health_admitted_ms_ = 0, health_coalesced_ = 0, health_failures_ = 0;
+  uint8_t health_cursor_ = 0;
+  bool health_admitted_ = false;
   RecordingManager *group_ = nullptr;
   HealthProgress progress_;
   BleCentral central_;
@@ -197,5 +223,12 @@ private:
   void cameraMessage(uint8_t, gopro::Channel, const gopro::Message &);
   static bool reached(uint32_t now, uint32_t deadline);
   bool admitPacket(uint8_t i, Step step, const OutgoingPacket &out);
+  static bool healthStep(Step);
+  bool healthEnabled(uint8_t) const;
+  void serviceHealth();
+  void healthResponse(uint8_t, const gopro::Response &);
+  void healthField(uint8_t, HealthField, HealthUnit, uint64_t, HealthValidity);
+  void finishHealth(uint8_t, bool failure);
+  bool querySpacingReady(uint8_t) const;
 };
 } // namespace ridesync

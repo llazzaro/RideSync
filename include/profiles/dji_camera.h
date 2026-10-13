@@ -81,7 +81,7 @@ private:
     Step step = Step::None, deferred = Step::None;
     DjiFault fault = DjiFault::Disabled;
     uint32_t deadline = 0, response_deadline = 0, fragment_started = 0, poll_due = 0,
-             status_seen = 0;
+             status_seen = 0, health_sequence = 0;
     uint16_t handle = kBleNoHandle, next_sequence = 0, expected_sequence = 0, grant_sequence = 0,
              status_sequence = 0;
     RecordingState observed = RecordingState::Unknown;
@@ -90,13 +90,23 @@ private:
     bool att_done = false, camera_done = false, grant = false, has_status = false,
          have_status_sequence = false;
   };
+  struct HealthStamp {
+    uint32_t received_ms, sequence;
+  };
   struct Pending {
     uint8_t peer = 0;
     Token token;
     EventKind kind = EventKind::Completed;
     RecordingState recording = RecordingState::Unknown;
-    Capabilities capabilities;
+    // Completed owns capabilities; known RecordingObserved owns receipt stamp.
+    // Both are trivially copied, and the event kind selects the active member.
+    union {
+      Capabilities capabilities;
+      HealthStamp health;
+    };
+    Pending() : capabilities{} {}
   };
+  static_assert(sizeof(HealthStamp) <= sizeof(Capabilities), "Reuse pending event payload budget");
   BleHost &host_;
   Clock &clock_;
   CameraManager *manager_ = nullptr;
@@ -107,6 +117,7 @@ private:
   std::array<bool, kBlePeers> disconnected_{};
   std::array<Pending, kBlePeers * 8> events_{};
   size_t event_count_ = 0;
+  uint32_t notification_receipt_ = 0;
   bool started_ = false, enabled_ = false, servicing_ = false;
   static bool valid(const DjiQualification &);
   static uint32_t deviceId(CameraModel);

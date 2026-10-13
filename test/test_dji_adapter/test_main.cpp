@@ -1,4 +1,5 @@
 #include "../fixtures/ble/adapter_host.h"
+#include "camera_health.h"
 #include "profiles/dji_camera.h"
 #include <algorithm>
 #include <cstring>
@@ -266,6 +267,30 @@ struct Rig {
 
 void setUp() {}
 void tearDown() {}
+void health_receipt_and_camera_sequence_wrap_are_qualified() {
+  Rig r;
+  CameraHealthEvaluator evaluator;
+  TEST_ASSERT_TRUE(r.manager.attachHealthObserver(evaluator));
+  r.host.next_status = 65533;
+  r.connect();
+  r.clock.value += 100;
+  const auto received = r.clock.value;
+  r.host.notify(0, r.host.status(65535, 1, 3));
+  r.clock.value += 100;
+  r.adapter.service();
+  const auto &recording =
+      evaluator.snapshot(0)->fields[static_cast<size_t>(HealthField::Recording)];
+  TEST_ASSERT_EQUAL_INT(HealthValidity::Valid, recording.validity);
+  TEST_ASSERT_EQUAL_UINT32(received, recording.received_ms);
+  TEST_ASSERT_EQUAL_UINT64(static_cast<uint64_t>(RecordingState::Recording), recording.value);
+  const auto sequence = recording.sequence;
+  ++r.clock.value;
+  r.host.notify(0, r.host.status(0, 1, 1));
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT64(static_cast<uint64_t>(RecordingState::Stopped), recording.value);
+  TEST_ASSERT_TRUE(recording.sequence > sequence);
+  r.manager.detachHealthObserver(&evaluator);
+}
 void pairing_and_status() {
   Rig r;
   r.host.ack_first = r.host.fragment = true;
@@ -507,6 +532,7 @@ void safe_stop_modes() {
 }
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(health_receipt_and_camera_sequence_wrap_are_qualified);
   RUN_TEST(pairing_and_status);
   RUN_TEST(missing_authorization_is_not_ready);
   RUN_TEST(denied_and_wrong_model);

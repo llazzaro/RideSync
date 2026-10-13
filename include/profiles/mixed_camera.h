@@ -44,6 +44,14 @@ public:
   Hero12RecoveryState recoveryState(uint8_t) const override;
   bool recoveryReady(uint8_t) const override;
   bool commandReady(uint8_t) const override;
+  bool attachHealthSink(CameraHealthSampleSink &sink) override {
+    return hero_.attachHealthSink(sink);
+  }
+  void detachHealthSink(const CameraHealthSampleSink *expected) override {
+    hero_.detachHealthSink(expected);
+  }
+  uint32_t healthCoalesced() const override { return hero_.healthCoalesced(); }
+  uint32_t healthFailures() const override { return hero_.healthFailures(); }
   bool wakeSupported(uint8_t i) const override {
     return i == 0 && wake_config_.enabled && wake_config_.source_qualified;
   }

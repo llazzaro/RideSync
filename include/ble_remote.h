@@ -93,12 +93,14 @@ enum class BleAdvertisementType : uint8_t {
   ScanResponse = 4,
   Unknown = 0xff
 };
+class Clock;
 struct BleEvent {
   BleEventKind kind = BleEventKind::Complete;
   uint8_t peer = 0, properties = 0, size = 0;
   uint8_t observed_address_type = 0xff; // Raw GAP public/random; never identity proof.
   int8_t rssi = 0;
   uint32_t generation = 0, procedure = 0;
+  uint32_t received_ms = 0; // Host callback receipt, not camera acquisition.
   BlePhase phase = BlePhase::Empty;
   int status = 0; // Host error retained, never a camera ACK.
   uint16_t connection = kBleNoHandle, handle = 0, start = 0, end = 0;
@@ -174,6 +176,7 @@ enum class BleResultKind : uint8_t {
   ScanCancelFailed
 };
 struct BleResult {
+  bool receipt_known = false;
   BleResultKind kind = BleResultKind::Retired;
   BleFault fault = BleFault::None;
   BleEvent event;
@@ -187,7 +190,8 @@ public:
 };
 class BleCentral final : public BleCallbacks {
 public:
-  explicit BleCentral(BleHost &, BleResultSink &, HealthProgress *health = nullptr);
+  explicit BleCentral(BleHost &, BleResultSink &, HealthProgress *health = nullptr,
+                      Clock *receipt_clock = nullptr);
   ~BleCentral();
   BleCentral(const BleCentral &) = delete;
   BleCentral &operator=(const BleCentral &) = delete;
@@ -203,7 +207,7 @@ public:
   bool scanReleased() const { return !scanning_ && !scan_.receiver; }
   bool read(uint8_t peer, uint8_t endpoint, uint32_t now);
   bool write(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now,
-             const void *stream_owner = nullptr);
+             const void *stream_owner = nullptr, uint32_t timeout_ms = 5000);
   // Local submission completion only; no ATT response or camera ACK is implied.
   bool writeWithoutResponse(uint8_t peer, uint8_t endpoint, const uint8_t *, size_t, uint32_t now,
                             const void *stream_owner = nullptr);
@@ -262,6 +266,7 @@ private:
   std::array<Peer, kBlePeers> peers_{};
   BleContext scan_;
   std::array<BleEvent, kBleQueue> queue_{};
+  Clock *receipt_clock_ = nullptr;
   std::atomic_flag queue_lock_ = ATOMIC_FLAG_INIT;
   size_t head_ = 0, count_ = 0;
   uint32_t startup_deadline_ = 0, scan_deadline_ = 0, scan_duration_ = 0;

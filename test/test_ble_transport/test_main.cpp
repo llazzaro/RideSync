@@ -1,4 +1,5 @@
 #include "ble_remote.h"
+#include "camera_manager.h"
 #include <algorithm>
 #include <type_traits>
 #include <unity.h>
@@ -331,6 +332,47 @@ void missing_properties_or_cccd_never_publish_transport_ready() {
                       (int)sink.results.back().fault);
     closed(h, owner, 0);
   }
+}
+void optional_write_deadline_is_bounded_without_changing_legacy_default() {
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink);
+  owner.begin(true, true, 0);
+  ready(h, owner, 0);
+  const uint8_t payload[] = {1};
+  TEST_ASSERT_TRUE(owner.write(0, 0, payload, 1, 30, nullptr, 1000));
+  owner.service(1029);
+  TEST_ASSERT_EQUAL(0, sink.count(BleResultKind::Retired));
+  owner.service(1030);
+  TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::Retired));
+  TEST_ASSERT_FALSE(owner.admissionOpen(0));
+  owner.stop();
+  closed(h, owner, 0);
+}
+void queued_notification_retains_callback_receipt_before_owner_delay() {
+  struct ReceiptClock : Clock {
+    uint32_t value = 37;
+    uint32_t now() const override { return value; }
+  } clock;
+  FakeHost h;
+  Sink sink;
+  BleCentral owner(h, sink, nullptr, &clock);
+  owner.begin(true, true, 0);
+  ready(h, owner, 0);
+  BleEvent e;
+  e.kind = BleEventKind::Notification;
+  e.connection = 10;
+  e.handle = 5;
+  e.size = 1;
+  e.bytes[0] = 0x42;
+  h.deliver(*h.contexts[command(h, 0, BlePhase::Connect)], e, false);
+  clock.value = 400;
+  owner.service(400);
+  TEST_ASSERT_EQUAL(1, sink.count(BleResultKind::Notification));
+  TEST_ASSERT_TRUE(sink.results.back().receipt_known);
+  TEST_ASSERT_EQUAL_UINT32(37, sink.results.back().event.received_ms);
+  owner.stop();
+  closed(h, owner, 0);
 }
 void overflow_seals_before_service_and_fault_precedes_queued_notifications() {
   FakeHost h;
@@ -959,6 +1001,8 @@ int main() {
   RUN_TEST(subscription_requires_actual_cccd_att_completion_and_readback);
   RUN_TEST(missing_properties_or_cccd_never_publish_transport_ready);
   RUN_TEST(overflow_seals_before_service_and_fault_precedes_queued_notifications);
+  RUN_TEST(queued_notification_retains_callback_receipt_before_owner_delay);
+  RUN_TEST(optional_write_deadline_is_bounded_without_changing_legacy_default);
   RUN_TEST(deadline_at_completion_rollover_and_failed_termination_quarantine);
   RUN_TEST(cancellation_losing_to_connect_terminates_the_captured_link_once);
   RUN_TEST(terminal_disconnect_needs_procedure_barrier_before_slot_reuse);
