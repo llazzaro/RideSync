@@ -1,0 +1,105 @@
+Window: " synthetic-two-segments — track_points — Features Total: 4, Filtered: 4, Selected: 0", App: QGIS.
+0 standard window  synthetic-two-segments — track_points — Features Total: 4, Filtered: 4, Selected: 0, Secondary Actions: Raise
+	1 split group
+		2 table
+			3 column track_fid
+			4 column track_seg_id
+			5 column track_seg_point_id
+			6 column ele
+			7 column time
+			8 column magvar
+			9 column geoidheight
+			10 column name
+			11 column cmt
+			12 column desc
+			13 column src
+			14 column link1_href
+			15 column link1_text
+			16 column link1_type
+			17 column link2_href
+			18 column link2_text
+			19 column link2_type
+			20 column sym
+			21 column type
+			22 column fix
+			23 column sat
+			24 column hdop
+			25 column vdop
+			26 column pdop
+			27 column ageofdgpsdata
+			28 column dgpsid
+			29 row 1
+			30 text 0
+			31 text 0
+			32 text 0
+			33 text -2,5
+			34 text 13/10/2026 12:00:00 (UTC)
+			35 text NULL
+			36 text NULL
+			37 row 2
+			38 text 0
+			39 text 0
+			40 text 1
+			41 text 0
+			42 text 13/10/2026 12:00:01 (UTC)
+			43 text NULL
+			44 text NULL
+			45 row 3
+			46 text 0
+			47 text 1
+			48 text 0
+			49 text NULL
+			50 text NULL
+			51 text NULL
+			52 text NULL
+			53 row 4
+			54 text 0
+			55 text 1
+			56 text 1
+			57 text NULL
+			58 text NULL
+			59 text NULL
+			60 text NULL
+	61 button Show All Features
+	62 checkbox Form View, Description: Switch to form view, Value: 0, Secondary Actions: Raise
+	63 checkbox Table View, Description: Switch to table view, Value: 1, Secondary Actions: Raise
+	64 checkbox (disabled) Toggle editing mode, Description: Toggle editing mode (Ctrl+E), Value: 0
+	65 checkbox (disabled) Toggle multi edit mode, Value: 0
+	66 button (disabled) Save edits, Description: Save edits (Ctrl+S)
+	67 button Reload the table
+	68 button (disabled) Copy selected rows to clipboard, Description: Copy selected rows to clipboard (Ctrl+C)
+	69 button Select features using an expression
+	70 button Select all, Description: Select all (Ctrl+A)
+	71 button Invert selection, Description: Invert selection (Ctrl+R)
+	72 button Deselect all features from the layer, Description: Deselect all features from the layer (Ctrl+Shift+A)
+	73 checkbox Select/filter features using form, Description: Select/filter features using form (Ctrl+F), Value: 0
+	74 checkbox Move selection to top, Value: 0
+	75 button Pan map to the selected rows, Description: Pan map to the selected rows (Ctrl+P)
+	76 button Zoom map to the selected rows, Description: Zoom map to the selected rows (Ctrl+J)
+	77 button (disabled) New field, Description: New field (Ctrl+W)
+	78 button (disabled) Delete field, Description: Delete field (Ctrl+L)
+	79 button Organize Columns
+	80 button Open field calculator, Description: Open field calculator (Ctrl+I)
+	81 checkbox Conditional formatting, Value: 0
+	82 button Actions
+	83 checkbox Dock Attribute Table, Value: 0
+	84 close button
+	85 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	86 minimize button
+	87 text  synthetic-two-segments — track_points — Features Total: 4, Filtered: 4, Selected: 0
+88 menu bar
+	89 QGIS
+	90 Project
+	91 Edit
+	92 View
+	93 Layer
+	94 Settings
+	95 Plugins
+	96 Vector
+	97 Raster
+	98 Database
+	99 Web
+	100 Mesh
+	101 Processing
+	102 Window
+	103 Help

@@ -25,8 +25,11 @@ completed design investigation. #70–#73 are implemented and verified at
 with [passing CI](https://github.com/llazzaro/RideSync/actions/runs/38377168267);
 their software boundary is independent of #74.
 The [dated evidence](software-results/2026-10-13-gpx-export/README.md) records an
-actual Python 3.11 CLI export and schema validation. **#74 remains open: QGIS
-is unavailable, and its required observed import is Blocked / Not run.**
+actual Python 3.11 CLI export and schema validation. The later
+[QGIS observation](software-results/2026-10-13-qgis-import/README.md) passes the
+finite 2D mapping check in QGIS 3.44.15: four points, two disconnected parts,
+point elevation/time and absent attributes preserved. Tracks geometry pads
+missing Z with zero; use Track points `ele` for elevation evidence.
 
 From the repository root, with Python 3.11 (standard library runtime only):
 
@@ -309,7 +312,7 @@ one sample import and a resolved licensing/dependency choice.
 
 | Consumer | Dated primary-source evidence | RideSync status / consequence |
 | --- | --- | --- |
-| [QGIS GPX loading](https://docs.qgis.org/3.40/en/docs/user_manual/working_with_gps/plugins_gps.html#loading-a-gpx-file) | Documents GPX layers and WGS84 coordinates. 3.40 documentation is a stable reference, not a claim it is the newest supported release | Documented; select QGIS for the finite map import below. RideSync import Not run |
+| [QGIS GPX loading](https://docs.qgis.org/3.40/en/docs/user_manual/working_with_gps/plugins_gps.html#loading-a-gpx-file) | Documents GPX layers and WGS84 coordinates. 3.40 documentation is a stable reference, not a claim it is the newest supported release | Historical #54 documentary lead; later finite QGIS 3.44.15 import passed with the Tracks Z limit recorded in the observed evidence |
 | [Insta360 Studio Stats](https://onlinemanual.insta360.com/studio/en-us/operation-guide/edit-function/dashboard-function) | Manual third-party GPX/FIT from v5.7.6; mode restrictions, flat-video Stats export, and no Studio Stats time correction documented | Documented capability; generated RideSync-file acceptance, extension use and footage alignment Unresolved / Not tested |
 | [Insta360 app dashboard](https://onlinemanual.insta360.com/acepro2/en-us/camera/features/dashboard) | Local FIT/GPX import; warns that GPX without timestamps is incompatible. This page is Ace Pro 2 documentation | Documentary lead only, not X5/ONE RS qualification or proof arbitrary files work. Untimed GPX is a map product, not promised overlay input |
 | [Garmin VIRB Edit](https://www.garmin.com.sg/products/apps/virb_edit/) | Describes G-Metrix overlays from VIRB/compatible Garmin data; reviewed page does not specify arbitrary RideSync GPX/FIT acceptance | Unresolved; neither GPX nor FIT exporter promises VIRB compatibility |
@@ -323,8 +326,9 @@ validity or promotional lists of available gauges.
 
 The table preserves the original #54 implementation plan. Steps 1–4 are now
 implemented and verified in #70–#73, with passing focused tests and full CI.
-Step 5 has reproducible synthetic export evidence, but its required QGIS import
-is Blocked / Not run, so #74 is unfulfilled. Each boundary remains unchanged.
+Step 5 now has reproducible synthetic export and observed QGIS 3.44.15 import
+evidence, satisfying #74's finite 2D map check with the documented Tracks Z
+representation limit. Each boundary remains unchanged.
 
 | Step | Behavior and affected modules | Verification | Completion boundary |
 | --- | --- | --- | --- |

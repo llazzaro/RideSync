@@ -1,0 +1,93 @@
+{
+  "observed_at_utc": "2026-10-13T16:59:26.241172+00:00",
+  "qgis": "3.44.15-Solothurn",
+  "gdal": "GDAL 3.13.3 \"Iowa City\", released 2026/08/13",
+  "project_crs": "EPSG:4326",
+  "layers": [
+    {
+      "name": "synthetic-two-segments \u2014 track_points",
+      "provider": "ogr",
+      "source": "/Users/leonardo/workspace/RideSync/docs/software-results/2026-10-13-gpx-export/synthetic-two-segments.gpx|layername=track_points",
+      "count": 4,
+      "crs": "EPSG:4326",
+      "geometry_type": "PointZ"
+    },
+    {
+      "name": "synthetic-two-segments \u2014 tracks",
+      "provider": "ogr",
+      "source": "/Users/leonardo/workspace/RideSync/docs/software-results/2026-10-13-gpx-export/synthetic-two-segments.gpx|layername=tracks",
+      "count": 1,
+      "crs": "EPSG:4326",
+      "geometry_type": "MultiLineStringZ"
+    }
+  ],
+  "parts_xy": [
+    [
+      [
+        -1.0,
+        0.0
+      ],
+      [
+        -1.0,
+        0.001
+      ]
+    ],
+    [
+      [
+        -2.0,
+        0.0
+      ],
+      [
+        -2.0,
+        0.001
+      ]
+    ]
+  ],
+  "track_wkt": "MultiLineString Z ((-1 0 -2.5, -1 0.001 0),(-2 0 0, -2 0.001 0))",
+  "points": [
+    {
+      "fid": 0,
+      "track_fid": 0,
+      "track_seg_id": 0,
+      "track_seg_point_id": 0,
+      "x_lon": -1.0,
+      "y_lat": 0.0,
+      "ele": -2.5,
+      "time_utc": "2026-10-13T12:00:00.000Z",
+      "wkt": "Point Z (-1 0 -2.5)"
+    },
+    {
+      "fid": 1,
+      "track_fid": 0,
+      "track_seg_id": 0,
+      "track_seg_point_id": 1,
+      "x_lon": -1.0,
+      "y_lat": 0.001,
+      "ele": 0.0,
+      "time_utc": "2026-10-13T12:00:01.000Z",
+      "wkt": "Point Z (-1 0.001 0)"
+    },
+    {
+      "fid": 2,
+      "track_fid": 0,
+      "track_seg_id": 1,
+      "track_seg_point_id": 0,
+      "x_lon": -2.0,
+      "y_lat": 0.0,
+      "ele": null,
+      "time_utc": null,
+      "wkt": "Point (-2 0)"
+    },
+    {
+      "fid": 3,
+      "track_fid": 0,
+      "track_seg_id": 1,
+      "track_seg_point_id": 1,
+      "x_lon": -2.0,
+      "y_lat": 0.001,
+      "ele": null,
+      "time_utc": null,
+      "wkt": "Point (-2 0.001)"
+    }
+  ]
+}

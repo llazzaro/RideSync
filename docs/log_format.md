@@ -7,7 +7,9 @@ ride.csv --output ride.gpx --report ride-report.json` on one command line.
 The original CSV remains the evidence record; coordinates, times and extensions
 do not establish hardware accuracy or footage synchronization. The
 [dated synthetic export evidence](software-results/2026-10-13-gpx-export/README.md)
-is schema-valid; the required QGIS observation remains Blocked / Not run.
+is schema-valid; the later [QGIS observation](software-results/2026-10-13-qgis-import/README.md)
+passes the finite 2D map import. Track points preserve absent `ele`/`time` as
+NULL; Tracks geometry pads missing Z with zero, which is not elevation evidence.
 
 `SessionClock` is a C++11 clock/record contract for local GPS, raw IMU, derived
 motion and camera event producers. It has no camera connection dependency;

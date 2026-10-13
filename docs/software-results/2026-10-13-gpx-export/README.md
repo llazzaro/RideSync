@@ -6,7 +6,8 @@ completed design investigation. #70–#73 are implemented and verified at
 [`cc992fa`](https://github.com/llazzaro/RideSync/commit/cc992fafe37d0ed7443c3597331881dbeaf6f500),
 with [passing full CI](https://github.com/llazzaro/RideSync/actions/runs/38377168267)
 and [CodeQL](https://github.com/llazzaro/RideSync/actions/runs/38377168277).
-**#74 remains open because QGIS import is Blocked / Not run.**
+The later [observed QGIS import](../2026-10-13-qgis-import/README.md) passes
+#74's finite 2D mapping check, with a documented Tracks Z representation limit.
 
 ## Public synthetic specimen and reproduction
 
@@ -70,11 +71,13 @@ for element in xml.findall(".//{http://www.topografix.com/GPX/1/1}extensions/*")
     project.assertValid(element)
 ```
 
-## Finite QGIS check — Blocked / Not run
+## Earlier QGIS check — historical Blocked / Not run
 
 The [QGIS import handoff](../2026-10-13-qgis-import/README.md) provides the
 exact layer/geometry checks and an observation template for this specimen.
-It prepares the existing acceptance row; it records no successful import.
+It now records the later actual QGIS 3.44.15 import, screenshots and loaded
+feature observations. The unavailable-app observation below describes the
+earlier state before the signed app was installed.
 
 Host: macOS 27.0, build 26A428 (`sw_vers`). No QGIS build/version is installed
 or exposed through the available app/tool inventory. Checks of `/Applications`,
@@ -96,7 +99,9 @@ segment preservation. Once QGIS is available, use this hashed specimen for the
 single finite import, record the exact version/OS, inspect both layers against
 the expected table, and save the actual screenshot. Joining spans is a
 consumer/exporter discrepancy to resolve, not a pass. This missing observation
-keeps #74 unfulfilled even when upstream component checks pass.
+kept #74 unfulfilled at that earlier boundary. The later observed check passes
+the finite 2D mapping scope: point attributes preserve NULL; GDAL Tracks geometry
+pads absent Z with zero and must not be used as elevation evidence.
 
 ## Focused verification and limits
 

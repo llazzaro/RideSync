@@ -222,7 +222,10 @@ accepts GPS rows in GpsV1 through MotionV5. Run `python3.11 scripts/export_gpx.p
 --input ride.csv --output ride.gpx --report ride-report.json` (on one command
 line). It preserves source logs, refuses existing outputs and reports time/loss
 limits. [Synthetic software evidence](docs/software-results/2026-10-13-gpx-export/README.md)
-records two segments; QGIS import is Blocked / Not run, so #74 remains open.
+records two segments; the [observed QGIS import](docs/software-results/2026-10-13-qgis-import/README.md)
+verified four points and two disconnected spans. Track points preserve missing
+elevation/time as null; QGIS/GDAL Tracks geometry fills missing Z with zero, so
+use the Track points `ele` field to determine elevation availability.
 Untimed GPX is useful for mapping; FIT remains deferred and video-editor
 compatibility remains unresolved.
 
