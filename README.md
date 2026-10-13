@@ -217,6 +217,10 @@ camera and local logging bench observations before motorcycle installation.
 
 ## Optional code navigation
 
+The [portable ride-log export plan](docs/ride_log_export.md) recommends an
+offline GPX-first exporter for current CSV schemas. This is a completed
+investigation; GPX/FIT export and video-editor import are not delivered yet.
+
 [Graphify setup](docs/graphify.md) provides a project-scoped Codex skill and a
 local C/C++ knowledge graph for queries about symbols and relationships.
 
@@ -246,6 +250,11 @@ blue recovery and fast red error. Physical GPIO qualification and complete
 button-to-camera wiring remain open.
 
 ## Implementation plan
+
+The [camera health alert investigation](docs/camera_health_alerts.md) recommends
+unexpected-stop/stale-evidence alerts and qualified HERO12 resource status, with
+a finite future implementation plan. Alerts are not implemented or physically
+qualified by that investigation.
 
 The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
 contains 39 focused work packages plus maintenance fixes, dependencies and
