@@ -96,6 +96,8 @@ enum class BleAdvertisementType : uint8_t {
 struct BleEvent {
   BleEventKind kind = BleEventKind::Complete;
   uint8_t peer = 0, properties = 0, size = 0;
+  uint8_t observed_address_type = 0xff; // Raw GAP public/random; never identity proof.
+  int8_t rssi = 0;
   uint32_t generation = 0, procedure = 0;
   BlePhase phase = BlePhase::Empty;
   int status = 0; // Host error retained, never a camera ACK.
@@ -225,6 +227,7 @@ public:
   bool stopped() const { return stopping_; }
   bool canDestroy() const; // All callbacks retired/quiescent; caller must check.
   static constexpr uint32_t kPhaseDeadlineMs = 5000, kStartupDeadlineMs = 1000;
+  static constexpr uint32_t kScanDeadlineMs = 10000;
 
 private:
   struct Characteristic {

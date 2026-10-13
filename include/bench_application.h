@@ -42,6 +42,8 @@ struct BenchApplicationConfig {
   QualifiedLocalTelemetry telemetry;
   QualifiedHandlebar handlebar;
   MixedCameraQualifications cameras;
+  // Independent reviewed host/store receipt for setup discovery without an X5.
+  BleStoreProof setup_store;
   StaticMotionReferenceSource *motion_reference = nullptr;
 };
 enum class BenchProviderError : uint8_t {
@@ -61,6 +63,8 @@ struct BenchProviderStatus {
 // The private provider supplies real commissioning facts and stable provenance strings.
 // No ledger provisioning, settings persistence or camera IO occurs in this entrypoint.
 const SourceConfig *benchApplicationDefaults();
+// Setup-only provider read/validation: no buses, drivers or runtime allocation.
+const BenchApplicationConfig *benchSetupConfiguration();
 SupervisedEsp32Application *benchApplicationOwner();
 BenchProviderStatus benchApplicationStatus();
 bool benchArmStationaryReference();

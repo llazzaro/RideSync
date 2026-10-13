@@ -274,3 +274,15 @@ existing fixtures/mocks are **synthetic**; linked isolated X5 sessions are
 **observed** for their recorded profile only. This investigation adds no hardware
 observations or **hardware-confirmed** support. Documentation validation is
 sufficient for this change; no firmware rebuild or device IO is required.
+
+
+## Implementation follow-up — October 13, 2026
+
+The owner authorized implementation in #76–#81 after this investigation. The
+[USB wizard](setup_wizard.md), [session protocol](setup_protocol.md),
+[bounded discovery](setup_discovery.md) and [prerequisite reports](setup_commissioning.md)
+now implement the serial-first route in a dedicated setup-only image. Saved
+preferences and reviewed commissioning evidence remain separate. Runtime camera
+compatibility and physical parked detection are unchanged. The
+[optional Wi-Fi feasibility note](setup_wifi_feasibility.md) records the isolated
+compile trial and the reasons that transport remains disabled.

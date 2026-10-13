@@ -550,6 +550,8 @@ void Esp32BleHost::deliverAdvertisement(Slot &entry, const ble_gap_event *event)
   BleEvent out;
   out.kind = BleEventKind::Advertisement;
   out.identity = identity(event->disc.addr);
+  out.observed_address_type = event->disc.addr.type;
+  out.rssi = event->disc.rssi;
   out.advertisement_type = advertisementType(event->disc.event_type);
   if (!copyAdvertisement(event, entry, out))
     return;

@@ -153,7 +153,7 @@ struct ble_gap_sec_state { bool encrypted=false,authenticated=false,bonded=false
 struct ble_gap_conn_desc { ble_gap_sec_state sec_state; ble_addr_t peer_id_addr,peer_ota_addr; uint16_t conn_handle=0; };
 struct ble_gap_event {
  int type;
- struct { ble_addr_t addr; uint8_t event_type=0xff,length_data=0; const uint8_t *data=nullptr; } disc;
+ struct { ble_addr_t addr; int8_t rssi=0; uint8_t event_type=0xff,length_data=0; const uint8_t *data=nullptr; } disc;
  struct { int reason=0; } disc_complete;
  struct { int status=0; uint16_t conn_handle=0; } connect;
  struct { ble_gap_conn_desc conn; int reason=0; } disconnect;
@@ -459,9 +459,11 @@ int main(int argc,char**argv){
   const uint8_t service[]={3,3,0xa6,0xfe};
   for(uint8_t type: {uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(3),uint8_t(4),uint8_t(99)}){
    ble_gap_event ad;ad.type=BLE_GAP_EVENT_DISC;ad.disc.addr.val[0]=1;
+   ad.disc.addr.type=1;ad.disc.rssi=-51;
    ad.disc.event_type=type;ad.disc.length_data=sizeof service;ad.disc.data=service;
    gap_callbacks[4](&ad,gap_args[4]);
    assert(receiver.latest.kind==BleEventKind::Advertisement);
+   assert(receiver.latest.observed_address_type==1 && receiver.latest.rssi==-51);
    auto expected=type<=4?static_cast<BleAdvertisementType>(type):BleAdvertisementType::Unknown;
    assert(receiver.latest.advertisement_type==expected);
    assert(receiver.latest.bytes[2]==0xa6);

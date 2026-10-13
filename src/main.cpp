@@ -56,6 +56,15 @@ void loop() {
 #include "nvs_boot_guard.h"
 #include "pairing_proof_esp32.h"
 #include "status_led.h"
+#if defined(RIDESYNC_SETUP_APPLICATION)
+#include "setup_prerequisites.h"
+#include "setup_service.h"
+#if defined(RIDESYNC_BENCH_APPLICATION)
+#include "ble_esp32.h"
+#include "profiles/qualification.h"
+#include "setup_discovery.h"
+#endif
+#endif
 #if defined(RIDESYNC_BENCH_APPLICATION)
 #include "bench_application.h"
 #include "bench_console.h"
@@ -95,7 +104,77 @@ ConfigPersistence config_persistence(config_store);
 // not a durable session ID; future endpoint restart needs a new nonzero epoch.
 constexpr uint32_t kSettingsEpoch = 1;
 SettingsPublication settings_publication;
-SettingsRequests settings_requests; // no production save producer admitted
+SettingsRequests settings_requests;
+#if defined(RIDESYNC_SETUP_APPLICATION)
+SettingsSavePublication setup_save_results;
+SetupService setup_service;
+uint32_t setup_challenge = 0;
+// The storage task alone publishes acknowledgements. Each new pause has a
+// fresh token, so an acknowledgement from a previous lease can never be reused.
+std::atomic<uint32_t> config_pause_requested{0}, config_pause_ack{0};
+uint32_t config_pause_sequence = 0;
+bool requestConfigPause() {
+  if (config_pause_requested.load(std::memory_order_acquire))
+    return true;
+  if (config_pause_sequence == UINT32_MAX)
+    return false;
+  config_pause_requested.store(++config_pause_sequence, std::memory_order_release);
+  return true;
+}
+bool configPauseAcknowledged() {
+  const auto request = config_pause_requested.load(std::memory_order_acquire);
+  return request && config_pause_ack.load(std::memory_order_acquire) == request;
+}
+SetupSaveDispatch setup_dispatch;
+SettingsSaveResult setup_result;
+char setup_reply[kSetupFrameBytes + 1]{};
+char setup_report[769]{};
+SourceConfig setup_report_source;
+#if defined(RIDESYNC_BENCH_APPLICATION)
+const BenchApplicationConfig *setup_configuration = nullptr;
+SetupDiscovery setup_discovery(Esp32BleHost::instance());
+bool setup_host_initializing = false;
+std::array<SetupIdentityMapping, kBlePeers> setup_mappings{};
+void setupDiscoveryMappings() {
+  if (!setup_configuration)
+    return;
+  const auto &source = setup_configuration->source;
+  const auto &q = setup_configuration->cameras;
+  size_t count = 0;
+  for (size_t i = 0; i < source.count && i < kBlePeers; ++i) {
+    const auto &camera = source.cameras[i];
+    const BondIdentity *id = nullptr;
+    switch (camera.model) {
+    case CameraModel::X5:
+      break; // CE80 camera-initiated route is not central discovery.
+    case CameraModel::ONE_RS:
+      id = &q.one_rs[i].identity;
+      break;
+    case CameraModel::GO3S:
+      id = &q.go3s[i].identity;
+      break;
+    case CameraModel::HERO12_BLACK:
+      id = &q.hero12[i].identity;
+      break;
+    default:
+      id = &q.dji[i].identity;
+      break;
+    }
+    if (!id || !qualification::resolvedIdentity(*id) ||
+        !qualification::identifierAddress(camera.identifier, *id, true) ||
+        camera.address_type !=
+            (id->type == IdentityType::Public ? AddressType::Public : AddressType::Random))
+      continue;
+    auto &mapping = setup_mappings[count++];
+    mapping.observed = id->address;
+    mapping.observed_type = id->type == IdentityType::Public ? 0 : 1;
+    mapping.identity = *id;
+  }
+  setup_discovery.setIdentityMappings(setup_mappings.data(), count);
+}
+
+#endif
+#endif
 typename std::aligned_storage<sizeof(ConfigBootstrap), alignof(ConfigBootstrap)>::type
     config_memory;
 ConfigBootstrap *config_bootstrap = nullptr;
@@ -107,11 +186,56 @@ uint32_t config_started = 0, supervisor_started = 0;
 ApplicationWorkers *workers = nullptr;
 bool policy_fixed = false, workers_launched = false;
 SettingsSnapshot received_settings; // loop-only scratch; no large loop stack envelope
+#if defined(RIDESYNC_SETUP_APPLICATION) && defined(RIDESYNC_BENCH_APPLICATION)
+void setupDiscoveryInitialization(uint32_t now) {
+  if (setup_discovery.initializationRequested()) {
+    const auto *proof = setup_configuration ? &setup_configuration->setup_store : nullptr;
+    if (proof && !proof->qualification_record)
+      proof = &setup_configuration->cameras.x5.store; // Reuse an actual reviewed receipt.
+    const bool qualified = proof && proof->qualification_record && !safe_mode.load() &&
+                           config_store.allowed() && application_settings.snapshot().effective;
+    if (!qualified) {
+      setup_discovery.initialize(false, now);
+      return;
+    }
+    if (!requestConfigPause()) {
+      setup_discovery.initialize(false, now);
+      return;
+    }
+    if (!configPauseAcknowledged())
+      return;
+    const bool restore = Esp32BleHost::instance().configureRestore(*proof);
+    setup_host_initializing = restore;
+    setup_discovery.initialize(restore, now);
+    if (!restore) {
+      config_pause_requested.store(0, std::memory_order_release);
+    }
+  }
+  if (!setup_host_initializing && !setup_discovery.initializationRequested() &&
+      !setup_service.restartRequested() && config_pause_requested.load()) {
+    // Entry expiry/cancel before the host lease was taken must release the pause.
+    config_pause_requested.store(0, std::memory_order_release);
+  }
+  if (setup_host_initializing && setup_discovery.hostSettled()) {
+    setup_host_initializing = false;
+    config_pause_requested.store(0, std::memory_order_release);
+  }
+}
+#endif
 void configTask(void *) {
   pairingProofMaintenance().beginOwner(); // Existing exclusive NVS owner, before publication.
   config_bootstrap->start(safe_mode.load(), config_store.allowed());
   TickType_t next = xTaskGetTickCount();
   for (;;) {
+#if defined(RIDESYNC_SETUP_APPLICATION)
+    const auto pause = config_pause_requested.load(std::memory_order_acquire);
+    if (pause) {
+      config_pause_ack.store(pause, std::memory_order_release);
+      vTaskDelayUntil(&next, pdMS_TO_TICKS(100));
+      continue;
+    }
+    config_pause_ack.store(0, std::memory_order_release);
+#endif
     config_bootstrap->service(millis(), safe_mode.load(), config_store.allowed());
     pairingProofMaintenance().service();
     vTaskDelayUntil(&next, pdMS_TO_TICKS(100));
@@ -181,6 +305,9 @@ void receiveSettings() {
       config_startup != StartupState::ConfigTimedOut &&
       application_settings.accept(received_settings)) {
     const auto &settings = application_settings.snapshot();
+#if defined(RIDESYNC_SETUP_APPLICATION)
+    setup_service.setSnapshot(settings);
+#endif
     Serial.printf(
         "RideSync: config ready=%u effective=%u epoch=%u generation=%llu "
         "load=%u outcome=%u error=%d cameras=%u peers=%u\n",
@@ -260,6 +387,76 @@ void serviceLed(uint8_t stalls, uint8_t refused, WatchdogState state) {
   }
 }
 
+#if defined(RIDESYNC_SETUP_APPLICATION)
+void serviceSetup() {
+  const uint32_t now = millis();
+  // This image never constructs/launches workers; entry cannot retire a live camera.
+  setup_service.setIsolationAvailable(!workers && application_settings.snapshot().completed &&
+                                      config_startup != StartupState::ConfigTimedOut);
+  setup_service.tick(now);
+  // tick may have published an asynchronous save/entry result. Empty its slot
+  // before reading a new legitimate host request; retain unread UART bytes.
+  if (setup_service.takeResponse(setup_reply, sizeof setup_reply))
+    Serial.println(setup_reply);
+  for (unsigned i = 0; i < 64 && Serial.available(); ++i)
+    setup_service.feed(static_cast<char>(Serial.read()), now);
+  if (setup_service.isolationRequested())
+    setup_service.acknowledgeIsolation(!workers);
+#if defined(RIDESYNC_BENCH_APPLICATION)
+  setupDiscoveryInitialization(now);
+#endif
+  if (setup_service.takeSave(setup_dispatch)) {
+    setup_dispatch.save.session = setup_dispatch.session;
+    setup_dispatch.save.request = setup_dispatch.request;
+    if (config_pause_requested.load() || !settings_requests.put(setup_dispatch.save))
+      setup_service.completeSave(setup_dispatch.session, setup_dispatch.request, SaveOutcome::Busy,
+                                 PersistStatus::Pending, kSettingsEpoch,
+                                 application_settings.snapshot().generation);
+  }
+  if (setup_save_results.take(setup_result))
+    setup_service.completeSave(setup_result.session, setup_result.request, setup_result.outcome,
+                               setup_result.result, setup_result.epoch, setup_result.generation);
+  // Read-only reports use actual private declarations when available; no store,
+  // radio or driver action is invoked to manufacture a prerequisite observation.
+  static uint64_t report_generation = UINT64_MAX;
+  static bool report_effective = false;
+  const auto &saved = application_settings.snapshot();
+  if ((report_generation != saved.generation || report_effective != saved.effective) &&
+      expandSettings(saved.settings, setup_report_source)) {
+    report_generation = saved.generation;
+    report_effective = saved.effective;
+    SetupPrerequisiteEvidence evidence;
+#if defined(RIDESYNC_BENCH_APPLICATION)
+    const auto provider = benchApplicationStatus();
+    const auto state = setup_configuration                              ? SetupProvider::Available
+                       : !provider.supplied                             ? SetupProvider::Missing
+                       : provider.error == BenchProviderError::Declined ? SetupProvider::Declined
+                                                                        : SetupProvider::Refused;
+    evidence = setupQualificationEvidence(
+        setup_report_source, setup_configuration ? &setup_configuration->cameras : nullptr, state);
+#endif
+    auto report = setupPrerequisites(setup_report_source, evidence);
+    if (!application_settings.snapshot().effective) {
+      report.settings = SetupEvidence::Refused;
+      report.overall = SetupReadiness::Refused;
+    }
+    if (encodePrerequisiteReport(report, setup_report, sizeof setup_report))
+      setup_service.setPrerequisiteReport(setup_report);
+  }
+  if (setup_service.takeResponse(setup_reply, sizeof setup_reply))
+    Serial.println(setup_reply);
+#if defined(RIDESYNC_BENCH_APPLICATION)
+  setup_service.ownerReleased(setup_discovery.released() && !setup_host_initializing);
+#else
+  setup_service.ownerReleased(true);
+#endif
+  if (setup_service.restartRequested()) {
+    if (requestConfigPause() && configPauseAcknowledged())
+      esp_restart(); // Explicit request, durable result and acknowledged owner barrier.
+  }
+}
+#endif
+
 void reportWatchdog(WatchdogState state) {
   static WatchdogState reported = WatchdogState::NotStarted;
   if (state != reported) {
@@ -291,14 +488,39 @@ void setup() {
                 static_cast<unsigned>(config_ble_admission));
   if (!config_ble_admission)
     Serial.println("RideSync: config/BLE blocked; diagnostic/RAM mode; no save/format/retry.");
+#if defined(RIDESYNC_SETUP_APPLICATION)
+  setup_challenge = esp_random();
+  if (!setup_challenge)
+    setup_challenge = 1;
+  uint32_t session_nonce = esp_random();
+  if (!session_nonce)
+    session_nonce = 1;
+  setup_service.reset(millis(), kSettingsEpoch, setup_challenge, session_nonce);
+  workers = nullptr;
+#if defined(RIDESYNC_BENCH_APPLICATION)
+  setup_configuration = benchSetupConfiguration();
+  setupDiscoveryMappings();
+  setup_service.setDiscovery(&setup_discovery);
+#endif
+#else
   workers = commissionedApplication();
+#endif
   const SourceConfig *startup_defaults = nullptr;
 #if defined(RIDESYNC_BENCH_APPLICATION)
+#if defined(RIDESYNC_SETUP_APPLICATION)
+  startup_defaults = setup_configuration ? &setup_configuration->source : nullptr;
+#else
   startup_defaults = benchApplicationDefaults();
+#endif
 #endif
   config_bootstrap = new (&config_memory)
       ConfigBootstrap(config_persistence, settings_publication, settings_requests, kSettingsEpoch,
-                      workers ? workers->peers() : CameraPeers{}, startup_defaults);
+                      workers ? workers->peers() : CameraPeers{}, startup_defaults
+#if defined(RIDESYNC_SETUP_APPLICATION)
+                      ,
+                      &setup_save_results
+#endif
+      );
   config_started = millis();
   if (!config_ble_admission) {
     // No worker exists: setup is the sole owner on this terminal startup path.
@@ -308,7 +530,10 @@ void setup() {
     config_bootstrap->unavailable({PersistStatus::ReadError, -1});
     Serial.println("RideSync: config task creation failed; settings unavailable.");
   }
-#if defined(RIDESYNC_BENCH_APPLICATION)
+#if defined(RIDESYNC_SETUP_APPLICATION)
+  Serial.println("Parked USB setup-only image: use the host setup wizard within 30 seconds. "
+                 "Camera and peripheral workers remain isolated.");
+#elif defined(RIDESYNC_BENCH_APPLICATION)
   Serial.println("Bench commands: STATUS CONNECT REC STOP QUERY WAKE SHUTDOWN CLEAR STATIONARY. "
                  "Boot is idle.");
 #else
@@ -335,7 +560,9 @@ void loop() {
   }
   serviceLed(stalls, refused, state);
   // Only the supervisor owns recovery metadata. One-character bounded mailbox.
-#if defined(RIDESYNC_BENCH_APPLICATION)
+#if defined(RIDESYNC_SETUP_APPLICATION)
+  serviceSetup();
+#elif defined(RIDESYNC_BENCH_APPLICATION)
   benchConsoleService();
   if (benchConsoleTakeClear())
     clear_safe_mode.store(true);

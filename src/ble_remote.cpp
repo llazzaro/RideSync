@@ -122,7 +122,7 @@ bool BleCentral::slotAvailable(const Peer &p, uint32_t gen) const {
 }
 bool BleCentral::scanAdmission(uint32_t duration) const {
   return connectionAdmissionOpen() && !scanning_ && initiating_ == kBlePeers && duration &&
-         duration <= kPhaseDeadlineMs && (!scan_.receiver || host_.quiescent(scan_));
+         duration <= kScanDeadlineMs && (!scan_.receiver || host_.quiescent(scan_));
 }
 bool BleCentral::profileContextsOpen(const Peer &p) const {
   return p.phase == BlePhase::ReadyForProfile && !p.link.sealed.load() &&

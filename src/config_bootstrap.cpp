@@ -153,44 +153,82 @@ void ConfigBootstrap::start(bool safe_mode, bool nvs_allowed) {
   dirty_ = true;
   publish();
 }
+void ConfigBootstrap::reportSave(uint32_t session, uint32_t request, SaveOutcome outcome,
+                                 PersistResult result) {
+  if (!save_publication_ || result_count_ == save_results_.size())
+    return;
+  auto &event = save_results_[(result_head_ + result_count_) % save_results_.size()];
+  event.session = session;
+  event.request = request;
+  event.epoch = epoch_;
+  event.generation = snapshot_.generation;
+  event.outcome = outcome;
+  event.result = result;
+  ++result_count_;
+}
+void ConfigBootstrap::publishSaves() {
+  if (!save_publication_)
+    return;
+  while (result_count_ && save_publication_->put(save_results_[result_head_])) {
+    result_head_ = (result_head_ + 1) % save_results_.size();
+    --result_count_;
+  }
+}
 void ConfigBootstrap::refuse(PersistResult result) {
+  const bool was_saving = saving_;
   persistence_.discardPending();
   saving_ = false;
   save_outcome_ = SaveOutcome::Refused;
   save_result_ = result;
+  if (was_saving)
+    reportSave(active_session_, active_request_, SaveOutcome::Refused, result);
   if (!snapshot_.effective)
     return;
   snapshot_.effective = snapshot_.peers_valid = false;
-  // No partial/prior camera settings may be treated as currently effective.
+  // No partial/prior camera settings become effective after revocation.
   snapshot_.settings = Settings{};
   snapshot_.outcome = result;
   ++snapshot_.generation;
   dirty_ = true;
 }
 void ConfigBootstrap::serviceRequest(uint32_t now) {
+  // Reserve one queue slot for the active operation's eventual terminal result.
+  // Pressure delays mailbox consumption, never drops a correlated outcome.
+  if (save_publication_ && result_count_ >= save_results_.size() - 1)
+    return;
   if (!requests_.take(request_))
     return;
+  auto reject = [this](SaveOutcome outcome, PersistResult result) {
+    save_outcome_ = outcome;
+    reportSave(request_.session, request_.request, outcome, result);
+  };
   if (!snapshot_.effective) {
-    save_outcome_ = SaveOutcome::Refused;
+    reject(SaveOutcome::Refused, snapshot_.outcome);
     return;
   }
   if (request_.epoch != epoch_ || request_.generation != snapshot_.generation) {
-    save_outcome_ = SaveOutcome::Stale;
+    reject(SaveOutcome::Stale, PersistStatus::Invalid);
     return;
   }
   if (saving_) {
-    save_outcome_ = SaveOutcome::Busy;
+    reject(SaveOutcome::Busy, PersistStatus::Pending);
     return;
   }
   if (snapshot_.generation >= std::numeric_limits<uint64_t>::max() - 1 ||
       !expandSettings(request_.settings, pending_)) {
-    save_outcome_ = SaveOutcome::Invalid;
+    reject(SaveOutcome::Invalid, PersistStatus::Invalid);
     return;
   }
   const auto result = persistence_.request(pending_, now);
   save_result_ = result;
   saving_ = result.status == PersistStatus::Pending;
   save_outcome_ = saving_ ? SaveOutcome::Accepted : SaveOutcome::Invalid;
+  if (saving_) {
+    active_session_ = request_.session;
+    active_request_ = request_.request;
+    error_reported_ = false;
+  }
+  reportSave(request_.session, request_.request, save_outcome_, result);
   if (result.status == PersistStatus::Refused)
     refuse(result);
 }
@@ -215,6 +253,7 @@ void ConfigBootstrap::adoptSaved(PersistResult result) {
   ++snapshot_.generation;
   saving_ = false;
   save_outcome_ = SaveOutcome::Durable;
+  reportSave(active_session_, active_request_, SaveOutcome::Durable, result);
   dirty_ = true;
 }
 void ConfigBootstrap::servicePersistence(uint32_t now) {
@@ -230,6 +269,16 @@ void ConfigBootstrap::servicePersistence(uint32_t now) {
     adoptSaved(result);
   } else if (saving_ && result.status != PersistStatus::Pending) {
     save_outcome_ = SaveOutcome::PersistenceError;
+    // Write/commit failures can still be retried by the bounded storage owner.
+    // Only a latched/final failure releases the save, never an uncertain attempt.
+    const bool terminal =
+        result.status == PersistStatus::Latched || result.status == PersistStatus::GenerationLimit;
+    if (terminal && !error_reported_) {
+      reportSave(active_session_, active_request_, save_outcome_, result);
+      error_reported_ = true;
+      saving_ = false;
+      persistence_.discardPending();
+    }
   }
 }
 void ConfigBootstrap::service(uint32_t now, bool safe_mode, bool nvs_allowed) {
@@ -239,8 +288,10 @@ void ConfigBootstrap::service(uint32_t now, bool safe_mode, bool nvs_allowed) {
   // reopen/replay settings or admit cameras; a future supervised restart must quiesce.
   if (safe_mode || !nvs_allowed)
     refuse(PersistStatus::Refused);
+  publishSaves();
   serviceRequest(now);
   servicePersistence(now);
+  publishSaves();
   publish();
 }
 } // namespace ridesync

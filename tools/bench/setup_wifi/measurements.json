@@ -1,0 +1,32 @@
+{
+  "evidence": "paired compile/link measurement from one unchanged private verification snapshot; no device activation",
+  "revision": "fe3693dd11bf70db66b54bab42fd31c5051ff3e3",
+  "snapshot_sha256": "ca4f863db6f8afcf43a0265e5cdaf3a9a61d535ffdfabad95fe050718cd440c7",
+  "snapshot_unchanged_after_builds": true,
+  "source_hash_scope": "all copied files src/, include/, scripts/, tools/bench/setup_wifi/ sorted by relative path, then platformio.ini; path NUL content",
+  "baseline": {
+    "env": "serial_setup_application",
+    "static_ram_bytes": 89996,
+    "flash_bytes": 801097,
+    "duration_seconds": 49.696,
+    "elf_sha256": "4782d1d5edea6595353eebdeb2a5d88dde99470db139fa38a3cee325237c1a9b"
+  },
+  "trial": {
+    "env": "setup_wifi_probe",
+    "static_ram_bytes": 117332,
+    "flash_bytes": 1298997,
+    "partition_bytes": 1310720,
+    "duration_seconds": 132.385,
+    "elf_sha256": "3ae628e35d20efca0c8ba1a393f3ea089e8bf0cc638d2fc17ea83da28e8a2809"
+  },
+  "incremental_flash_bytes": 497900,
+  "incremental_static_ram_bytes": 27336,
+  "flash_budget_bytes": 393216,
+  "static_ram_budget_bytes": 16384,
+  "static_budgets_pass": false,
+  "runtime_internal_heap": null,
+  "largest_internal_block": null,
+  "stack_high_water": null,
+  "allocation_failures": null,
+  "teardown_leaks": null
+}

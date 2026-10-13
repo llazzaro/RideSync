@@ -42,6 +42,7 @@ struct SettingsSnapshot {
   CameraPeers peers;
 };
 struct SettingsSave {
+  uint32_t session = 0, request = 0;
   uint32_t epoch = 0;
   uint64_t generation = 0;
   Settings settings;
@@ -99,16 +100,25 @@ struct SettingsAdmission {
 };
 SettingsAdmission admitSettings(const SettingsSnapshot &, const SettingsQualification &);
 enum class SaveOutcome { None, Accepted, Stale, Busy, Invalid, Refused, Durable, PersistenceError };
+struct SettingsSaveResult {
+  uint32_t session = 0, request = 0, epoch = 0;
+  uint64_t generation = 0;
+  SaveOutcome outcome = SaveOutcome::None;
+  PersistResult result;
+};
+using SettingsSavePublication = SettingsMailbox<SettingsSaveResult>;
 // Exclusive owner of persistence, RAM strings, pending save and publication.
 // Construct before workers; start once; service only from the config owner.
 // Peer provisioning is copied once at construction and cannot be rebound.
 class ConfigBootstrap {
 public:
   ConfigBootstrap(ConfigPersistence &p, SettingsPublication &s, SettingsRequests &r, uint32_t epoch,
-                  const CameraPeers &peers = CameraPeers{}, const SourceConfig *defaults = nullptr)
+                  const CameraPeers &peers = CameraPeers{}, const SourceConfig *defaults = nullptr,
+                  SettingsSavePublication *save_publication = nullptr)
       : persistence_(p), publication_(s), requests_(r), epoch_(epoch), peers_(peers),
         defaults_supplied_(defaults != nullptr),
-        defaults_valid_(!defaults || copySettings(*defaults, defaults_)) {}
+        defaults_valid_(!defaults || copySettings(*defaults, defaults_)),
+        save_publication_(save_publication) {}
   ConfigBootstrap(const ConfigBootstrap &) = delete;
   ConfigBootstrap &operator=(const ConfigBootstrap &) = delete;
   void start(bool safe_mode, bool nvs_allowed);
@@ -119,6 +129,8 @@ public:
 
 private:
   void serviceRequest(uint32_t);
+  void reportSave(uint32_t session, uint32_t request, SaveOutcome, PersistResult);
+  void publishSaves();
   void adoptLoadedSettings();
   void servicePersistence(uint32_t);
   void adoptSaved(PersistResult);
@@ -140,5 +152,10 @@ private:
   bool started_ = false, dirty_ = false, saving_ = false, peers_stable_ = true;
   SaveOutcome save_outcome_ = SaveOutcome::None;
   PersistResult save_result_;
+  SettingsSavePublication *save_publication_ = nullptr;
+  std::array<SettingsSaveResult, 4> save_results_{};
+  size_t result_head_ = 0, result_count_ = 0;
+  uint32_t active_session_ = 0, active_request_ = 0;
+  bool error_reported_ = false;
 };
 } // namespace ridesync

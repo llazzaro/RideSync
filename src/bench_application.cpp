@@ -294,6 +294,30 @@ bool initializeBuses() {
   return true;
 }
 } // namespace
+const BenchApplicationConfig *benchSetupConfiguration() {
+  if (!attempted) {
+    attempted = true; // This boot is setup-only; no later peripheral admission.
+#ifdef RIDESYNC_HAS_BENCH_PROVIDER
+    status.supplied = true;
+    if (!ridesyncPrivateBenchConfig(config)) {
+      status.error = BenchProviderError::Declined;
+      return nullptr;
+    }
+    if (!validConfig()) {
+      status.error = BenchProviderError::Configuration;
+      return nullptr;
+    }
+    if (!validateBenchBusPins(config.pins)) {
+      status.error = BenchProviderError::PinConflict;
+      return nullptr;
+    }
+    status.error = BenchProviderError::None;
+#else
+    return nullptr;
+#endif
+  }
+  return status.supplied && status.error == BenchProviderError::None ? &config : nullptr;
+}
 const SourceConfig *benchApplicationDefaults() {
   return status.supplied ? &config.source : nullptr;
 }
