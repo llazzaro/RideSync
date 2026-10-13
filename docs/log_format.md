@@ -1,5 +1,10 @@
 # Session time and record contract
 
+The [portable ride-log export investigation](ride_log_export.md) defines a
+future offline GPX-first CLI for GPS rows in all five storage formats, including
+time, segmentation, loss and import-verification policy. The exporter is not
+implemented; the original CSV remains the evidence record.
+
 `SessionClock` is a C++11 clock/record contract for local GPS, raw IMU, derived
 motion and camera event producers. It has no camera connection dependency;
 producers can continue timestamping during camera loss. The clock itself supplies no
