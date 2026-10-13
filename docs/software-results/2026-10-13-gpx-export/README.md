@@ -2,9 +2,11 @@
 
 Scope: #70–#74 offline host software. **Synthetic/schema-validated**, not a
 ride, receiver observation, hardware certification or editor import. #54 is the
-completed design investigation. #70–#73 have software implementations and
-passing focused checks; final delivery still awaits the exact candidate commit
-and CI. **#74 remains open because QGIS import is Blocked / Not run.**
+completed design investigation. #70–#73 are implemented and verified at
+[`cc992fa`](https://github.com/llazzaro/RideSync/commit/cc992fafe37d0ed7443c3597331881dbeaf6f500),
+with [passing full CI](https://github.com/llazzaro/RideSync/actions/runs/38377168267)
+and [CodeQL](https://github.com/llazzaro/RideSync/actions/runs/38377168277).
+**#74 remains open because QGIS import is Blocked / Not run.**
 
 ## Public synthetic specimen and reproduction
 
@@ -97,9 +99,12 @@ keeps #74 unfulfilled even when upstream component checks pass.
 Final local focused candidate run reported by the coordinating implementer:
 Python 3.11, **64 passing tests** (contract 11, reader 20, writer 14, CLI 19),
 57.784 seconds. Pinned Ruff 0.16.10 passed. Independent core and delivery review
-approved the fixes. Final candidate commit identity and CI result are pending;
-these local checks do not claim CI success. No firmware rebuild is required
-for these host/documentation changes under [acceptance policy](../../acceptance_policy.md).
+approved the fixes. Full CI on `cc992fa` passed 147 Python tests, 572 native
+cases, workflow/lint/portability checks, all pinned firmware builds and resource
+audits. CodeQL also passed. CI recorded allocation peaks of 150,591 and 477,028
+bytes (delta 326,437) for the same memory workload. These are software results;
+no physical qualification follows. This evidence-only update reuses that passing
+code verification under [acceptance policy](../../acceptance_policy.md).
 
 The CLI memory test profiles fresh Python 3.11 processes after CLI import,
 streaming 100 versus 20,000 malformed same-session rows through salvage/report

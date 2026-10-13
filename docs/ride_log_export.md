@@ -20,8 +20,10 @@ owners in #22/#31/#46 retain their checks.
 
 `scripts/export_gpx.py` and `tools/ride_export/` now implement the GPX-first
 reader, projection, report and publication path described here. #54 remains a
-completed design investigation. #70–#73 software completion awaits final
-candidate review/checks and CI; their software boundary is independent of #74.
+completed design investigation. #70–#73 are implemented and verified at
+[`cc992fa`](https://github.com/llazzaro/RideSync/commit/cc992fafe37d0ed7443c3597331881dbeaf6f500)
+with [passing CI](https://github.com/llazzaro/RideSync/actions/runs/38377168267);
+their software boundary is independent of #74.
 The [dated evidence](software-results/2026-10-13-gpx-export/README.md) records an
 actual Python 3.11 CLI export and schema validation. **#74 remains open: QGIS
 is unavailable, and its required observed import is Blocked / Not run.**
@@ -319,8 +321,8 @@ validity or promotional lists of available gauges.
 
 ## Finite implementation plan
 
-The table preserves the original #54 implementation plan. Steps 1–4 now have
-software implementations; final candidate checks/CI determine #70–#73 delivery.
+The table preserves the original #54 implementation plan. Steps 1–4 are now
+implemented and verified in #70–#73, with passing focused tests and full CI.
 Step 5 has reproducible synthetic export evidence, but its required QGIS import
 is Blocked / Not run, so #74 is unfulfilled. Each boundary remains unchanged.
 
