@@ -28,6 +28,10 @@ jobs:
           python-version: '3.11'
       - name: Install pinned development tools
         run: python -m pip install -r requirements-dev.txt
+      - name: Install Lua for generated REAPER adapter regression tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y lua5.4=5.4.6-3build2
       - name: Python lint check
         run: python -m ruff check scripts test tools
       - name: Linux C++ portability check

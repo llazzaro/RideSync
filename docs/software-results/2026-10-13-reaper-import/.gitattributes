@@ -1,0 +1,2 @@
+# Preserve exact REAPER-saved CRLF bytes and treat CR as its line terminator.
+*.rpp -text whitespace=cr-at-eol

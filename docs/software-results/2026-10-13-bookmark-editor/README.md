@@ -1,19 +1,21 @@
 # Three-marker REAPER acceptance handoff — October 13, 2026
 
-Issue [#63](https://github.com/llazzaro/RideSync/issues/63) remains **Blocked /
-Not observed** for the actual REAPER installation/import criterion. This bundle
-is synthetic acceptance preparation, not editor or footage alignment evidence.
+The later [actual REAPER import](../2026-10-13-reaper-import/README.md) passed
+the remaining editor criterion of [#63](https://github.com/llazzaro/RideSync/issues/63).
+This unchanged bundle is synthetic acceptance preparation; the linked observation
+record supplies the installed-editor evidence. Neither establishes physical footage alignment.
 The [delivered software evidence](../2026-10-13-bookmarks.md) remains applicable;
 no firmware or exporter behavior changed.
 
-## Runtime blocker
+## Earlier runtime blocker — superseded
 
 Rechecked on October 13, 2026: macOS 27.0, build 26A428, arm64. REAPER was absent
 from `/Applications`, `~/Applications`, `/opt/homebrew/Caskroom`, `PATH`, a
 Spotlight `*REAPER*` filename query, running process names, and the CUA native
 application inventory. No REAPER version or application hash is available.
-No GUI application was installed, and no import was attempted. Lua 5.4 was
+At this preparation stage, no GUI application was installed and no import was attempted. Lua 5.4 was
 available for the separate synthetic API contract check.
+The later portable REAPER 7.82 installation and observed import resolve this blocker.
 
 ## Exact fixture and preview
 

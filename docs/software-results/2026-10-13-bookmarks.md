@@ -1,7 +1,9 @@
 # Bookmark software delivery — October 13, 2026
 
-This records synthetic software evidence for #60–#64. No camera, button, SD
-power-cut or editor observation was performed. Physical support remains
+This records synthetic software evidence for #60–#64. No camera, button or SD
+power-cut observation was performed. The later
+[observed REAPER import](2026-10-13-reaper-import/README.md) completes #63's
+editor criterion; the implementation verification below is retained. Physical support remains
 Experimental / Not tested. The source-backed timecode investigations #50–#52
 were rechecked without finding a usable BLE route; their existing decisions and
 open status remain unchanged.
@@ -72,11 +74,12 @@ measurements, not device heap or durability observations.
 
 ## Remaining acceptance
 
-#63's REAPER import row remains **Blocked / Not observed**. No installation was
-found in the documented application, Caskroom or PATH locations. The generated
-API script has not been executed in REAPER; no installed version, three-marker
-expected/observed import or existing-project-marker preservation is claimed.
-The software criteria are verified, but this issue remains open.
+#63's REAPER import row is now **Observed / Pass** in the
+[later pinned-editor record](2026-10-13-reaper-import/README.md). REAPER 7.82 on
+macOS 27.0 imported three synthetic markers at 30, 32.5 and 34.5 seconds while
+preserving existing M23 at 5.25 seconds. A repeated import added no duplicates.
+Saved projects, API readbacks, screenshot and hashes supersede the earlier
+unavailable-editor blocker. All software/editor criteria have evidence.
 
 #30 retains installed input wiring. #31 retains the finite enabled-input timing,
 camera-loss, reset/no-replay and SD observations. #46/#22 retain qualified HERO12

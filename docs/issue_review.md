@@ -9,7 +9,7 @@ protocol-capture or physical acceptance criteria.
 
 | Issue | Remaining evidence and next action |
 | --- | --- |
-| [#63](https://github.com/llazzaro/RideSync/issues/63) | Portable bookmark export is delivered. Run one pinned REAPER import with three independently expected marker positions/names and preservation of an existing marker; actual import remains unobserved. See [software evidence](software-results/2026-10-13-bookmarks.md). |
+| [#63](https://github.com/llazzaro/RideSync/issues/63) | All software/editor criteria have evidence. The later [REAPER 7.82 observed import](software-results/2026-10-13-reaper-import/README.md) passed exact three-marker positions/names, existing-marker preservation and repeat import; it resolves the earlier editor blocker. |
 | [#74](https://github.com/llazzaro/RideSync/issues/74) | GPX components and hashed two-segment specimen are delivered. Observe Tracks and Track points in QGIS, including counts, elevation and disconnected segments, and retain a screenshot. See [software evidence](software-results/2026-10-13-gpx-export/README.md). |
 | [#50](https://github.com/llazzaro/RideSync/issues/50), [#51](https://github.com/llazzaro/RideSync/issues/51), [#52](https://github.com/llazzaro/RideSync/issues/52) | Source investigations have unresolved BLE timecode decisions. Obtain the specific SDK contract or annotated per-model capture described in the [X5](x5_timecode.md), [HERO12](gopro_timecode.md) and [DJI](dji_timecode.md) notes before conditional implementation. Ordinary clock setting does not establish native timecode synchronization. |
 | [#22](https://github.com/llazzaro/RideSync/issues/22), [#46](https://github.com/llazzaro/RideSync/issues/46) | Privately commission available cameras and execute the existing composed camera checks and staged matrix. Reuse matching isolated X5 observations; unavailable models remain Blocked. |
@@ -24,7 +24,8 @@ evidence for unchanged implementation.
 Prepared handoffs: [three-marker REAPER bundle](software-results/2026-10-13-bookmark-editor/README.md),
 [QGIS import worksheet](software-results/2026-10-13-qgis-import/README.md) and
 [per-model BLE timecode capture worksheet](timecode_capture_checklist.md).
-The editor imports and camera captures remain unobserved.
+QGIS import and camera captures remain unobserved; the REAPER import now has
+the linked actual application evidence.
 
 ## Remaining work — 2026-10-10
 

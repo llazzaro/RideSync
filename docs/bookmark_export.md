@@ -125,19 +125,20 @@ file within 64 KiB. The Python peak allocation in the synthetic large-input
 test is asserted below 8 MiB; clip hashing and source parsing use 64 KiB and
 fixed-size reads respectively.
 
-On October 13, 2026, on macOS 27.0 arm64, no REAPER application was found in `/Applications`,
-`~/Applications`, the Homebrew Caskroom or `PATH` during the #63 implementation.
-The generated script has not been run in REAPER. Therefore the three-marker
-expected/observed import check, installed version/hash and preservation of
-existing project markers remain **unobserved**. The 32.5-second example is
-synthetic arithmetic, not an editor observation. There is no general editor or
-physical alignment certification from these tests.
+On October 13, 2026, the delivered adapter was run in a temporary portable
+**REAPER 7.82/macOS-arm64** installation on macOS 27.0 (26A428). The three
+synthetic markers appeared at exactly 30, 32.5 and 34.5 seconds with expected
+names. Existing marker M23 at 5.25 seconds retained its name, ID and color;
+repeating the import kept four markers without duplicates. Real API readbacks,
+saved projects, version/fixture hashes and a marker-manager screenshot are
+preserved in the [observed import evidence](software-results/2026-10-13-reaper-import/README.md).
+This supersedes the earlier unavailable-editor result. It qualifies this one
+REAPER API/version and synthetic mapping, without physical alignment or general
+editor certification.
 
 For [#63](https://github.com/llazzaro/RideSync/issues/63), the portable schema,
 strict parsing, bounded exclusive publication, explicit mapping and normal-speed
 mapping criteria have synthetic software evidence. The pinned REAPER installation
-criterion remains **Blocked / Not observed**. Complete it with one installation:
-record version/OS and hashes of the source log, alignment, clip and generated
-script; preview three synthetic marker positions/names; import alongside an
-existing marker; record all three expected and observed seconds/names and confirm
-the existing marker is preserved. No source/API review substitutes for that run.
+criterion now has **Observed / Pass** evidence from that installation. All six
+software/editor acceptance criteria have matching delivery evidence; physical
+camera and installed-input observations remain with their existing owners.

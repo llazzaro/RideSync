@@ -1,0 +1,32 @@
+local root='/tmp/ridesync-reaper-acceptance/'
+local adapter='/Users/leonardo/workspace/RideSync/docs/software-results/2026-10-13-bookmark-editor/generated/ridesync-reaper-v1.lua'
+local function snapshot(label)
+  local f=assert(io.open(root..label..'.tsv','w'))
+  f:write('reaper_version\t'..reaper.GetAppVersion()..'\n')
+  f:write('kind\tid\tposition_seconds\tend_seconds\tname\tcolor\n')
+  local _, markers, regions=reaper.CountProjectMarkers(0)
+  for i=0,markers+regions-1 do
+    local ok,region,pos,finish,name,id,color=reaper.EnumProjectMarkers3(0,i)
+    assert(ok~=0)
+    f:write(string.format('%s\t%d\t%.9f\t%.9f\t%s\t%d\n',region and 'region' or 'marker',id,pos,finish,name,color))
+  end
+  f:close()
+end
+local ok,err=xpcall(function()
+  local _,markers,regions=reaper.CountProjectMarkers(0)
+  assert(markers==0 and regions==0,'requires empty disposable project')
+  assert(reaper.AddProjectMarker2(0,false,5.25,0,'Existing marker KEEP',23,0)==23)
+  reaper.Main_SaveProjectEx(0,root..'baseline.rpp',0)
+  snapshot('baseline')
+  dofile(adapter)
+  snapshot('first-import')
+  reaper.Main_SaveProjectEx(0,root..'first-import.rpp',0)
+  dofile(adapter)
+  snapshot('repeat-import')
+  reaper.Main_SaveProjectEx(0,root..'repeat-import.rpp',0)
+  reaper.GetSet_LoopTimeRange(true,false,0,40,false)
+  reaper.Main_OnCommand(40295,0)
+end,debug.traceback)
+local f=assert(io.open(root..'execution-status.txt','w'))
+f:write(ok and 'COMPLETED\n' or ('ERROR\n'..err..'\n'))
+f:close()

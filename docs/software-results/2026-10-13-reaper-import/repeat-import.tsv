@@ -1,0 +1,6 @@
+reaper_version	7.82/macOS-arm64
+kind	id	position_seconds	end_seconds	name	color
+marker	23	5.250000000	0.000000000	Existing marker KEEP	0
+marker	1	30.000000000	0.000000000	RideSync 7:1 [clip 1]	0
+marker	2	32.500000000	0.000000000	RideSync 7:2 [clip 1]	0
+marker	3	34.500000000	0.000000000	RideSync 7:3 [clip 1]	0
