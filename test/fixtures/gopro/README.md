@@ -75,6 +75,64 @@ artificial API numbers. They do not identify any installed HERO12, firmware,
 serial, MAC, or API. No SDK implementation, generated protobuf or schema file
 is vendored; upstream root proto copyright has no blanket MIT grant.
 
+## HERO12 health vectors (#66)
+
+`health_vectors.h` was independently authored October 13, 2026. These are
+**Synthetic / schema-derived** packets, not upstream raw goldens or camera
+captures. The source-qualified codec supports only classic one-byte status IDs
+on the Query characteristic; two-byte operations remain Unknown.
+
+| Field | ID | Wire schema | Named value |
+|---|---|---|---|
+| Battery present | 1 | One byte, boolean 0/1 | Presence, independent of percentage availability |
+| Overheating | 6 | One byte, boolean 0/1 | Overheating flag, no temperature degrees |
+| Encoding | 10 | One byte, boolean 0/1 | Existing recording evidence |
+| Remaining video time | 35 | Four bytes, unsigned big endian | Seconds; adapter must qualify ordinary video mode |
+| SD remaining | 54 | Eight bytes, unsigned big endian | Kilobytes, preserved as uint64 |
+| Minimum status poll period | 60 | Four bytes, unsigned big endian | Milliseconds; adapter applies monitoring budget |
+| Internal battery percentage | 70 | One byte, unsigned | 0–100 percent; larger values reject |
+
+The pinned [official status definitions](https://github.com/gopro/OpenGoPro/blob/0f963572611c4410a15678531e9681a6ff874edb/demos/python/sdk_wireless_camera_control/open_gopro/api/ble_statuses.py)
+declare boolean types (lines 29–65), seconds/mode dependence (215–225), uint64
+kilobytes (273–278), uint32 milliseconds (312–320), and uint8 percentage
+(357–364). Percentage range and strict boolean values are RideSync validation
+policies. Full-width numeric zero/max values remain supplied values; no card
+failure, missing-media sentinel, bitrate conversion or poll schedule is inferred.
+
+Get/Register health requests explicitly list `01 06 0A 23 36 3C 46` after
+`13`/`53`. `encodeStatuses` permits nonempty unique subsets, at most seven
+qualified IDs, with compact or extended-13 headers. It rejects invalid operation,
+unknown IDs, duplicate IDs, null and empty lists without producing a packet.
+No empty list can accidentally query/register every camera field.
+
+Responses distinguish protocol result from each supplied field's `known` flag.
+Omitted fields stay unknown; nonzero camera results publish none. Any malformed
+TLV, width, range or duplicate resource invalidates the entire response before
+publishing. Unknown IDs retain raw bytes and Outcome::Unknown, withhold new
+resource fields, and preserve existing Busy/Ready/Encoding behavior. Callers
+must require Complete with result zero before accepting health. IDs 111/112
+remain unknown; cumulative errors do not become current card faults.
+
+Synthetic tests cover literal full/subset queries, Register/Get/update replies,
+every framed prefix and split, raw prefixes inside TLVs and valid omitted-field
+boundaries, all invalid widths, boolean/percentage ranges, uint32/uint64 zero/max
+and endian values, absent battery independence, alternate routes/IDs, rejected
+queries, unknown fields, duplicate resources and malformed fragmented completion.
+Existing framing limits, peers/channels, Busy/Ready/Encoding and setup tests are
+retained. This codec alone delivers no polling or rider alert and establishes no
+Observed/Confirmed HERO12 support.
+
+October 13 focused **Synthetic** verification: pinned native PlatformIO
+(`native@1.2.1`, Unity 2.6.1, C++11) with only `gopro_codec.cpp` and
+`gopro_setup_codec.cpp` selected passed 21/21 health-only cases (13 codec, eight setup). The temporary config was
+run with `pio test -c /tmp/ridesync-health-codec-only.ini -e native -f test_gopro_codec
+-f test_gopro_setup_codec`; full-project checks remain the integration owner's
+responsibility. Direct Clang builds with `-Wall -Wextra -Werror` and with
+`-fsanitize=address,undefined -fno-omit-frame-pointer` also passed both suites.
+The sanitizer run exposed and corrected an existing test-helper overread when
+constructing the oversized Message case; the decoder's rejection assertion is
+unchanged. Focused clang-format and diff-whitespace checks passed.
+
 ## Conflicts and application policies
 
 The Kotlin group encoder emits uint32, while its tutorial/Python command schema

@@ -16,8 +16,22 @@ enum class Request {
   GetReady,
   RegisterBusy,
   RegisterEncoding,
-  RegisterReady
+  RegisterReady,
+  GetHealth,
+  RegisterHealth
 };
+// Classic one-byte IDs, qualified against the pinned Open GoPro SDK. Resource
+// semantics still require the adapter's exact-model and ordinary-video profile.
+enum class StatusId : uint8_t {
+  BatteryPresent = 1,
+  Overheating = 6,
+  Encoding = 10,
+  RemainingVideoSeconds = 35,
+  SdRemainingKilobytes = 54,
+  MinimumPollPeriodMs = 60,
+  BatteryPercentage = 70
+};
+enum class StatusOperation { Get, Register };
 enum class Outcome {
   Complete,
   Pending,
@@ -32,7 +46,7 @@ enum class Outcome {
 struct Packet {
   Channel channel;
   uint8_t id;
-  uint8_t bytes[8];
+  uint8_t bytes[10];
   size_t size;
 };
 struct Message {
@@ -45,9 +59,24 @@ struct Response {
   bool busy_known = false, busy = false;
   bool encoding_known = false, encoding = false;
   bool ready_known = false, ready = false;
+  // known means a validated field was supplied, not protocol success, battery
+  // availability or valid recording mode. Missing fields/rejections stay unknown.
+  bool battery_present_known = false, battery_present = false;
+  bool overheating_known = false, overheating = false;
+  bool remaining_video_seconds_known = false;
+  uint32_t remaining_video_seconds = 0;
+  bool sd_remaining_kilobytes_known = false;
+  uint64_t sd_remaining_kilobytes = 0;
+  bool minimum_poll_period_ms_known = false;
+  uint32_t minimum_poll_period_ms = 0;
+  bool battery_percentage_known = false;
+  uint8_t battery_percentage = 0;
   Message raw;
 };
 bool encode(Request request, Packet &packet, bool extended = true);
+// Nonempty, unique list of at most seven qualified IDs. Never queries all fields.
+bool encodeStatuses(StatusOperation operation, const StatusId *ids, size_t count, Packet &packet,
+                    bool extended = true);
 Response decode(Channel channel, const Message &message);
 class Reassembler {
 public:

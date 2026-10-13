@@ -2,7 +2,54 @@
 #include <string.h>
 namespace ridesync {
 namespace gopro {
+bool encodeStatuses(StatusOperation operation, const StatusId *ids, size_t count, Packet &packet,
+                    bool extended) {
+  packet = Packet();
+  if (!ids || count == 0 || count > 7 ||
+      (operation != StatusOperation::Get && operation != StatusOperation::Register))
+    return false;
+  for (size_t i = 0; i < count; ++i) {
+    switch (ids[i]) {
+    case StatusId::BatteryPresent:
+    case StatusId::Overheating:
+    case StatusId::Encoding:
+    case StatusId::RemainingVideoSeconds:
+    case StatusId::SdRemainingKilobytes:
+    case StatusId::MinimumPollPeriodMs:
+    case StatusId::BatteryPercentage:
+      break;
+    default:
+      return false;
+    }
+    for (size_t previous = 0; previous < i; ++previous)
+      if (ids[previous] == ids[i])
+        return false;
+  }
+  packet.channel = Channel::Query;
+  packet.id = operation == StatusOperation::Get ? 0x13 : 0x53;
+  const size_t header = extended ? 2 : 1;
+  packet.bytes[0] = extended ? 0x20 : static_cast<uint8_t>(count + 1);
+  if (extended)
+    packet.bytes[1] = static_cast<uint8_t>(count + 1);
+  packet.bytes[header] = packet.id;
+  for (size_t i = 0; i < count; ++i)
+    packet.bytes[header + 1 + i] = static_cast<uint8_t>(ids[i]);
+  packet.size = header + 1 + count;
+  return true;
+}
 bool encode(Request request, Packet &packet, bool extended) {
+  if (request == Request::GetHealth || request == Request::RegisterHealth) {
+    static const StatusId ids[] = {StatusId::BatteryPresent,
+                                   StatusId::Overheating,
+                                   StatusId::Encoding,
+                                   StatusId::RemainingVideoSeconds,
+                                   StatusId::SdRemainingKilobytes,
+                                   StatusId::MinimumPollPeriodMs,
+                                   StatusId::BatteryPercentage};
+    return encodeStatuses(request == Request::GetHealth ? StatusOperation::Get
+                                                        : StatusOperation::Register,
+                          ids, sizeof(ids) / sizeof(ids[0]), packet, extended);
+  }
   packet = Packet();
   struct WireRequest {
     Request request;
@@ -61,7 +108,10 @@ bool recognizedResponse(Channel channel, uint8_t id) {
     return false;
   }
 }
-bool knownStatus(uint8_t id) { return id == 8 || id == 10 || id == 82; }
+bool booleanStatus(uint8_t id) { return id == 1 || id == 6 || id == 8 || id == 10 || id == 82; }
+bool resourceStatus(uint8_t id) {
+  return id == 1 || id == 6 || id == 35 || id == 54 || id == 60 || id == 70;
+}
 bool validateQuery(const Message &message, bool &unknown) {
   for (size_t i = 2; i < message.size;) {
     if (message.size - i < 2)
@@ -69,14 +119,71 @@ bool validateQuery(const Message &message, bool &unknown) {
     const uint8_t id = message.bytes[i++], length = message.bytes[i++];
     if (length > message.size - i)
       return false;
-    if (knownStatus(id)) {
+    if (booleanStatus(id)) {
       if (length != 1 || message.bytes[i] > 1)
+        return false;
+    } else if (id == 35 || id == 60) {
+      if (length != 4)
+        return false;
+    } else if (id == 54) {
+      if (length != 8)
+        return false;
+    } else if (id == 70) {
+      if (length != 1 || message.bytes[i] > 100)
         return false;
     } else
       unknown = true;
+    // Two values for one resource in a single response are ambiguous. Preserve
+    // the legacy Busy/Ready/Encoding behavior while rejecting resource duplicates.
+    if (resourceStatus(id))
+      for (size_t previous = 2; previous < i - 2;) {
+        if (message.bytes[previous] == id)
+          return false;
+        previous += 2 + message.bytes[previous + 1];
+      }
     i += length;
   }
   return true;
+}
+uint64_t unsignedBigEndian(const uint8_t *bytes, size_t length) {
+  uint64_t value = 0;
+  for (size_t i = 0; i < length; ++i)
+    value = (value << 8) | bytes[i];
+  return value;
+}
+void applyHealth(Response &r, const Message &message) {
+  for (size_t i = 2; i < message.size;) {
+    const uint8_t id = message.bytes[i++], length = message.bytes[i++];
+    switch (id) {
+    case 1:
+      r.battery_present_known = true;
+      r.battery_present = message.bytes[i] != 0;
+      break;
+    case 6:
+      r.overheating_known = true;
+      r.overheating = message.bytes[i] != 0;
+      break;
+    case 35:
+      r.remaining_video_seconds_known = true;
+      r.remaining_video_seconds =
+          static_cast<uint32_t>(unsignedBigEndian(message.bytes + i, length));
+      break;
+    case 54:
+      r.sd_remaining_kilobytes_known = true;
+      r.sd_remaining_kilobytes = unsignedBigEndian(message.bytes + i, length);
+      break;
+    case 60:
+      r.minimum_poll_period_ms_known = true;
+      r.minimum_poll_period_ms =
+          static_cast<uint32_t>(unsignedBigEndian(message.bytes + i, length));
+      break;
+    case 70:
+      r.battery_percentage_known = true;
+      r.battery_percentage = message.bytes[i];
+      break;
+    }
+    i += length;
+  }
 }
 void applyQuery(Response &r, const Message &message) {
   for (size_t i = 2; i < message.size;) {
@@ -102,6 +209,10 @@ Response decodeQuery(Response r, const Message &message) {
   if (!validateQuery(message, unknown))
     return r;
   applyQuery(r, message);
+  // An unknown status changes the schema scope; withhold resource publication.
+  // The existing Busy/Ready/Encoding behavior remains available to legacy callers.
+  if (!unknown)
+    applyHealth(r, message);
   r.outcome = unknown ? Outcome::Unknown : Outcome::Complete;
   return r;
 }

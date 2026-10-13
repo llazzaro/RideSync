@@ -1,4 +1,5 @@
 #include "../fixtures/gopro/documentary_vectors.h"
+#include "../fixtures/gopro/health_vectors.h"
 #include "protocol/gopro_codec.h"
 #include <initializer_list>
 
@@ -83,8 +84,9 @@ void responses_preserve_ack_errors_unknown_and_explicit_state() {
                         (int)decode(Channel::Query, body(invalid_bool, 5)).outcome);
   TEST_ASSERT_EQUAL_INT((int)Outcome::Unknown,
                         (int)decode(Channel::Settings, body(ack, 2)).outcome);
-  TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid,
-                        (int)decode(Channel::Command, body(ack, 257)).outcome);
+  Message oversized = body(ack, sizeof(ack));
+  oversized.size = 257;
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid, (int)decode(Channel::Command, oversized).outcome);
 }
 void fragments_are_isolated_and_counters_tolerant() {
   Reassembler a;
@@ -262,8 +264,223 @@ void official_documentary_vectors_decode_end_to_end() {
                         (int)a.feed(1, Channel::Command, gopro_fixture::shutter_success, 3, 0, m));
   TEST_ASSERT_FALSE(decode(Channel::Command, m).encoding_known);
 }
+void health_requests_are_targeted_and_bounded() {
+  Packet p;
+  TEST_ASSERT_TRUE(encode(Request::GetHealth, p));
+  TEST_ASSERT_EQUAL_UINT(sizeof(gopro_fixture::health_get), p.size);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(gopro_fixture::health_get, p.bytes, p.size);
+  TEST_ASSERT_TRUE(encode(Request::RegisterHealth, p, false));
+  TEST_ASSERT_EQUAL_UINT(sizeof(gopro_fixture::health_register), p.size);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(gopro_fixture::health_register, p.bytes, p.size);
+  const StatusId selected[] = {StatusId::Encoding, StatusId::BatteryPercentage};
+  const uint8_t expected[] = {3, 0x13, 10, 70};
+  TEST_ASSERT_TRUE(encodeStatuses(StatusOperation::Get, selected, 2, p, false));
+  TEST_ASSERT_EQUAL_UINT(sizeof(expected), p.size);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, p.bytes, p.size);
+  TEST_ASSERT_EQUAL_UINT8(0x13, p.id);
+  TEST_ASSERT_EQUAL_INT((int)Channel::Query, (int)p.channel);
+  TEST_ASSERT_FALSE(encodeStatuses(StatusOperation::Get, selected, 0, p));
+  TEST_ASSERT_EQUAL_UINT(0, p.size);
+  TEST_ASSERT_FALSE(encodeStatuses(StatusOperation::Get, nullptr, 1, p));
+  const StatusId repeated[] = {StatusId::Encoding, StatusId::Encoding};
+  TEST_ASSERT_FALSE(encodeStatuses(StatusOperation::Register, repeated, 2, p));
+  const StatusId unknown[] = {static_cast<StatusId>(112)};
+  TEST_ASSERT_FALSE(encodeStatuses(StatusOperation::Get, unknown, 1, p));
+  TEST_ASSERT_FALSE(encodeStatuses(static_cast<StatusOperation>(99), selected, 2, p));
+  TEST_ASSERT_FALSE(encodeStatuses(StatusOperation::Get, selected, 8, p));
+}
+void assertNoHealth(const Response &r) {
+  TEST_ASSERT_FALSE(r.battery_present_known);
+  TEST_ASSERT_FALSE(r.overheating_known);
+  TEST_ASSERT_FALSE(r.remaining_video_seconds_known);
+  TEST_ASSERT_FALSE(r.sd_remaining_kilobytes_known);
+  TEST_ASSERT_FALSE(r.minimum_poll_period_ms_known);
+  TEST_ASSERT_FALSE(r.battery_percentage_known);
+}
+void typed_health_vectors_and_routes() {
+  Reassembler a;
+  Message m;
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete,
+                        (int)a.feed(1, Channel::Query, gopro_fixture::health_update,
+                                    sizeof(gopro_fixture::health_update), 0, m));
+  auto r = decode(Channel::Query, m);
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+  TEST_ASSERT_TRUE(r.battery_present_known && r.battery_present);
+  TEST_ASSERT_TRUE(r.overheating_known && !r.overheating);
+  TEST_ASSERT_TRUE(r.encoding_known && r.encoding);
+  TEST_ASSERT_TRUE(r.remaining_video_seconds_known);
+  TEST_ASSERT_EQUAL_UINT32(0x01020304, r.remaining_video_seconds);
+  TEST_ASSERT_TRUE(r.sd_remaining_kilobytes_known);
+  TEST_ASSERT_EQUAL_UINT64(UINT64_C(0x0102030405060708), r.sd_remaining_kilobytes);
+  TEST_ASSERT_TRUE(r.minimum_poll_period_ms_known);
+  TEST_ASSERT_EQUAL_UINT32(5000, r.minimum_poll_period_ms);
+  TEST_ASSERT_TRUE(r.battery_percentage_known);
+  TEST_ASSERT_EQUAL_UINT8(100, r.battery_percentage);
+  TEST_ASSERT_FALSE(r.busy_known || r.ready_known);
+  for (auto channel : {Channel::Command, Channel::Settings, Channel::Management}) {
+    r = decode(channel, m);
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Unknown, (int)r.outcome);
+    assertNoHealth(r);
+    TEST_ASSERT_FALSE(r.encoding_known);
+  }
+  const uint8_t *replies[] = {gopro_fixture::health_get_reply,
+                              gopro_fixture::health_register_reply};
+  for (size_t i = 0; i < 2; ++i) {
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Complete,
+                          (int)a.feed(1, Channel::Query, replies[i], 6, 1, m));
+    r = decode(Channel::Query, m);
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+    if (i == 0) {
+      TEST_ASSERT_TRUE(r.battery_percentage_known);
+      TEST_ASSERT_EQUAL_UINT8(20, r.battery_percentage);
+      TEST_ASSERT_FALSE(r.overheating_known || r.battery_present_known);
+    } else {
+      TEST_ASSERT_TRUE(r.overheating_known && r.overheating);
+      TEST_ASSERT_FALSE(r.battery_percentage_known);
+    }
+  }
+}
+void health_numeric_bounds_and_independent_presence() {
+  const uint8_t maximum[] = {0x13, 0,    1,    1,  0,    6,    1,    1,    35,   4,    0xff,
+                             0xff, 0xff, 0xff, 54, 8,    0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                             0xff, 0xff, 60,   4,  0xff, 0xff, 0xff, 0xff, 70,   1,    100};
+  auto r = decode(Channel::Query, body(maximum, sizeof(maximum)));
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+  TEST_ASSERT_TRUE(r.battery_present_known && !r.battery_present);
+  TEST_ASSERT_TRUE(r.battery_percentage_known);
+  TEST_ASSERT_EQUAL_UINT8(100, r.battery_percentage);
+  TEST_ASSERT_TRUE(r.overheating_known && r.overheating);
+  TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, r.remaining_video_seconds);
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, r.sd_remaining_kilobytes);
+  TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, r.minimum_poll_period_ms);
+  const uint8_t zero[] = {0x93, 0, 35, 4, 0,  0, 0, 0, 54, 8, 0,  0, 0, 0,
+                          0,    0, 0,  0, 60, 4, 0, 0, 0,  0, 70, 1, 0};
+  r = decode(Channel::Query, body(zero, sizeof(zero)));
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+  TEST_ASSERT_TRUE(r.remaining_video_seconds_known && r.sd_remaining_kilobytes_known &&
+                   r.minimum_poll_period_ms_known && r.battery_percentage_known);
+  TEST_ASSERT_EQUAL_UINT32(0, r.remaining_video_seconds);
+  TEST_ASSERT_EQUAL_UINT64(0, r.sd_remaining_kilobytes);
+  TEST_ASSERT_EQUAL_UINT32(0, r.minimum_poll_period_ms);
+  TEST_ASSERT_EQUAL_UINT8(0, r.battery_percentage);
+  TEST_ASSERT_FALSE(r.battery_present_known || r.overheating_known || r.encoding_known);
+  const uint8_t empty[] = {0x13, 0};
+  r = decode(Channel::Query, body(empty, sizeof(empty)));
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+  assertNoHealth(r);
+}
+void malformed_health_never_partly_publishes() {
+  const uint8_t ids[] = {1, 6, 10, 35, 54, 60, 70};
+  const uint8_t widths[] = {1, 1, 1, 4, 8, 4, 1};
+  for (size_t field = 0; field < sizeof(ids); ++field) {
+    // A valid earlier value must not escape when a later field fails.
+    for (uint8_t width = 0; width <= 9; ++width) {
+      if (width == widths[field])
+        continue;
+      uint8_t bytes[16] = {0x93, 0, 70, 1, 20, ids[field], width};
+      auto r = decode(Channel::Query, body(bytes, 7 + width));
+      TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid, (int)r.outcome);
+      assertNoHealth(r);
+      TEST_ASSERT_FALSE(r.encoding_known);
+    }
+  }
+  for (uint8_t id : {uint8_t(1), uint8_t(6), uint8_t(10), uint8_t(70)}) {
+    for (unsigned value = id == 70 ? 101 : 2; value <= 255; ++value) {
+      const uint8_t invalid[] = {0x13, 0, 35, 4, 0, 0, 0, 5, id, 1, static_cast<uint8_t>(value)};
+      auto r = decode(Channel::Query, body(invalid, sizeof(invalid)));
+      TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid, (int)r.outcome);
+      assertNoHealth(r);
+    }
+  }
+  const uint8_t duplicate[] = {0x13, 0, 6, 1, 0, 6, 1, 1};
+  auto r = decode(Channel::Query, body(duplicate, sizeof(duplicate)));
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid, (int)r.outcome);
+  assertNoHealth(r);
+  // At raw TLV boundaries a shorter body is valid: omitted fields stay unknown.
+  // Within each field every proper prefix is invalid and publishes no health.
+  const size_t complete[] = {2, 5, 8, 11, 17, 27, 33};
+  const auto *bytes = gopro_fixture::health_update + 2;
+  for (size_t n = 0; n < sizeof(gopro_fixture::health_update) - 2; ++n) {
+    bool boundary = false;
+    for (size_t end : complete)
+      boundary |= n == end;
+    r = decode(Channel::Query, body(bytes, n));
+    TEST_ASSERT_EQUAL_INT((int)(boundary ? Outcome::Complete : Outcome::Invalid), (int)r.outcome);
+    if (!boundary)
+      assertNoHealth(r);
+    TEST_ASSERT_FALSE(r.battery_percentage_known);
+  }
+}
+void unsupported_health_routes_rejections_and_unknown_ids() {
+  for (uint8_t operation : {uint8_t(0x16), uint8_t(0x56), uint8_t(0x96)}) {
+    const uint8_t alternate[] = {operation, 0, 0, 70, 1, 20};
+    auto r = decode(Channel::Query, body(alternate, sizeof(alternate)));
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Unknown, (int)r.outcome);
+    assertNoHealth(r);
+  }
+  for (uint8_t operation : {uint8_t(0x13), uint8_t(0x53), uint8_t(0x93)}) {
+    const uint8_t rejected[] = {operation, 2, 70, 1, 20};
+    auto r = decode(Channel::Query, body(rejected, sizeof(rejected)));
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Complete, (int)r.outcome);
+    TEST_ASSERT_EQUAL_UINT8(2, r.result);
+    assertNoHealth(r);
+  }
+  // Error counters/SD error enums remain opaque; neither is a current card fault.
+  for (uint8_t id : {uint8_t(99), uint8_t(111), uint8_t(112)}) {
+    const uint8_t unknown[] = {0x93, 0, 70, 1, 20, 10, 1, 1, id, 1, 1};
+    auto r = decode(Channel::Query, body(unknown, sizeof(unknown)));
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Unknown, (int)r.outcome);
+    assertNoHealth(r);
+    TEST_ASSERT_TRUE(r.encoding_known && r.encoding); // Existing legacy behavior.
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(unknown, r.raw.bytes, sizeof(unknown));
+  }
+}
+void health_framing_prefixes_fragments_and_malformed_completion() {
+  Message m;
+  for (size_t n = 0; n < sizeof(gopro_fixture::health_update); ++n) {
+    Reassembler a;
+    TEST_ASSERT_TRUE(a.feed(1, Channel::Query, gopro_fixture::health_update, n, 0, m) !=
+                     Outcome::Complete);
+    TEST_ASSERT_EQUAL_UINT(0, m.size);
+    assertNoHealth(decode(Channel::Query, m));
+  }
+  // Every possible split independently reconstructs the exact expected body.
+  for (size_t split = 3; split < sizeof(gopro_fixture::health_update); ++split) {
+    Reassembler a;
+    TEST_ASSERT_EQUAL_INT(
+        (int)Outcome::Pending,
+        (int)a.feed(1, Channel::Query, gopro_fixture::health_update, split, 0, m));
+    uint8_t continuation[40] = {0x8f};
+    for (size_t i = split; i < sizeof(gopro_fixture::health_update); ++i)
+      continuation[1 + i - split] = gopro_fixture::health_update[i];
+    TEST_ASSERT_EQUAL_INT((int)Outcome::MissingStart,
+                          (int)a.feed(2, Channel::Query, continuation,
+                                      1 + sizeof(gopro_fixture::health_update) - split, 1, m));
+    TEST_ASSERT_EQUAL_INT((int)Outcome::Complete,
+                          (int)a.feed(1, Channel::Query, continuation,
+                                      1 + sizeof(gopro_fixture::health_update) - split, 2, m));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(gopro_fixture::health_update + 2, m.bytes, m.size);
+    TEST_ASSERT_EQUAL_UINT64(UINT64_C(0x0102030405060708),
+                             decode(Channel::Query, m).sd_remaining_kilobytes);
+  }
+  Reassembler a;
+  const uint8_t start[] = {8, 0x93, 0, 70, 1, 20};
+  const uint8_t invalid_tail[] = {0x80, 6, 1, 2};
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Pending, (int)a.feed(1, Channel::Query, start, 6, 0, m));
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Complete,
+                        (int)a.feed(1, Channel::Query, invalid_tail, 4, 1, m));
+  auto r = decode(Channel::Query, m);
+  TEST_ASSERT_EQUAL_INT((int)Outcome::Invalid, (int)r.outcome);
+  assertNoHealth(r);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(health_numeric_bounds_and_independent_presence);
+  RUN_TEST(malformed_health_never_partly_publishes);
+  RUN_TEST(unsupported_health_routes_rejections_and_unknown_ids);
+  RUN_TEST(health_framing_prefixes_fragments_and_malformed_completion);
+  RUN_TEST(health_requests_are_targeted_and_bounded);
+  RUN_TEST(typed_health_vectors_and_routes);
   RUN_TEST(active_characteristics_and_boolean_states_remain_independent);
   RUN_TEST(official_documentary_vectors_decode_end_to_end);
   RUN_TEST(documentary_info_bounds_and_packet_budget);
