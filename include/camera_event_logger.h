@@ -1,11 +1,12 @@
 #pragma once
+#include "camera_marker.h"
 #include "recording_manager.h"
 #include "telemetry_admission.h"
 #include <array>
 namespace ridesync {
 // Explicit IDs are provisioned independently of BLE address, serial and name.
 // Once an event is produced this mapping is immutable for this session.
-class CameraEventLogger final : public CameraAudit {
+class CameraEventLogger final : public CameraAudit, public CameraMarkerAudit {
 public:
   CameraEventLogger(CameraInbox &inbox, Clock &raw, uint64_t session_id, RecordingManager &group)
       : inbox_(inbox), raw_(raw), session_id_(session_id), group_(group) {}
@@ -18,6 +19,7 @@ public:
   void failure(size_t, Operation, Token, uint32_t intent_id, CameraError) override;
   void wireAck(size_t, Operation, Token, uint32_t intent_id, CameraAckDomain,
                CameraAckAction) override;
+  void markerEvent(const CameraMarkerEvent &) override;
 
 private:
   struct Identity {

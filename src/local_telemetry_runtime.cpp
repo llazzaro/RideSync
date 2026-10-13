@@ -22,7 +22,8 @@ LocalTelemetryRuntime::Active::Active(Clock &raw, StorageSink &sink, ModemUart &
                                       const LocalTelemetryConfig &config, GnssPowerControl *power,
                                       StaticMotionReferenceSource *source)
     : session(raw, sink, adapter, manager, group, id, config.firmware, config.provenance,
-              motionOptions(config), source),
+              motionOptions(config), source, config.bookmark_enabled,
+              config.native_bookmark_enabled, config.health_enabled, config.health_sink),
       modem(uart, config.modem),
       gps(session.clock(), modem, power, config.power_timing, config.gps_forwarding_consumer) {}
 LocalTelemetryRuntime::LocalTelemetryRuntime(Clock &raw, ModemUart &uart,
@@ -65,6 +66,7 @@ bool LocalTelemetryRuntime::startQualified() const {
   return !(!config_.opt_in || !config_.gps_qualified ||
            (config_.imu_enabled && !config_.imu_qualified) || !config_.gps_record_ms ||
            config_.gps_record_ms >= 0x80000000UL || !config_.power_timing.qualified ||
+           (config_.native_bookmark_enabled && !config_.bookmark_enabled) ||
            !powerTimingQualified());
 }
 bool LocalTelemetryRuntime::start() {
@@ -158,6 +160,7 @@ void LocalTelemetryRuntime::observeSession() {
   if (active_) {
     auto &s = active_->session;
     status_.storage = s.storage().health();
+    status_.camera_health = s.healthSummary();
     const auto motion = s.admission().motionSnapshot(raw_.now());
     status_.motion_admission = s.admission().motionAdmission();
     status_.motion_current = motion.current;
@@ -293,6 +296,14 @@ void LocalTelemetryRuntime::requestStop() {
     imu_.requestStop();
   if (!active_ || !bound_)
     sd_.cancel(); // Unbound owner only; no producer or Storage queue exists.
+}
+BookmarkReceipt LocalTelemetryRuntime::bookmark(BookmarkSource source, BookmarkGesture gesture,
+                                                uint64_t expected_session_id) {
+  if (!active_ || !bound_ || status_.phase != TelemetryPhase::Running)
+    return {};
+  return active_->session.bookmark(source, gesture, expected_session_id,
+                                   status_.camera == CameraAdmission::Admitted && current_camera_ &&
+                                       !current_safe_mode_);
 }
 bool LocalTelemetryRuntime::attachControl(HandlebarControl &c) {
   if (control_ || started_ || !c.binds(adapter_, manager_, group_))

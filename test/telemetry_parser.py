@@ -24,6 +24,13 @@ CAMERA = ('peer_slot peer_id model group_generation intent_id connection_generat
           'accepted dropped rejected lost written flushed').split()
 
 
+HEALTH = ('peer_slot peer_id model group_generation intent_id connection_generation operation_generation '
+          'episode transition_sequence transition_kind reason severity capability validity profile field historical value unit '
+          'threshold_enter threshold_clear time_domain sample_receipt_known sample_receipt_ms sample_age_ms '
+          'radio_receipt_known radio_receipt_ms acquisition_known acquisition_ms '
+          'transition_dropped transition_coalesced history_incomplete accepted dropped rejected lost written flushed').split()
+
+
 MOTION = 'motion_state motion_algorithm motion_snapshot_max_age_ms motion_convention motion_mount_qualified motion_residual_calibration_qualified motion_mount_id motion_calibration_id motion_accel_compensation motion_gyro_compensation motion_r_bs_00 motion_r_bs_01 motion_r_bs_02 motion_r_bs_10 motion_r_bs_11 motion_r_bs_12 motion_r_bs_20 motion_r_bs_21 motion_r_bs_22 motion_reference_stationary motion_reference_session_id motion_reference_generation motion_reference_batch motion_reference_declaration motion_measurements_valid motion_static_tilt_valid motion_dynamic_lean_valid motion_dynamic_acceleration_valid motion_force_x_mps2 motion_force_y_mps2 motion_force_z_mps2 motion_rate_x_rad_s motion_rate_y_rad_s motion_rate_z_rad_s motion_roll_rad motion_pitch_rad'.split()
 
 DYNAMIC = 'dynamic_requested dynamic_cadence_us dynamic_declaration dynamic_quality dynamic_fault dynamic_timing_source dynamic_elapsed_us dynamic_numeric_available dynamic_angles_available dynamic_lean_valid dynamic_acceleration_valid dynamic_qw dynamic_qx dynamic_qy dynamic_qz dynamic_gravity_x_mps2 dynamic_gravity_y_mps2 dynamic_gravity_z_mps2 dynamic_accel_x_mps2 dynamic_accel_y_mps2 dynamic_accel_z_mps2 dynamic_roll_rad dynamic_pitch_rad'.split()
@@ -297,8 +304,8 @@ def _validate_sensor_time_payload(row, payload):
 
 
 def _parse_imu_row(values, version):
-    extra = MOTION if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') else []
-    if version == '#ridesync_telemetry,5': extra = extra + DYNAMIC
+    extra = MOTION if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7') else []
+    if version in ('#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7'): extra = extra + DYNAMIC
     if len(values) != 1 + len(COMMON) + len(IMU) + len(extra):
         raise ValueError(f'IMU column count {len(values)}')
     row = dict(zip(['kind'] + COMMON + IMU + extra, values))
@@ -413,15 +420,127 @@ def _parse_camera_row(values):
     return row
 
 
+def _parse_health_row(values):
+    if len(values) != 1 + len(COMMON) + len(HEALTH):
+        raise ValueError('health column count')
+    row = dict(zip(['kind'] + COMMON + HEALTH, values))
+    bounds = {'peer_slot': (0, 7), 'peer_id': (1, 0xffffffff), 'model': (1, 8),
+              'transition_sequence': (1, 0xffffffff), 'transition_kind': (0, 3),
+              'reason': (0, 7), 'severity': (0, 3), 'capability': (0, 2),
+              'validity': (0, 2), 'profile': (0, 3), 'unit': (0, 5),
+              'history_incomplete': (0, 1), 'field': (0, 4), 'historical': (0, 1)}
+    for field in HEALTH:
+        if field in ('value', 'time_domain', 'sample_receipt_known', 'sample_receipt_ms',
+                     'sample_age_ms', 'radio_receipt_known', 'radio_receipt_ms',
+                     'acquisition_known', 'acquisition_ms'):
+            continue
+        _timestamp_unsigned(row, field, *bounds.get(field, (0, 0xffffffff)))
+    model = int(row['model'])
+    expected_profile = 1 if model == 1 else 3 if model == 4 else 2 if model >= 5 else 0
+    if int(row['profile']) not in (0, expected_profile):
+        raise ValueError('health model profile')
+    kind = int(row['transition_kind'])
+    if (kind in (2, 3)) != (row['severity'] == '0'):
+        raise ValueError('health transition severity')
+    if row['validity'] == '1' and (row['capability'] != '2' or row['profile'] == '0' or row['historical'] != '1'):
+        raise ValueError('unqualified health sample')
+    unit, reason = int(row['unit']), int(row['reason'])
+    field = int(row['field'])
+    if reason != 7 and field != {3: 1, 4: 2, 5: 4}.get(reason, 0):
+        raise ValueError('health reason field')
+    if unit and unit != [1, 2, 3, 4, 5][field]:
+        raise ValueError('health field unit')
+    if unit == 0 or row['historical'] == '0':
+        if row['value'] or row['validity'] == '1':
+            raise ValueError('health value presence')
+    else:
+        maximum = {1: 2, 2: 100, 5: 1}.get(unit, 0xffffffffffffffff)
+        minimum = 1 if unit == 1 and row['validity'] == '1' else 0
+        _timestamp_unsigned(row, 'value', minimum, maximum)
+        expected = {3: 2, 4: 3, 5: 5}.get(reason, 1)
+        if reason != 7 and unit != expected:
+            raise ValueError('health reason unit')
+    if row['time_domain'] != 'owner_admission' or row['radio_receipt_known'] != '0' or \
+            row['radio_receipt_ms'] or row['acquisition_known'] != '0' or row['acquisition_ms']:
+        raise ValueError('health time provenance')
+    _validate_presence(row, 'sample_receipt_known', ('sample_receipt_ms','sample_age_ms'),
+                       'health sample receipt presence')
+    if row['sample_receipt_known'] == '1':
+        if row['historical'] != '1': raise ValueError('health sample history')
+        receipt = _timestamp_unsigned(row, 'sample_receipt_ms', 0, 31536000000)
+        age = _timestamp_unsigned(row, 'sample_age_ms', 0, 0x7fffffff)
+        if receipt + age != int(row['monotonic_ms']):
+            raise ValueError('health sample age')
+    if (row['history_incomplete'] == '1') != any(int(row[f]) for f in
+            ('transition_dropped', 'transition_coalesced', 'dropped', 'rejected', 'lost')):
+        raise ValueError('health loss declaration')
+    return row
+
+
+BOOKMARK = 'bookmark_id bookmark_source bookmark_gesture'.split()
+MARKER = ('bookmark_id peer_slot peer_id model connection_generation operation_generation '
+          'event_kind error delivery_admitted time_domain event_receipt_known event_receipt_ms '
+          'event_receipt_age_ms accepted dropped rejected lost written flushed').split()
+
+def _parse_bookmark(values):
+    if len(values) != 39 or any(values[13:30]):
+        raise ValueError('bookmark columns')
+    row = dict(zip(['kind'] + COMMON, values[:13]))
+    row.update(zip('accepted dropped rejected lost written flushed'.split(), values[30:36]))
+    row.update(zip(BOOKMARK, values[36:39]))
+    _timestamp_unsigned(row, 'bookmark_id', 1, 0xffffffff)
+    pair = (row['bookmark_source'], row['bookmark_gesture'])
+    if pair not in (('1','0'), ('2','1'), ('2','2'), ('2','3')):
+        raise ValueError('bookmark source gesture')
+    for field in ('accepted','dropped','rejected','lost','written','flushed'):
+        _timestamp_unsigned(row, field, 0, 0xffffffff)
+    return row
+
+def _parse_marker(values):
+    if len(values) != 32: raise ValueError('marker columns')
+    row = dict(zip(['kind'] + COMMON + MARKER, values))
+    bounds = {'bookmark_id': (1, 0xffffffff), 'peer_slot': (0, 7), 'peer_id': (1, 0xffffffff),
+              'model': (1, 8), 'event_kind': (0, 4), 'error': (0, 10), 'delivery_admitted': (0, 1)}
+    for field in MARKER:
+        if field in ('time_domain','event_receipt_known','event_receipt_ms','event_receipt_age_ms'): continue
+        _timestamp_unsigned(row, field, *bounds.get(field, (0, 0xffffffff)))
+    if row['time_domain'] != 'owner_admission': raise ValueError('marker provenance')
+    _validate_presence(row, 'event_receipt_known', ('event_receipt_ms','event_receipt_age_ms'),
+                       'marker receipt presence')
+    if row['event_receipt_known'] == '1':
+        receipt = _timestamp_unsigned(row, 'event_receipt_ms', 0, 31536000000)
+        age = _timestamp_unsigned(row, 'event_receipt_age_ms', 0, 60000)
+        if receipt + age != int(row['monotonic_ms']): raise ValueError('marker receipt age')
+    kind = int(row['event_kind'])
+    if kind in (1, 2) and any(row[f] == '0' for f in ('connection_generation','operation_generation')):
+        raise ValueError('marker token')
+    if (kind == 2 and row['error'] != '0') or (kind != 1 and row['delivery_admitted'] != '0'):
+        raise ValueError('marker result')
+    if kind == 1 and row['error'] != ('0' if row['delivery_admitted'] == '1' else '8'):
+        raise ValueError('marker attempt')
+    return row
+
 def _parse_record(values, version):
+    if not values: raise ValueError('empty record')
+    if version in ('#ridesync_telemetry,6', '#ridesync_telemetry,7'):
+        if values[0] == 'bookmark': return _parse_bookmark(values)
+        if values[0] == 'marker': return _parse_marker(values)
+        if len(values) < 4 or any(values[-3:]): raise ValueError('unexpected bookmark fields')
+        values = values[:-3]
+    return _parse_record_base(values, version)
+
+
+def _parse_record_base(values, version):
     if values[0] == 'gps':
         if len(values) != 36:
             raise ValueError('GPS column count')
         return dict(zip(['kind'] + COMMON, values))
     if values[0] in ('imu', 'config', 'health', 'control'):
         return _parse_imu_row(values, version)
-    if values[0] == 'camera' and version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
+    if values[0] == 'camera' and version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7'):
         return _parse_camera_row(values)
+    if values[0] == 'camera_health' and version == '#ridesync_telemetry,7':
+        return _parse_health_row(values)
     raise ValueError('unsupported record kind')
 
 
@@ -468,11 +587,11 @@ def _validate_dynamic_numbers(row, fields, present, message):
 
 
 def _validate_record(row, version):
-    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
+    if version in ('#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7'):
         _v3_timestamp(row)
-    if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5') and row['kind'] in ('imu', 'config', 'health', 'control'):
+    if version in ('#ridesync_telemetry,4', '#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7') and row['kind'] in ('imu', 'config', 'health', 'control'):
         _motion(row)
-        if version == "#ridesync_telemetry,5": _dynamic(row)
+        if version in ('#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7'): _dynamic(row)
     _validate_record_timestamp(row)
 
 
@@ -489,17 +608,20 @@ def _validate_record_timestamp(row):
 
 def _validate_layout(data):
     version = data.split('\n', 1)[0]
-    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5'):
+    if version not in ('#ridesync_telemetry,2', '#ridesync_telemetry,3', '#ridesync_telemetry,4', '#ridesync_telemetry,5', '#ridesync_telemetry,6', '#ridesync_telemetry,7'):
         raise ValueError('unsupported version')
     if not data.endswith('\n'):
         raise ValueError('partial trailing row')
     layouts = {'#camera_layout,3,see_docs/log_format.md\n': (3, 'camera'),
                '#imu_layout,4,see_docs/motion_logging.md\n': (4, 'motion'),
-               '#dynamic_layout,1,see_docs/dynamic_motion_estimator.md\n': (5, 'dynamic')}
+               '#dynamic_layout,1,see_docs/dynamic_motion_estimator.md\n': (5, 'dynamic'),
+               '#camera_health_layout,1,see_docs/log_format.md\n': (7, 'camera health')}
     number = int(version.rsplit(',', 1)[1])
     for marker, (minimum, name) in layouts.items():
         if number >= minimum and marker not in data:
             raise ValueError('missing '+name+' layout')
+    if number in (6, 7) and '#bookmark_layout,1,see_docs/log_format.md\n' not in data:
+        raise ValueError('missing bookmark layout')
     return version
 
 

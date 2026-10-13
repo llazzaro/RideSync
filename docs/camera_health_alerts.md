@@ -219,6 +219,15 @@ not measured sizes. Verify actual structure sizes, target map and stack before
 activation. Existing transport buffers/storage queues are reused; any expansion
 must fit this incremental budget or require an explicit revised scope.
 
+Implementation resolution, October 13, 2026: retain the 4096-byte target cap and
+all qualified receipt/order evidence, but deliver eight transition slots instead
+of the illustrative sixteen-slot allocation above. Issue #67 permits up to sixteen.
+The ring remains the sole health history queue, drains at most two per owner pass,
+and reports earlier overflow explicitly; current peer alerts are independent of
+history capacity. The [runtime delivery](camera_health_runtime.md) records measured
+layout/stack accounting and the reproducible budget check. Health uses version 7
+because the concurrent bookmark implementation occupies version 6.
+
 Define a new opt-in health log layout/version without reusing occupied versions
 1–5. Add typed health events rather than overloading a recording observation or
 command ACK. Preserve GPS/camera/motion row contracts. Each transition carries

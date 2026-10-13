@@ -7,6 +7,14 @@
 #include <esp_heap_caps.h>
 namespace ridesync {
 namespace {
+class ArduinoHealthPort final : public CameraHealthSerialPort {
+public:
+  size_t writable() const override { return static_cast<size_t>(Serial.availableForWrite()); }
+  size_t write(const char *s, size_t n) override {
+    return Serial.write(reinterpret_cast<const uint8_t *>(s), n);
+  }
+} health_port;
+CameraHealthSerialSink health_serial(health_port);
 BenchConsole console;
 bool waiting = false;
 bool clear_requested = false;
@@ -60,7 +68,6 @@ void servicePowerReport() {
     reportDetails();
   }
 }
-
 const char *observed(RecordingState state) {
   return state == RecordingState::Recording ? "Recording"
          : state == RecordingState::Stopped ? "Stopped"
@@ -93,6 +100,16 @@ void reportDetails() {
   if (!application || !application->telemetry())
     return;
   const auto status = application->telemetry()->status();
+  const auto &health = status.camera_health;
+  Serial.printf(
+      "HEALTH enabled=%u critical=%u warning=%u highest_peer=%u reason=%s "
+      "dropped=%lu coalesced=%lu wire_coalesced=%lu wire_failures=%lu serial_dropped=%lu\n",
+      unsigned(health.enabled), unsigned(health.critical), unsigned(health.warning),
+      unsigned(health.peer), cameraHealthReasonName(health.reason),
+      static_cast<unsigned long>(health.dropped), static_cast<unsigned long>(health.coalesced),
+      static_cast<unsigned long>(health.wire_coalesced),
+      static_cast<unsigned long>(health.wire_failures),
+      static_cast<unsigned long>(health_serial.dropped()));
   Serial.printf(
       "BENCH phase=%u fault=%u camera=%u gps_validity=%u imu=%u motion=%u storage_error=%d "
       "sd_dropped=%u sd_lost=%u stalls=%u refused=%u releasable=%u\n",
@@ -117,6 +134,34 @@ void reportDetails() {
                   unsigned(peer.pending), unsigned(peer.error), unsigned(runtime.adapter.fault(i)),
                   unsigned(state.capabilities.query), unsigned(state.capabilities.wake),
                   unsigned(state.capabilities.gps));
+    auto *session = application->telemetry()->owner().session();
+    if (health.enabled && session) {
+      const auto *current = session->health().snapshot(i);
+      const auto &recording = current->fields[static_cast<size_t>(HealthField::Recording)];
+      Serial.printf("HEALTH peer=%u episode=%lu current_recording=%s validity=%u historical=%u\n",
+                    unsigned(i), static_cast<unsigned long>(current->episode),
+                    observed(recording.validity == HealthValidity::Valid
+                                 ? static_cast<RecordingState>(recording.value)
+                                 : RecordingState::Unknown),
+                    unsigned(recording.validity), unsigned(recording.historical));
+      for (size_t f = 0; f < static_cast<size_t>(HealthField::Count); ++f) {
+        const auto &field = current->fields[f];
+        Serial.printf("HEALTH peer=%u field=%u capability=%u validity=%u value=%llu unit=%u "
+                      "historical=%u receipt_ms=%lu\n",
+                      unsigned(i), unsigned(f), unsigned(field.capability),
+                      unsigned(field.validity), static_cast<unsigned long long>(field.value),
+                      unsigned(field.unit), unsigned(field.historical),
+                      static_cast<unsigned long>(field.received_ms));
+      }
+      for (size_t r = 0; r < static_cast<size_t>(HealthReason::Count); ++r) {
+        const auto reason = static_cast<HealthReason>(r);
+        const auto severity = session->health().severity(i, reason);
+        if (severity != HealthSeverity::None || current->alerts[r] != HealthSeverity::None)
+          Serial.printf("HEALTH peer=%u reason=%s current_severity=%u historical_severity=%u\n",
+                        unsigned(i), cameraHealthReasonName(reason), unsigned(severity),
+                        unsigned(current->alerts[r]));
+      }
+    }
   }
 }
 bool admitted(SupervisedEsp32Application *application) {
@@ -190,7 +235,6 @@ void execute(BenchCommand command) {
                   unsigned(benchArmStationaryReference()));
     return;
   }
-
   if (!admitted(application)) {
     Serial.println("BENCH command refused: commissioned running camera owner required.");
     report();
@@ -251,6 +295,8 @@ void terminal() {
   }
 }
 } // namespace
+CameraHealthTransitionSink *benchHealthSink() { return &health_serial; }
+uint32_t benchHealthSerialDropped() { return health_serial.dropped(); }
 void benchConsoleService() {
   servicePowerReport();
   // One bounded line slot, no buffered command replay. Drain the current burst

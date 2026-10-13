@@ -52,8 +52,11 @@ enum class CameraAdmission { Disabled, Admitted, Refused };
 struct LocalTelemetryConfig {
   bool opt_in = false, gps_qualified = false, imu_enabled = false, imu_qualified = false;
   bool safe_mode = false, cameras_qualified = false;
+  bool health_enabled = false;
+  CameraHealthTransitionSink *health_sink = nullptr;
   uint32_t gps_record_ms = 1000;
   bool motion_enabled = false;
+  bool bookmark_enabled = false, native_bookmark_enabled = false;
   MotionEstimatorConfig motion_config;
   DynamicMotionConfig dynamic_motion;
   uint32_t dynamic_cadence_us = 0;
@@ -69,6 +72,7 @@ struct LocalTelemetryConfig {
   CameraPeers peers;
 };
 struct LocalTelemetryStatus {
+  CameraHealthSummary camera_health;
   TelemetryPhase phase = TelemetryPhase::Inactive;
   bool safe_mode = false;
   TelemetryFault fault = TelemetryFault::None;
@@ -111,6 +115,8 @@ public:
   void refuseStart(TelemetryFault);
   void service();
   void requestStop();
+  BookmarkReceipt bookmark(BookmarkSource source, BookmarkGesture gesture,
+                           uint64_t expected_session_id = 0);
   void withdrawMotionReference();
   LocalTelemetryStatus status() const;
   bool canRelease() const { return status_.releasable; }

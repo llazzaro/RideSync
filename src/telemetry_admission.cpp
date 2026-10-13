@@ -22,6 +22,22 @@ void admitCamera(SessionClock &clock, Storage &storage, CameraEvidence evidence)
   }
   storage.enqueueCamera(timestamp, evidence);
 }
+void admitCameraMarker(SessionClock &clock, Storage &storage, CameraMarkerEvidence evidence) {
+  uint32_t admission_raw;
+  const auto timestamp = clock.snapshotWithRaw(admission_raw);
+  if (evidence.event_receipt_known) {
+    const uint32_t age = admission_raw - evidence.event_receipt_raw32;
+    if (timestamp.monotonic_quality == MonotonicQuality::Valid && age <= kCameraEventMaxAgeMs &&
+        age <= timestamp.monotonic_ms) {
+      evidence.event_receipt_age_ms = age;
+      evidence.event_receipt_ms = timestamp.monotonic_ms - age;
+    } else {
+      evidence.event_receipt_known = false;
+      evidence.event_receipt_raw32 = 0;
+    }
+  }
+  storage.enqueueCameraMarker(timestamp, evidence);
+}
 bool benignDynamicMetadata(const ImuEvidence &e) {
   return e.kind == RecordKind::ImuControl && (e.event_code == 0 || e.event_code == 5) &&
          !(e.timing_flags & 7);
@@ -71,7 +87,28 @@ bool CameraInbox::publish(const CameraEvidence &e) {
     increment(dropped_);
     return false;
   }
-  slots_[w % kCapacity] = e;
+  auto &slot = slots_[w % kCapacity];
+  slot.camera = e;
+  slot.is_marker = false;
+  write_.store(w + 1, std::memory_order_release);
+  return true;
+}
+bool CameraInbox::publishMarker(const CameraMarkerEvidence &e) {
+  if (!e.session_id || !e.bookmark_id || e.peer_slot >= kMaxCameras || !e.peer_id ||
+      e.model == CameraModel::Unknown || e.kind > CameraMarkerKind::Cancelled ||
+      (e.kind != CameraMarkerKind::RequestRefused && e.model != CameraModel::HERO12_BLACK)) {
+    increment(marker_rejected_);
+    return false;
+  }
+  const uint32_t w = write_.load(std::memory_order_relaxed);
+  if (finished_.load(std::memory_order_acquire) ||
+      w - read_.load(std::memory_order_acquire) == kCapacity) {
+    increment(marker_dropped_);
+    return false;
+  }
+  auto &slot = slots_[w % kCapacity];
+  slot.marker = e;
+  slot.is_marker = true;
   write_.store(w + 1, std::memory_order_release);
   return true;
 }
@@ -79,12 +116,41 @@ void CameraInbox::finish() { finished_.store(true, std::memory_order_release); }
 bool CameraInbox::stopRequested() const { return stop_.load(std::memory_order_acquire); }
 TelemetryAdmission::TelemetryAdmission(SessionClock &clock, Storage &storage, ImuInbox &inbox,
                                        CameraInbox *camera, const MotionAdmissionConfig &motion,
-                                       StaticMotionReferenceSource *source)
+                                       StaticMotionReferenceSource *source, bool bookmark_active)
     : clock_(clock), storage_(storage), inbox_(inbox), camera_(camera), motion_options_(motion),
-      estimator_(motion.estimator), dynamic_(motion.dynamic), source_(source) {
+      estimator_(motion.estimator), dynamic_(motion.dynamic), source_(source),
+      bookmark_active_(bookmark_active) {
   if (motion.requested)
     motion_state_ =
         motionAdmissionQualified(motion) ? MotionAdmission::Enabled : MotionAdmission::Refused;
+}
+bool TelemetryAdmission::attachHealth(HealthLogSource &source) {
+  if (health_ || stopping_ || stopped_)
+    return false;
+  health_ = &source;
+  return true;
+}
+void TelemetryAdmission::healthDropped(uint32_t count) { storage_.droppedHealth(count); }
+bool TelemetryAdmission::health(CameraHealthEvidence evidence) {
+  if (stopped_) {
+    storage_.drop(RecordKind::CameraHealth);
+    return false;
+  }
+  uint32_t raw;
+  const auto timestamp = clock_.snapshotWithRaw(raw);
+  auto &transition = evidence.transition;
+  const uint32_t age = raw - transition.received_ms;
+  evidence.sample_receipt_known = transition.historical &&
+                                  timestamp.monotonic_quality == MonotonicQuality::Valid &&
+                                  age < 0x80000000u && age <= timestamp.monotonic_ms;
+  if (evidence.sample_receipt_known) {
+    evidence.sample_receipt_ms = timestamp.monotonic_ms - age;
+    transition.age_ms = age;
+  } else {
+    evidence.sample_receipt_ms = 0;
+    transition.age_ms = 0;
+  }
+  return storage_.enqueueHealth(timestamp, evidence);
 }
 void TelemetryAdmission::beginMotionPass() { current_ = {}; }
 void TelemetryAdmission::withdrawMotionReference() {
@@ -121,6 +187,12 @@ void TelemetryAdmission::accountCameraLoss() {
     storage_.rejectedCamera(rejected - camera_rejected_seen_);
     camera_dropped_seen_ = dropped;
     camera_rejected_seen_ = rejected;
+    const uint32_t marker_dropped = camera_->marker_dropped_.load(std::memory_order_acquire);
+    const uint32_t marker_rejected = camera_->marker_rejected_.load(std::memory_order_acquire);
+    storage_.droppedCameraMarker(marker_dropped - marker_dropped_seen_);
+    storage_.rejectedCameraMarker(marker_rejected - marker_rejected_seen_);
+    marker_dropped_seen_ = marker_dropped;
+    marker_rejected_seen_ = marker_rejected;
   }
 }
 void TelemetryAdmission::observeImuLoss() {
@@ -140,7 +212,10 @@ bool TelemetryAdmission::admitCameraInbox() {
   if (r != camera_->write_.load(std::memory_order_acquire)) {
     const auto evidence = camera_->slots_[r % CameraInbox::kCapacity];
     camera_->read_.store(r + 1, std::memory_order_release);
-    admitCamera(clock_, storage_, evidence);
+    if (evidence.is_marker)
+      admitCameraMarker(clock_, storage_, evidence.marker);
+    else
+      admitCamera(clock_, storage_, evidence.camera);
     camera_turn_ = false;
     return true;
   }
@@ -162,7 +237,7 @@ bool TelemetryAdmission::admitImuInbox() {
   return false;
 }
 bool TelemetryAdmission::inboxesDrained() {
-  return inbox_.finished_.load(std::memory_order_acquire) &&
+  return inbox_.finished_.load(std::memory_order_acquire) && (!health_ || health_->drained()) &&
          inbox_.read_.load(std::memory_order_relaxed) ==
              inbox_.write_.load(std::memory_order_acquire) &&
          (!camera_ || (camera_->finished_.load(std::memory_order_acquire) &&
@@ -300,6 +375,53 @@ bool TelemetryAdmission::event(const ImuEvidence &evidence) {
   }
   return admitImu(evidence, MotionInputRoute::Direct, evidence.kind == RecordKind::ImuSample);
 }
+BookmarkReceipt TelemetryAdmission::bookmark(BookmarkSource source, BookmarkGesture gesture,
+                                             uint64_t expected_session_id) {
+  BookmarkReceipt receipt;
+  receipt.timestamp = clock_.snapshot();
+  receipt.session_id = receipt.timestamp.session_id;
+  if ((source != BookmarkSource::Serial && source != BookmarkSource::Physical) ||
+      (source == BookmarkSource::Serial && gesture != BookmarkGesture::Serial) ||
+      (source == BookmarkSource::Physical &&
+       (gesture < BookmarkGesture::Short || gesture > BookmarkGesture::Double))) {
+    receipt.outcome = BookmarkOutcome::InvalidInput;
+    storage_.reject(RecordKind::Bookmark);
+    return receipt;
+  }
+  if (!receipt.session_id || receipt.session_id != storage_.sessionId() ||
+      (expected_session_id && expected_session_id != receipt.session_id)) {
+    receipt.outcome = BookmarkOutcome::Inactive;
+    storage_.reject(RecordKind::Bookmark);
+    return receipt;
+  }
+  if (!bookmark_active_ || !storage_.bookmarkFormatSelected()) {
+    receipt.outcome = BookmarkOutcome::DisabledFormat;
+    storage_.reject(RecordKind::Bookmark);
+    return receipt;
+  }
+  receipt.bookmark_id = bookmark_ids_.take();
+  if (!receipt.bookmark_id) {
+    receipt.outcome = BookmarkOutcome::Exhausted;
+    storage_.reject(RecordKind::Bookmark);
+    return receipt;
+  }
+  if (receipt.timestamp.monotonic_quality != MonotonicQuality::Valid) {
+    receipt.outcome = BookmarkOutcome::InvalidTime;
+    storage_.reject(RecordKind::Bookmark);
+    return receipt;
+  }
+  if (stopping_ || !storage_.configValid()) {
+    receipt.outcome = BookmarkOutcome::StorageUnavailable;
+    storage_.drop(RecordKind::Bookmark);
+    return receipt;
+  }
+  BookmarkEvidence evidence;
+  evidence.bookmark_id = receipt.bookmark_id;
+  evidence.source = source;
+  evidence.gesture = gesture;
+  receipt.outcome = storage_.enqueueBookmark(receipt.timestamp, evidence);
+  return receipt;
+}
 uint8_t TelemetryAdmission::tick() {
   if (stopped_)
     return 0;
@@ -321,6 +443,8 @@ uint8_t TelemetryAdmission::tick() {
       break;
     ++processed;
   }
+  if (health_)
+    health_->drain(*this);
   if (stopping_ && inboxesDrained()) {
     accountCameraLoss();
     storage_.requestStop();
@@ -331,6 +455,8 @@ uint8_t TelemetryAdmission::tick() {
 void TelemetryAdmission::requestStop() {
   revokeMotion();
   stopping_ = true;
+  if (health_)
+    health_->requestStop();
   inbox_.stop_.store(true, std::memory_order_release);
   if (camera_)
     camera_->stop_.store(true, std::memory_order_release);

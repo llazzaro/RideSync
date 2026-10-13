@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <new>
 namespace ridesync {
 static_assert(ATOMIC_INT_LOCK_FREE == 2, "Storage requires lock-free 32-bit atomics");
 static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "Storage requires lock-free boolean atomics");
@@ -266,8 +267,12 @@ bool cameraAttemptValid(const CameraEvidence &e) {
                                   : e.error != CameraError::Transport))) ||
            (e.kind != CameraEventKind::Attempt && e.delivery_admitted));
 }
+bool bookmarkFormat(StorageFormat format) {
+  return format == StorageFormat::BookmarkV6 || format == StorageFormat::CameraHealthV7;
+}
 bool motionFormat(StorageFormat format) {
-  return format == StorageFormat::MotionV4 || format == StorageFormat::MotionV5;
+  return format == StorageFormat::MotionV4 || format == StorageFormat::MotionV5 ||
+         format == StorageFormat::BookmarkV6 || format == StorageFormat::CameraHealthV7;
 }
 bool cameraFormat(StorageFormat format) {
   return format == StorageFormat::CameraV3 || motionFormat(format);
@@ -283,12 +288,36 @@ bool imuGainsValid(const ImuConfig &c) {
 }
 bool motionSchemaValid(StorageFormat format_, const ImuEvidence &e, const MotionEvidence &motion) {
   return !((motionFormat(format_) && !motionValid(e, motion)) ||
-           (motion.dynamic_requested && format_ != StorageFormat::MotionV5) ||
-           (format_ == StorageFormat::MotionV5 && !dynamicValid(e, motion)));
+           (motion.dynamic_requested && format_ != StorageFormat::MotionV5 &&
+            format_ != StorageFormat::BookmarkV6 && format_ != StorageFormat::CameraHealthV7) ||
+           ((format_ == StorageFormat::MotionV5 || format_ == StorageFormat::BookmarkV6 ||
+             format_ == StorageFormat::CameraHealthV7) &&
+            !dynamicValid(e, motion)));
 }
 bool cameraEvidenceValid(const CameraEvidence &e, const RecordTimestamp &t) {
   return !(!cameraReceiptValid(e, t) || !cameraEnumsValid(e) || !cameraAckValid(e) ||
            !cameraObservationValid(e) || !cameraRequestValid(e) || !cameraAttemptValid(e));
+}
+bool markerEvidenceValid(const CameraMarkerEvidence &e, const RecordTimestamp &t) {
+  if (static_cast<unsigned>(e.error) > static_cast<unsigned>(CameraError::InvalidPolicy) ||
+      (e.event_receipt_known
+           ? (e.event_receipt_age_ms > 60000 || e.event_receipt_ms > t.monotonic_ms ||
+              t.monotonic_ms - e.event_receipt_ms != e.event_receipt_age_ms)
+           : (e.event_receipt_raw32 || e.event_receipt_ms || e.event_receipt_age_ms)))
+    return false;
+  if (e.kind == CameraMarkerKind::RequestRefused)
+    return e.error != CameraError::None && !e.delivery_admitted;
+  if (!e.connection_generation || !e.operation_generation || e.model != CameraModel::HERO12_BLACK)
+    return false;
+  if (e.kind == CameraMarkerKind::Attempt)
+    return e.error == CameraError::None && e.delivery_admitted;
+  if (e.delivery_admitted)
+    return false;
+  if (e.kind == CameraMarkerKind::WireAck)
+    return e.error == CameraError::None;
+  if (e.kind == CameraMarkerKind::Cancelled)
+    return e.error == CameraError::Cancelled;
+  return e.kind == CameraMarkerKind::Failed && e.error != CameraError::None;
 }
 bool imuEvidenceValid(const ImuEvidence &e) {
   return imuConfigValid(e.config) && imuEventValid(e) && imuGainsValid(e.config);
@@ -474,8 +503,9 @@ void formatImuEvent(Csv &c, const ImuEvidence &e) {
   c.append(",%u,%u", e.event_count, e.event_count_lower_bound);
 }
 const char *formatName(StorageFormat format) {
-  const char *names[] = {"#ridesync_gps,1", "#ridesync_telemetry,2", "#ridesync_telemetry,3",
-                         "#ridesync_telemetry,4", "#ridesync_telemetry,5"};
+  const char *names[] = {"#ridesync_gps,1",       "#ridesync_telemetry,2", "#ridesync_telemetry,3",
+                         "#ridesync_telemetry,4", "#ridesync_telemetry,5", "#ridesync_telemetry,6",
+                         "#ridesync_telemetry,7"};
   return names[static_cast<unsigned>(format)];
 }
 void formatGpsFix(Csv &c, const ModemSnapshot &s) {
@@ -518,10 +548,11 @@ void Storage::add(std::atomic<uint32_t> &c, uint32_t n) {
 Storage::Storage(StorageSink &sink, const StorageConfig &c)
     : format_(c.format), sink_(sink), session_(c.session_id), max_mounts_(c.mount_attempts),
       flush_records_(c.flush_records), valid_(false) {
-  valid_ = (static_cast<unsigned>(format_) <= static_cast<unsigned>(StorageFormat::MotionV5)) &&
-           session_ && max_mounts_ > 0 && max_mounts_ <= 3 && flush_records_ > 0 &&
-           flush_records_ <= kCapacity && token(c.firmware, firmware_) &&
-           token(c.provenance, provenance_);
+  valid_ =
+      (static_cast<unsigned>(format_) <= static_cast<unsigned>(StorageFormat::CameraHealthV7)) &&
+      session_ && max_mounts_ > 0 && max_mounts_ <= 3 && flush_records_ > 0 &&
+      flush_records_ <= kCapacity && token(c.firmware, firmware_) &&
+      token(c.provenance, provenance_);
   snprintf(path_, sizeof(path_),
            format_ == StorageFormat::GpsV1 ? "/gps-%016llx.csv" : "/telemetry-%016llx.csv",
            static_cast<unsigned long long>(session_));
@@ -551,6 +582,23 @@ void Storage::drop(RecordKind kind) {
 void Storage::droppedCamera(uint32_t count) {
   add(dropped_, count);
   add(kinds_[static_cast<unsigned>(RecordKind::Camera)].dropped, count);
+}
+void Storage::droppedCameraMarker(uint32_t count) {
+  add(dropped_, count);
+  add(kinds_[static_cast<unsigned>(RecordKind::CameraMarker)].dropped, count);
+}
+void Storage::rejectedCameraMarker(uint32_t count) {
+  add(rejected_, count);
+  add(kinds_[static_cast<unsigned>(RecordKind::CameraMarker)].rejected, count);
+}
+void Storage::reject(RecordKind kind) {
+  add(rejected_);
+  if (kind < RecordKind::Count)
+    add(kinds_[static_cast<unsigned>(kind)].rejected);
+}
+void Storage::droppedHealth(uint32_t count) {
+  add(dropped_, count);
+  add(kinds_[static_cast<unsigned>(RecordKind::CameraHealth)].dropped, count);
 }
 void Storage::rejectedCamera(uint32_t count) {
   add(rejected_, count);
@@ -601,6 +649,46 @@ bool Storage::enqueueCamera(const RecordTimestamp &t, const CameraEvidence &e, b
   record.camera = e;
   return publish(record, reserve);
 }
+BookmarkOutcome Storage::enqueueBookmark(const RecordTimestamp &t, const BookmarkEvidence &e) {
+  if (!bookmarkFormat(format_)) {
+    reject(RecordKind::Bookmark);
+    return BookmarkOutcome::DisabledFormat;
+  }
+  if (!valid_ || terminal_.load(std::memory_order_acquire) ||
+      stop_.load(std::memory_order_acquire)) {
+    drop(RecordKind::Bookmark);
+    return BookmarkOutcome::StorageUnavailable;
+  }
+  if (!validTimestamp(t) || !e.bookmark_id ||
+      (e.source != BookmarkSource::Serial && e.source != BookmarkSource::Physical) ||
+      (e.source == BookmarkSource::Serial && e.gesture != BookmarkGesture::Serial) ||
+      (e.source == BookmarkSource::Physical &&
+       (e.gesture < BookmarkGesture::Short || e.gesture > BookmarkGesture::Double)) ||
+      e.reserved[0] || e.reserved[1]) {
+    reject(RecordKind::Bookmark);
+    return BookmarkOutcome::InvalidTime;
+  }
+  Record record;
+  record.kind = RecordKind::Bookmark;
+  record.timestamp = t;
+  record.bookmark = e;
+  return publish(record, true) ? BookmarkOutcome::Admitted : BookmarkOutcome::Overflow;
+}
+bool Storage::enqueueCameraMarker(const RecordTimestamp &t, const CameraMarkerEvidence &e,
+                                  bool reserve) {
+  if (!valid_ || !bookmarkFormat(format_) || !validTimestamp(t) || e.session_id != session_ ||
+      !e.bookmark_id || e.peer_slot >= kMaxCameras || !e.peer_id ||
+      e.model == CameraModel::Unknown || e.kind > CameraMarkerKind::Cancelled ||
+      !markerEvidenceValid(e, t)) {
+    reject(RecordKind::CameraMarker);
+    return false;
+  }
+  Record record;
+  record.kind = RecordKind::CameraMarker;
+  record.timestamp = t;
+  record.camera_marker = e;
+  return publish(record, reserve);
+}
 KindHealth Storage::kindHealth(RecordKind kind) const {
   if (kind >= RecordKind::Count)
     return {};
@@ -628,8 +716,14 @@ StorageHealth Storage::health() const {
           stopped_.load()};
 }
 bool Storage::format(const Record &r) {
+  if (r.kind == RecordKind::Bookmark)
+    return formatBookmark(r);
+  if (r.kind == RecordKind::CameraMarker)
+    return formatCameraMarker(r);
   if (r.kind == RecordKind::Camera)
     return formatCamera(r);
+  if (r.kind == RecordKind::CameraHealth)
+    return formatHealth(r);
   if (r.kind != RecordKind::Gps)
     return formatImu(r);
   Csv c(buffer_, sizeof(buffer_));
@@ -645,6 +739,8 @@ bool Storage::format(const Record &r) {
   formatGpsFix(c, s);
   auto h = health();
   c.append(",%u,%u,%u,%u,%u,%u", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  if (bookmarkFormat(format_))
+    c.append(",,,");
   c.append("\n");
   length_ = c.size;
   offset_ = 0;
@@ -738,16 +834,26 @@ void Storage::serviceRows() {
 bool Storage::formatHeader() {
   Csv c(buffer_, sizeof(buffer_));
   c.append("%s\n#session,%llu,firmware,%s,provenance,%s\n#policy,queue_records,8,flush_"
-           "records,%u,idle_flush,1,chunk_bytes,256,mount_attempts,%u,write_retries,0\n%s",
+           "records,%u,idle_flush,1,chunk_bytes,256,mount_attempts,%u,write_retries,0\n",
            formatName(format_), (unsigned long long)session_, firmware_, provenance_,
-           flush_records_, max_mounts_, header);
+           flush_records_, max_mounts_);
+  if (bookmarkFormat(format_))
+    c.append("%.*s,bookmark_id,bookmark_source,bookmark_gesture\n",
+             static_cast<int>(strlen(header) - 1), header);
+  else
+    c.append("%s", header);
   if (format_ != StorageFormat::GpsV1)
     c.append(motionFormat(format_) ? "#imu_layout,4,see_docs/motion_logging.md\n"
                                    : "#imu_layout,2,see_docs/mixed_telemetry.md\n");
   if (format_ == StorageFormat::CameraV3 || motionFormat(format_))
     c.append("#camera_layout,3,see_docs/log_format.md\n");
-  if (format_ == StorageFormat::MotionV5)
+  if (format_ == StorageFormat::MotionV5 || format_ == StorageFormat::BookmarkV6 ||
+      format_ == StorageFormat::CameraHealthV7)
     c.append("#dynamic_layout,1,see_docs/dynamic_motion_estimator.md\n");
+  if (format_ == StorageFormat::CameraHealthV7)
+    c.append("#camera_health_layout,1,see_docs/log_format.md\n");
+  if (bookmarkFormat(format_))
+    c.append("#bookmark_layout,1,see_docs/log_format.md\n");
   length_ = c.size;
   offset_ = 0;
   return c.ok;
@@ -820,8 +926,11 @@ bool Storage::formatImu(const Record &r) {
   c.append(",%u,%u,%u,%u,%u,%u", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
   if (motionFormat(format_))
     formatMotion(c, r.motion);
-  if (format_ == StorageFormat::MotionV5)
+  if (format_ == StorageFormat::MotionV5 || format_ == StorageFormat::BookmarkV6 ||
+      format_ == StorageFormat::CameraHealthV7)
     formatDynamic(c, r.motion);
+  if (bookmarkFormat(format_))
+    c.append(",,,");
   c.append("\n");
   length_ = c.size;
   offset_ = 0;
@@ -845,7 +954,165 @@ bool Storage::formatCamera(const Record &r) {
     c.append("%u", e.event_receipt_age_ms);
   c.append(",0,,0,,");
   auto h = kindHealth(RecordKind::Camera);
-  c.append("%u,%u,%u,%u,%u,%u\n", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  c.append("%u,%u,%u,%u,%u,%u", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  if (bookmarkFormat(format_))
+    c.append(",,,");
+  c.append("\n");
+  length_ = c.size;
+  offset_ = 0;
+  return c.ok;
+}
+bool Storage::formatBookmark(const Record &r) {
+  Csv c(buffer_, sizeof(buffer_));
+  c.append("bookmark,");
+  formatTimestamp(c, r.timestamp);
+  for (unsigned i = 0; i < 17; ++i)
+    c.append(",");
+  auto h = kindHealth(RecordKind::Bookmark);
+  c.append(",%u,%u,%u,%u,%u,%u,%u,%u,%u\n", h.accepted, h.dropped, h.rejected, h.lost, h.written,
+           h.flushed, r.bookmark.bookmark_id, static_cast<unsigned>(r.bookmark.source),
+           static_cast<unsigned>(r.bookmark.gesture));
+  length_ = c.size;
+  offset_ = 0;
+  return c.ok;
+}
+bool Storage::formatCameraMarker(const Record &r) {
+  Csv c(buffer_, sizeof(buffer_));
+  const auto &e = r.camera_marker;
+  c.append("marker,");
+  formatTimestamp(c, r.timestamp);
+  c.append(",%u,%u,%u,%u,%u,%u,%u,%u,%u,owner_admission,%u,", e.bookmark_id, e.peer_slot, e.peer_id,
+           static_cast<unsigned>(e.model), e.connection_generation, e.operation_generation,
+           static_cast<unsigned>(e.kind), static_cast<unsigned>(e.error), e.delivery_admitted,
+           e.event_receipt_known);
+  if (e.event_receipt_known)
+    c.append("%llu", static_cast<unsigned long long>(e.event_receipt_ms));
+  c.append(",");
+  if (e.event_receipt_known)
+    c.append("%u", e.event_receipt_age_ms);
+  const auto h = kindHealth(RecordKind::CameraMarker);
+  c.append(",%u,%u,%u,%u,%u,%u\n", h.accepted, h.dropped, h.rejected, h.lost, h.written, h.flushed);
+  length_ = c.size;
+  offset_ = 0;
+  return c.ok;
+}
+} // namespace ridesync
+
+namespace ridesync {
+namespace {
+bool healthEnumsValid(const CameraHealthTransition &t) {
+  return static_cast<unsigned>(t.kind) <= 3 && static_cast<unsigned>(t.reason) < 8 &&
+         static_cast<unsigned>(t.severity) <= 3 && static_cast<unsigned>(t.capability) <= 2 &&
+         static_cast<unsigned>(t.validity) <= 2 && static_cast<unsigned>(t.profile) <= 3 &&
+         static_cast<unsigned>(t.unit) <= 5 && static_cast<unsigned>(t.field) < 5;
+}
+bool healthValueValid(const CameraHealthTransition &t) {
+  if (t.unit == HealthUnit::None || !t.historical)
+    return t.value == 0;
+  if (t.unit == HealthUnit::Percent)
+    return t.value <= 100;
+  if (t.unit == HealthUnit::RecordingState)
+    return t.value <= 2 && (t.validity != HealthValidity::Valid || t.value >= 1);
+  if (t.unit == HealthUnit::Boolean)
+    return t.value <= 1;
+  return true;
+}
+bool healthReasonUnitValid(const CameraHealthTransition &t) {
+  const HealthField expected = t.reason == HealthReason::BatteryLow ? HealthField::BatteryPercent
+                               : t.reason == HealthReason::StorageLow
+                                   ? HealthField::RemainingVideoSeconds
+                               : t.reason == HealthReason::Overheating ? HealthField::Overheating
+                                                                       : HealthField::Recording;
+  if (t.reason != HealthReason::ResourceUnavailable && t.field != expected)
+    return false;
+  const HealthUnit units[] = {HealthUnit::RecordingState, HealthUnit::Percent, HealthUnit::Seconds,
+                              HealthUnit::Kilobytes, HealthUnit::Boolean};
+  if (t.unit != HealthUnit::None && t.unit != units[static_cast<unsigned>(t.field)])
+    return false;
+  if (t.unit == HealthUnit::None)
+    return t.validity != HealthValidity::Valid;
+  switch (t.reason) {
+  case HealthReason::BatteryLow:
+    return t.unit == HealthUnit::Percent;
+  case HealthReason::StorageLow:
+    return t.unit == HealthUnit::Seconds;
+  case HealthReason::Overheating:
+    return t.unit == HealthUnit::Boolean;
+  case HealthReason::ResourceUnavailable:
+    return true;
+  default:
+    return t.unit == HealthUnit::RecordingState;
+  }
+}
+bool healthProfileValid(const CameraHealthEvidence &e) {
+  if (e.transition.profile == HealthProfile::None)
+    return true;
+  const auto expected = e.model == CameraModel::X5             ? HealthProfile::X5Ce80
+                        : e.model == CameraModel::HERO12_BLACK ? HealthProfile::Hero12V1
+                        : e.model >= CameraModel::DJI_ACTION4  ? HealthProfile::DjiStatus
+                                                               : HealthProfile::None;
+  return e.transition.profile == expected;
+}
+bool healthEvidenceValid(const CameraHealthEvidence &e, const RecordTimestamp &timestamp) {
+  const auto &t = e.transition;
+  const bool cleared =
+      t.kind == HealthTransitionKind::Recovered || t.kind == HealthTransitionKind::Retired;
+  return t.peer < kMaxCameras && e.peer_id && e.model != CameraModel::Unknown &&
+         static_cast<unsigned>(e.model) <= static_cast<unsigned>(CameraModel::DJI_OSMO360) &&
+         t.sequence && healthProfileValid(e) && healthEnumsValid(t) && healthValueValid(t) &&
+         healthReasonUnitValid(t) && (cleared == (t.severity == HealthSeverity::None)) &&
+         (t.validity != HealthValidity::Valid ||
+          (t.capability == CapabilityState::Supported && t.profile != HealthProfile::None &&
+           t.historical)) &&
+         (e.sample_receipt_known ? (t.historical && t.age_ms < 0x80000000u &&
+                                    e.sample_receipt_ms <= timestamp.monotonic_ms &&
+                                    timestamp.monotonic_ms - e.sample_receipt_ms == t.age_ms)
+                                 : (!e.sample_receipt_ms && !t.age_ms));
+}
+} // namespace
+bool Storage::enqueueHealth(const RecordTimestamp &timestamp, const CameraHealthEvidence &e,
+                            bool reserve) {
+  if (!valid_ || format_ != StorageFormat::CameraHealthV7 || !validTimestamp(timestamp) ||
+      !healthEvidenceValid(e, timestamp)) {
+    add(rejected_);
+    add(kinds_[static_cast<unsigned>(RecordKind::CameraHealth)].rejected);
+    return false;
+  }
+  Record record;
+  record.kind = RecordKind::CameraHealth;
+  record.timestamp = timestamp;
+  // Fixed placement construction starts the union member's lifetime, no heap.
+  new (&record.camera_health) CameraHealthEvidence(e);
+  return publish(record, reserve);
+}
+bool Storage::formatHealth(const Record &record) {
+  Csv c(buffer_, sizeof(buffer_));
+  const auto &e = record.camera_health;
+  const auto &t = e.transition;
+  c.append("camera_health,");
+  formatTimestamp(c, record.timestamp);
+  c.append(",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,", t.peer, e.peer_id,
+           static_cast<unsigned>(e.model), t.group_generation, t.intent_id, t.connection,
+           t.operation, t.episode, t.sequence, static_cast<unsigned>(t.kind),
+           static_cast<unsigned>(t.reason), static_cast<unsigned>(t.severity),
+           static_cast<unsigned>(t.capability), static_cast<unsigned>(t.validity),
+           static_cast<unsigned>(t.profile));
+  c.append("%u,%u,", static_cast<unsigned>(t.field), t.historical);
+  if (t.unit != HealthUnit::None && t.historical)
+    c.append("%llu", (unsigned long long)t.value);
+  c.append(",%u,%u,%u,owner_admission,%u,", static_cast<unsigned>(t.unit), t.threshold_enter,
+           t.threshold_clear, e.sample_receipt_known);
+  if (e.sample_receipt_known)
+    c.append("%llu", (unsigned long long)e.sample_receipt_ms);
+  c.append(",");
+  if (e.sample_receipt_known)
+    c.append("%u", t.age_ms);
+  const auto h = kindHealth(RecordKind::CameraHealth);
+  c.append(",0,,0,,%u,%u,%u,", e.transition_dropped, e.transition_coalesced,
+           e.transition_dropped != 0 || e.transition_coalesced != 0 || h.dropped != 0 ||
+               h.rejected != 0 || h.lost != 0);
+  c.append("%u,%u,%u,%u,%u,%u,,,\n", h.accepted, h.dropped, h.rejected, h.lost, h.written,
+           h.flushed);
   length_ = c.size;
   offset_ = 0;
   return c.ok;

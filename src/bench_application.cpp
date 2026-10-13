@@ -144,6 +144,7 @@ bool validateBenchPowerPins(const BenchBusPins &p, const PowerBackendConfig &c) 
 }
 } // namespace ridesync
 #if defined(ARDUINO_ARCH_ESP32) && defined(RIDESYNC_BENCH_APPLICATION)
+#include "bench_console.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -383,6 +384,8 @@ ApplicationWorkers *commissionedApplication() {
 #else
   return nullptr;
 #endif
+  if (config.telemetry.runtime.health_enabled && !config.telemetry.runtime.health_sink)
+    config.telemetry.runtime.health_sink = benchHealthSink();
   if (config.telemetry.runtime.dynamic_motion.enabled &&
       !config.telemetry.runtime.dynamic_reference) {
     stationary_reference.configure(config.telemetry.runtime.motion_config);

@@ -115,4 +115,43 @@ void CameraEventLogger::wireAck(size_t peer, Operation op, Token token, uint32_t
   e.ack_action = action;
   publish(e);
 }
+void CameraEventLogger::markerEvent(const CameraMarkerEvent &event) {
+  if (!event.key.session_id || event.key.session_id != session_id_ || !event.key.bookmark_id ||
+      event.peer >= identities_.size() || !identities_[event.peer].id ||
+      identities_[event.peer].model == CameraModel::Unknown)
+    return;
+  CameraMarkerEvidence evidence;
+  evidence.session_id = event.key.session_id;
+  evidence.bookmark_id = event.key.bookmark_id;
+  evidence.peer_slot = event.peer;
+  evidence.peer_id = identities_[event.peer].id;
+  evidence.model = identities_[event.peer].model;
+  evidence.connection_generation = event.connection_generation;
+  evidence.operation_generation = event.operation_generation;
+  switch (event.phase) {
+  case CameraMarkerPhase::RequestRefused:
+    evidence.kind = CameraMarkerKind::RequestRefused;
+    break;
+  case CameraMarkerPhase::Attempt:
+    evidence.kind = CameraMarkerKind::Attempt;
+    break;
+  case CameraMarkerPhase::WireAck:
+    evidence.kind = CameraMarkerKind::WireAck;
+    break;
+  case CameraMarkerPhase::Failed:
+    evidence.kind = CameraMarkerKind::Failed;
+    break;
+  case CameraMarkerPhase::Cancelled:
+    evidence.kind = CameraMarkerKind::Cancelled;
+    break;
+  default:
+    return;
+  }
+  evidence.error = static_cast<CameraError>(event.error);
+  evidence.delivery_admitted = event.delivery_admitted;
+  evidence.event_receipt_known = true;
+  evidence.event_receipt_raw32 = raw_.now();
+  sealed_ = true;
+  inbox_.publishMarker(evidence);
+}
 } // namespace ridesync

@@ -31,6 +31,9 @@ private:
   bool invalid_ = false, pending_ = false, cr_ = false;
 };
 #if defined(ARDUINO_ARCH_ESP32) && defined(RIDESYNC_BENCH_APPLICATION)
+class CameraHealthTransitionSink;
+CameraHealthTransitionSink *benchHealthSink();
+uint32_t benchHealthSerialDropped();
 void benchConsoleService();
 bool benchConsoleTakeClear();
 #endif

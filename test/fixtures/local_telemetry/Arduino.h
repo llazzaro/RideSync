@@ -51,6 +51,8 @@ struct HardwareSerial {
 };
 
 struct SerialPort {
+  int availableForWrite() { return 256; }
+  size_t write(const uint8_t *, size_t n) { return n; }
   void begin(unsigned) {}
   void println(const char *) {}
   template <typename... T> void printf(const char *, T...) {}

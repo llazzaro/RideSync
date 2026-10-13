@@ -18,8 +18,8 @@ SOURCE = r'''
 using namespace ridesync;
 static_assert(Storage::kCapacity==8 && Storage::kMaxRowBytes==3072 && Storage::kChunkBytes==256,
               "storage resource contract changed");
-static_assert(sizeof(MotionEvidence)<=248 && sizeof(TelemetryRecord)<=792,
-              "paired payload bound changed");
+static_assert(sizeof(MotionEvidence)<=248 && sizeof(TelemetryRecord)<=824,
+              "reviewed augmented telemetry payload bound changed");
 struct C : Clock { uint32_t now() const override { return 0; } };
 struct S : StorageSink {
  std::string bytes;

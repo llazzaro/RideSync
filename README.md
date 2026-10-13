@@ -260,10 +260,10 @@ button-to-camera wiring remain open.
 
 ## Implementation plan
 
-The [camera health alert investigation](docs/camera_health_alerts.md) recommends
-unexpected-stop/stale-evidence alerts and qualified HERO12 resource status, with
-a finite future implementation plan. Alerts are not implemented or physically
-qualified by that investigation.
+[Experimental camera health alerts](docs/camera_health_runtime.md) provide opt-in
+unexpected-stop/stale-evidence alerts and qualified HERO12 resource status through
+coherent serial/LED output and versioned logs. The [investigation](docs/camera_health_alerts.md)
+retains protocol evidence and limitations; physical qualification remains pending.
 
 The [implementation plan](docs/superpowers/plans/2026-10-07-ridesync.md)
 contains 39 focused work packages plus maintenance fixes, dependencies and

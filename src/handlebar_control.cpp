@@ -159,6 +159,8 @@ void HandlebarControl::observe(const LocalTelemetryStatus &s) {
   status_.group = group_.status();
   status_.health = {};
   status_.health.safe_mode = s.safe_mode;
+  status_.health.camera_critical = s.camera_health.enabled && s.camera_health.critical;
+  status_.health.camera_warning = s.camera_health.enabled && s.camera_health.warning;
   status_.health.required_worker_stall = s.worker_stalls != 0;
   status_.health.application_fault = s.supervision_fault || s.worker_refused ||
                                      s.fault != TelemetryFault::None || status_.led_error != 0 ||

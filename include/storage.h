@@ -49,6 +49,15 @@ public:
                   bool reserve = false, const MotionEvidence &motion = MotionEvidence{});
   bool enqueueCamera(const RecordTimestamp &timestamp, const CameraEvidence &evidence,
                      bool reserve = true);
+  BookmarkOutcome enqueueBookmark(const RecordTimestamp &timestamp,
+                                  const BookmarkEvidence &evidence);
+  bool enqueueCameraMarker(const RecordTimestamp &timestamp, const CameraMarkerEvidence &evidence,
+                           bool reserve = true);
+  bool bookmarksEnabled() const { return valid_ && bookmarkFormatSelected(); }
+  bool bookmarkFormatSelected() const {
+    return format_ == StorageFormat::BookmarkV6 || format_ == StorageFormat::CameraHealthV7;
+  }
+  bool enqueueHealth(const RecordTimestamp &, const CameraHealthEvidence &, bool reserve = true);
   KindHealth kindHealth(RecordKind kind) const;
   void requestStop();
   // ONE operation/chunk per step; sink latency is unbounded. Never call on control task.
@@ -60,6 +69,10 @@ private:
   void drop(RecordKind kind);
   void droppedCamera(uint32_t count);
   void rejectedCamera(uint32_t count);
+  void droppedHealth(uint32_t count);
+  void droppedCameraMarker(uint32_t count);
+  void rejectedCameraMarker(uint32_t count);
+  void reject(RecordKind kind);
   using Record = TelemetryRecord;
   const StorageFormat format_;
   struct Counters {
@@ -72,6 +85,9 @@ private:
   bool validTimestamp(const RecordTimestamp &timestamp) const;
   bool formatImu(const Record &record);
   bool formatCamera(const Record &record);
+  bool formatHealth(const Record &record);
+  bool formatBookmark(const Record &record);
+  bool formatCameraMarker(const Record &record);
   StorageSink &sink_;
   const uint64_t session_;
   const uint8_t max_mounts_, flush_records_;

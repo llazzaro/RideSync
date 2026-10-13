@@ -1,5 +1,6 @@
 #pragma once
 #include "camera_manager.h"
+#include "camera_marker.h"
 namespace ridesync {
 class RecordingManager;
 // Serialized owner delivery; callbacks never touch evaluator or storage.
@@ -62,6 +63,9 @@ public:
   virtual void detachHealthSink(const CameraHealthSampleSink *) {}
   virtual uint32_t healthCoalesced() const { return 0; }
   virtual uint32_t healthFailures() const { return 0; }
+  virtual bool attachMarkerAudit(CameraMarkerAudit &) { return false; }
+  virtual void detachMarkerAudit(const CameraMarkerAudit *) {}
+  virtual CameraError requestHilight(uint8_t, CameraMarkerKey) { return CameraError::Unsupported; }
   virtual void attachGroup(RecordingManager &) = 0;
   virtual void detachGroup(const RecordingManager *) = 0;
   virtual void service(CameraServiceAction *action = nullptr) = 0;

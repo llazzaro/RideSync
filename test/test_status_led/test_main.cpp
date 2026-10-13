@@ -24,6 +24,23 @@ void ready_and_recording_require_observation() {
   s.peers[0].observed = RecordingState::Unknown;
   TEST_ASSERT_EQUAL((int)LedState::Partial, (int)selectLedState(&s, lifecycle));
 }
+void camera_alert_priority_preserves_recovery_and_blocks_ready() {
+  RecordingStatus group;
+  group.enabled = group.ready = group.stopped = 1;
+  group.peers[0].enabled = group.peers[0].ready = true;
+  group.peers[0].observed = RecordingState::Stopped;
+  std::array<Lifecycle, kMaxCameras> lifecycle{};
+  lifecycle[0] = Lifecycle::Ready;
+  LedHealth health;
+  health.camera_warning = true;
+  TEST_ASSERT_EQUAL_INT(LedState::Partial, selectLedState(&group, lifecycle, health));
+  health.adapter_recovery = true;
+  TEST_ASSERT_EQUAL_INT(LedState::Recovery, selectLedState(&group, lifecycle, health));
+  health.camera_critical = true;
+  TEST_ASSERT_EQUAL_INT(LedState::Error, selectLedState(&group, lifecycle, health));
+  health.camera_critical = health.camera_warning = health.adapter_recovery = false;
+  TEST_ASSERT_EQUAL_INT(LedState::Ready, selectLedState(&group, lifecycle, health));
+}
 void recording_half_open_edges() {
   Sink sink;
   StatusLed led(sink);
@@ -528,6 +545,7 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(ready_and_recording_require_observation);
   RUN_TEST(recording_half_open_edges);
+  RUN_TEST(camera_alert_priority_preserves_recovery_and_blocks_ready);
   RUN_TEST(sink_failure_cannot_hide_behind_cached_frame);
   RUN_TEST(all_pattern_edges_and_rollover);
   RUN_TEST(phase_transitions_generation_and_gaps);

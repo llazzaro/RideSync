@@ -43,8 +43,10 @@ LedState selectLedState(const RecordingStatus *group,
                         const std::array<Lifecycle, kMaxCameras> &lifecycle,
                         const LedHealth &health) {
   LedConditions conditions;
-  conditions.error = health.application_fault || health.safe_mode || health.required_worker_stall;
+  conditions.error = health.application_fault || health.safe_mode || health.required_worker_stall ||
+                     health.camera_critical;
   conditions.recovery = health.adapter_recovery;
+  conditions.partial = health.camera_warning;
   observeDevices(health, conditions);
   observePeers(group, lifecycle, conditions);
   if (conditions.error)

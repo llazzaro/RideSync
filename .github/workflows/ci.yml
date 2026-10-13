@@ -78,6 +78,8 @@ jobs:
         run: pio run -e x5_adapter_compile -e x5_serial_milestone -e x5_store_inspect -e x5_wake_milestone
       - name: Build composed experimental bench application (no private commissioning)
         run: pio run -e bench_application -e bench_application_private_compile
+      - name: Audit fixed camera health RAM and owner scratch budget
+        run: python scripts/probe_camera_health_resources.py --target-only --stack-dir .pio/build/bench_application
       - name: Parked setup Wi-Fi feasibility policy checks
         run: python tools/bench/setup_wifi/test_controller.py -v
       - name: Build parked USB setup and declined private provider (no hardware activation)

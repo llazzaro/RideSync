@@ -1,4 +1,5 @@
 #pragma once
+#include "camera_health.h"
 #include "camera_manager.h"
 #include "dynamic_motion_estimator.h"
 #include "modem_gnss.h"
@@ -6,8 +7,51 @@
 #include <cstdint>
 #include <type_traits>
 namespace ridesync {
-enum class RecordKind : uint8_t { Gps, ImuSample, ImuConfig, ImuHealth, ImuControl, Camera, Count };
-enum class StorageFormat : uint8_t { GpsV1, MixedV2, CameraV3, MotionV4, MotionV5 };
+enum class RecordKind : uint8_t {
+  Gps,
+  ImuSample,
+  ImuConfig,
+  ImuHealth,
+  ImuControl,
+  Camera,
+  Bookmark,
+  CameraMarker,
+  CameraHealth,
+  Count
+};
+enum class StorageFormat : uint8_t {
+  GpsV1,
+  MixedV2,
+  CameraV3,
+  MotionV4,
+  MotionV5,
+  BookmarkV6,
+  CameraHealthV7
+};
+enum class BookmarkSource : uint8_t { Serial = 1, Physical = 2 };
+enum class BookmarkGesture : uint8_t { Serial = 0, Short = 1, Long = 2, Double = 3 };
+enum class BookmarkOutcome : uint8_t {
+  Admitted,
+  Inactive,
+  DisabledFormat,
+  InvalidTime,
+  Exhausted,
+  Overflow,
+  StorageUnavailable,
+  InvalidInput
+};
+struct BookmarkEvidence {
+  uint32_t bookmark_id = 0;
+  BookmarkSource source = BookmarkSource::Serial;
+  BookmarkGesture gesture = BookmarkGesture::Serial;
+  uint8_t reserved[2]{};
+};
+struct BookmarkReceipt {
+  BookmarkOutcome outcome = BookmarkOutcome::Inactive;
+  uint64_t session_id = 0;
+  uint32_t bookmark_id = 0;
+  RecordTimestamp timestamp;
+};
 enum class Qualification : uint8_t { Unknown, Unqualified, Qualified };
 // IDs are caller assigned opaque uint32 values; zero = unknown. This schema
 // does not establish identity uniqueness, a mount transform, or calibration.
@@ -90,6 +134,31 @@ struct CameraEvidence {
   CameraAckAction ack_action = CameraAckAction::None;
   bool delivery_admitted = false;
 };
+enum class CameraMarkerKind : uint8_t { RequestRefused, Attempt, WireAck, Failed, Cancelled };
+struct CameraMarkerEvidence {
+  uint64_t session_id = 0;
+  uint32_t bookmark_id = 0;
+  uint32_t event_receipt_raw32 = 0;
+  uint64_t event_receipt_ms = 0;
+  uint32_t event_receipt_age_ms = 0;
+  bool event_receipt_known = false;
+  uint8_t peer_slot = 0;
+  uint32_t peer_id = 0, connection_generation = 0, operation_generation = 0;
+  CameraModel model = CameraModel::Unknown;
+  CameraMarkerKind kind = CameraMarkerKind::RequestRefused;
+  CameraError error = CameraError::None;
+  bool delivery_admitted = false;
+};
+// Session/owner-admission time is the envelope timestamp. Historical values keep
+// their validity; sample receipt is host owner receipt, never acquisition/radio.
+struct CameraHealthEvidence {
+  CameraHealthTransition transition;
+  uint64_t sample_receipt_ms = 0;
+  uint32_t peer_id = 0, transition_dropped = 0, transition_coalesced = 0;
+  CameraModel model = CameraModel::Unknown;
+  bool sample_receipt_known = false;
+};
+static_assert(sizeof(CameraHealthEvidence) <= 96, "Health serialization evidence budget");
 struct MotionEvidence {
   MotionAdmission state = MotionAdmission::Disabled;
   MotionEstimatorConfig config;
@@ -104,14 +173,20 @@ struct TelemetryRecord {
   RecordKind kind = RecordKind::Gps;
   RecordTimestamp timestamp;
   ModemSnapshot gps;
-  ImuEvidence imu;
+  union {
+    ImuEvidence imu;
+    CameraHealthEvidence camera_health;
+  };
   CameraEvidence camera;
+  BookmarkEvidence bookmark;
+  CameraMarkerEvidence camera_marker;
   MotionEvidence motion;
+  TelemetryRecord() : imu{} {}
 };
 static_assert(std::is_trivially_copyable<TelemetryRecord>::value,
               "Telemetry records must own copied fixed data");
-static_assert(sizeof(ImuEvidence) <= 240 && sizeof(MotionEvidence) <= 248 &&
-                  sizeof(TelemetryRecord) <= 792,
+static_assert(sizeof(BookmarkEvidence) <= 16 && sizeof(ImuEvidence) <= 240 &&
+                  sizeof(MotionEvidence) <= 248 && sizeof(TelemetryRecord) <= 888,
               "Review telemetry RAM bounds when changing the envelope");
 struct KindHealth {
   uint32_t accepted, dropped, rejected, written, flushed, lost;

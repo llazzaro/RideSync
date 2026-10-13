@@ -469,3 +469,166 @@ row appends 36 motion fields to the existing 88-field prefix. Invalid numerics
 are blank and dynamic result flags remain zero. Current runtime validity expires
 independently of immutable historical log records. CameraV3 remains the default
 when motion is not requested.
+
+## BookmarkV6 local marker extension
+
+`LocalTelemetryConfig::bookmark_enabled` is false by default. When true, the
+same owner/session selects `StorageFormat::BookmarkV6` and writes
+`#ridesync_telemetry,6` plus `#bookmark_layout,1,see_docs/log_format.md`.
+`native_bookmark_enabled` also defaults false and requires bookmark opt-in.
+When health and bookmarks are both enabled, the owner selects CameraHealthV7,
+which includes the V6 bookmark and marker layouts. Native opt-in without local
+bookmark opt-in refuses activation.
+It retains MotionV5 GPS, IMU, camera, motion and dynamic field meanings. V1–V5
+files keep their exact prior bytes and do not accept bookmark records. The
+camera-health extension uses version 7 and does not change BookmarkV6.
+
+The fixed in-memory `BookmarkEvidence` contains `uint32 bookmark_id`, `uint8
+source`, `uint8 gesture` and two zero reserved bytes (8 bytes including padding).
+Only named decimal values are serialized. Source 1 means serial, 2 physical;
+gesture 0 means serial, 1 short, 2 long, 3 double. The allowed pairs are `(1,0)`
+and `(2,1|2|3)`. There is no label, path, camera timestamp, or variable-length
+payload. The durable key is `(session_id, bookmark_id)`; IDs start at 1 in each
+unique session and are consumed for valid owner attempts even when admission
+fails. A gap is useful evidence but is not a complete loss ledger.
+
+The V6 GPS header appends `bookmark_id,bookmark_source,bookmark_gesture` after
+`flushed`. V6 GPS, IMU and camera rows append three empty fields after their
+existing V5 layout. A `bookmark` row has exactly 39 CSV fields in this order:
+`kind`, the 12 common timestamp fields, 17 empty GPS payload fields,
+`accepted,dropped,rejected,lost,written,flushed`, then
+`bookmark_id,bookmark_source,bookmark_gesture`. The six health values are
+Bookmark-kind observations at serialization time. The timestamp is the full
+owner snapshot copied before storage admission; missing or expired UTC leaves
+`utc_estimate_ms` blank and does not block a valid monotonic bookmark. It is not
+a camera, frame, button-edge or SD-write time. Marker rows are valid before REC
+or after camera STOP while the local session remains Running.
+
+`LocalTelemetryRuntime::bookmark(source,gesture,expected_session_id=0)` is the
+serialized owner entry point. It returns `BookmarkReceipt { outcome,
+session_id, bookmark_id, timestamp }` for admission and refusal. Outcomes are
+`Admitted`, `Inactive`, `DisabledFormat`, `InvalidTime`, `Exhausted`, `Overflow`,
+`StorageUnavailable`, `InvalidInput`. Explicit expected-session mismatch,
+inactive owner, invalid source/gesture and disabled format allocate no ID;
+valid attempts consume one even if the reserve threshold or storage refuses.
+`Admitted` means a copy entered the existing eight-slot RAM queue, not a sink
+write or durability acknowledgment. Bookmark publication uses `reserve=true`:
+occupancy 5 admits, occupancy 6 refuses and leaves two GPS-protected slots.
+The worker's normal flush, stop and loss accounting remain authoritative.
+No camera inbox, GNSS fix, UTC, heap allocation, retry or replay is involved.
+
+Host C++11 measurements from the synthetic V6 admission/serialization fixture
+are `sizeof(BookmarkEvidence)=8`, `sizeof(TelemetryRecord)=824`,
+`sizeof(Storage)=10096`, `sizeof(TelemetryAdmission)=656` and
+`sizeof(CameraInbox)=2336` bytes. Eight by-value storage slots account for
+6,592 bytes of `Storage`; the new 824-byte envelope is 32 bytes above the
+previous reviewed 792-byte cap, or 256 bytes across the queue. The longest
+record emitted by that fixture is 657 bytes (an IMU row with maximum-width
+numeric configuration fields); its bookmark rows are shorter. The formatter's
+reviewed maximum remains 3,072 bytes and rejects overflow. These host sizes
+depend on target ABI; pinned firmware builds are checked separately.
+
+Optional native audit uses the same V6 file but a distinct `marker` row. It has
+32 fields: `kind`, the 12 common timestamp fields, then
+`bookmark_id,peer_slot,peer_id,model,connection_generation,operation_generation,event_kind,error,delivery_admitted,time_domain,event_receipt_known,event_receipt_ms,event_receipt_age_ms,accepted,dropped,rejected,lost,written,flushed`.
+`time_domain` is `owner_admission`. `event_kind` is 0 RequestRefused, 1 Attempt,
+2 WireAck, 3 Failed, 4 Cancelled. A WireAck means a matching native command
+response, not saved-clip confirmation. These rows use `RecordKind::CameraMarker`
+and the existing 16-slot camera inbox, with their own per-kind health counters.
+They are absent when optional native dispatch is disabled.
+
+## CameraHealthV7 correlated transitions
+
+Health is opt-in and selects `StorageFormat::CameraHealthV7`,
+`#ridesync_telemetry,7` and `#camera_health_layout,1,see_docs/log_format.md`.
+Version 6 is occupied by bookmarks. V7 also declares the V6 bookmark, V3 camera,
+V4 IMU/motion and V1 dynamic layouts: enabling health retains bookmark/marker,
+GPS, camera and motion data. Existing formats 1–6 retain their own schemas.
+The health record kind is `camera_health`, distinct from IMU `health` or camera
+ACK/recording rows. Non-bookmark rows carry three empty bookmark suffix fields;
+marker rows retain their documented 32-field layout.
+
+The health row contains `kind`, the 12 common timestamp fields, followed by:
+
+```
+peer_slot,peer_id,model,group_generation,intent_id,connection_generation,operation_generation,
+episode,transition_sequence,transition_kind,reason,severity,capability,validity,profile,field,
+historical,value,unit,threshold_enter,threshold_clear,time_domain,sample_receipt_known,
+sample_receipt_ms,sample_age_ms,radio_receipt_known,radio_receipt_ms,acquisition_known,acquisition_ms,
+transition_dropped,transition_coalesced,history_incomplete,accepted,dropped,rejected,lost,written,flushed,
+bookmark_id,bookmark_source,bookmark_gesture
+```
+
+The final three fields are empty. Peer slots are 0–7; peer IDs are provisioned
+opaque nonzero uint32 values, never a MAC, name or serial. Model codes retain
+V3 meanings. Group/intent/connection/operation/episode zero means explicitly
+absent. `(session_id, transition_sequence)` orders emitted history; peer,
+episode and intent correlate an alert through severity changes, recovery and
+retirement. Sequence starts at one and is uint32. Transition kinds 0–3 are
+Enter, SeverityChanged, Recovered, Retired. Retirement ends an episode; it does
+not prove healthy recovery. Cleared/retired transitions use severity None.
+
+Reason codes 0–7 are UnexpectedStop, RecordingUnconfirmed, RecordingEvidenceLost,
+BatteryLow, StorageLow, Overheating, MonitoringUnavailable, ResourceUnavailable.
+Severity 0–3 is None, Status, Warning, Critical. Capability 0–2 is Unknown,
+Unsupported, Supported; validity 0–2 is Unknown, Valid, Unavailable. These are
+independent: a transient unavailable field never becomes Unsupported. Profile
+0–3 is None, X5 CE80, DJI status, HERO12 v1. Field 0–4 is Recording, battery
+percentage, remaining video seconds, SD remaining kilobytes, overheating. Unit
+0–5 is None, RecordingState, Percent, Seconds, Kilobytes, Boolean; known units
+must match the field. Unknown units or `historical=0` leave `value` blank;
+`historical=1` retains the last measured value even when validity is no longer
+Valid. Numeric zero is consequently distinguishable from no measured value.
+ResourceUnavailable carries the deterministic first unavailable qualified field;
+other peer reasons and missing fields remain available in the current snapshot.
+
+Thresholds are the evaluator's declared enter/clear boundaries, in the named
+unit; they are not a camera firmware guarantee. The transition contains the
+qualified profile and field metadata used for that decision. No notification
+body or acquisition timestamp is inferred. `monotonic_ms` is owner admission
+and `time_domain=owner_admission`. `sample_receipt_ms` is the evaluator's validated
+owner receipt translated from its raw modulo-32-bit host clock, and
+`sample_age_ms` includes delay until admission. A historical sample at raw zero
+is valid evidence. Translation requires a valid session clock, age below 2^31
+ms, and age within this session's elapsed time. Otherwise receipt fields are
+blank with `sample_receipt_known=0`; the historical value remains labelled by
+its validity. Service gaps of 2^31 ms or longer are outside this clock contract.
+Radio receipt and acquisition flags stay zero and their times blank.
+
+`CameraHealthLogger` drains the evaluator's **single** eight-entry transition ring,
+at most two transitions per owner pass. It allocates no additional inbox, task
+or heap. The IMU/camera admission quota and GPS admission remain independent.
+Health storage admission reserves the same two GPS slots as camera admission.
+`transition_dropped` counts lost evaluator transitions. `transition_coalesced`
+counts actual coalesced receive edges, separate from benign unchanged-alert repeats;
+the six final health counters are CameraHealth-kind Storage observations at
+serialization. `history_incomplete=1` when transition loss, receive-edge coalescing, Storage drop,
+rejection or terminal unflushed loss is known. Unchanged alerts coalesce while
+current evaluator state remains authoritative even when history is lost. A card
+failure can prevent its own final loss row from being written; runtime counters
+remain authoritative and accepted is not a durability acknowledgment.
+
+Construct the logger with the evaluator, TelemetryAdmission and an optional
+`CameraHealthTransitionSink`; configure opaque peer identities before its first
+drain. The sink receives every drained transition once even if Storage refuses
+it. Both sink and logger run only in the serialized owner; the sink must finish
+bounded work and retain no references. `TelemetryAdmission::requestStop()` asks
+the logger to stop, but closure waits for `CameraHealthLogger::finish()` **after**
+the evaluator's final retirement/publication and for its ring to drain, alongside
+the existing camera/IMU final-publication barriers. Keep all sources, sink,
+SessionClock and Storage alive until finish/flush/close completes. No later
+health publication is permitted after finish. Version mismatch or malformed
+identity, profile, value, field/unit, time or transition severity is rejected.
+
+Synthetic host verification: `python3 -m unittest discover -s test -p
+ test_camera_health_disk.py` exercises independent expected schema fixtures,
+real serializer/parser roundtrip, malformed/partial/version rejection, resource
+floods, quota/GPS progress, Storage pressure/failure and finish barriers with
+AddressSanitizer/UndefinedBehaviorSanitizer. Compiling the committed V1–V5
+serializer and current serializer against the same independent producer checks
+byte equality. Host sizes are evaluator 2336 bytes, logger 96, serialization
+evidence 96; evidence overlays the existing IMU envelope and adds no Storage
+queue bytes. The logger source pointer/counter expansion still counts toward the
+global 4096-byte health increment; target map/stack verification belongs to final
+integration. These are **Synthetic** results, not physical SD/camera/rider alert
+qualification. Health support remains Experimental / Not tested physically.

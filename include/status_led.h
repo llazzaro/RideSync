@@ -12,6 +12,7 @@ struct LedDeviceHealth {
 struct LedHealth {
   bool application_fault = false, safe_mode = false, required_worker_stall = false;
   bool adapter_recovery = false;
+  bool camera_critical = false, camera_warning = false;
   std::array<LedDeviceHealth, 4> devices{};
 };
 // Owner copies status/lifecycle in the same serialized context as manager service.
