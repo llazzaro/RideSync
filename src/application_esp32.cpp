@@ -3,6 +3,7 @@
 #include "ble_esp32.h"
 #include "nvs_boot_guard.h"
 #include "pairing_proof_esp32.h"
+#include <esp_system.h>
 #include <new>
 #if defined(RIDESYNC_MIXED_COMPOSITION)
 #include <cstdlib>
@@ -52,7 +53,8 @@ DeviceHealth modemHealth(const ModemSnapshot &gps) {
 SupervisedEsp32Application::SupervisedEsp32Application(
     HardwareSerial &u, SPIClass &s, TwoWire &w, const QualifiedLocalTelemetry &q,
     const QualifiedHandlebar &h, const std::array<Hero12Qualification, kMaxCameras> &c,
-    StaticMotionReferenceSource *source)
+    StaticMotionReferenceSource *source, const PowerShutdownConfig &power,
+    PowerEventBackend *backend)
     : SupervisedEsp32Application(
           u, s, w, q, h,
           [&c] {
@@ -60,14 +62,100 @@ SupervisedEsp32Application::SupervisedEsp32Application(
             m.hero12 = c;
             return m;
           }(),
-          source) {}
+          source, power, backend) {}
 SupervisedEsp32Application::SupervisedEsp32Application(HardwareSerial &u, SPIClass &s, TwoWire &w,
                                                        const QualifiedLocalTelemetry &q,
                                                        const QualifiedHandlebar &h,
                                                        const MixedCameraQualifications &c,
-                                                       StaticMotionReferenceSource *source)
-    : uart_(u), spi_(s), wire_(w), qualification_(q), handlebar_(h), cameras_(c),
-      cameras_runtime_(mixedCameraRuntime()), motion_source_(source) {}
+                                                       StaticMotionReferenceSource *source,
+                                                       const PowerShutdownConfig &power,
+                                                       PowerEventBackend *backend)
+    : power_config_(power), power_policy_(power), power_backend_(backend),
+      power_reset_reason_(static_cast<int32_t>(esp_reset_reason())), uart_(u), spi_(s), wire_(w),
+      qualification_(q), handlebar_(h), cameras_(c), cameras_runtime_(mixedCameraRuntime()),
+      motion_source_(source) {}
+ApplicationPowerStatus SupervisedEsp32Application::powerStatus() const {
+  ApplicationPowerStatus result;
+  result.policy = power_policy_.status(millis());
+  result.observation = power_observation_;
+  result.report_generation = power_report_generation_;
+  result.reset_reason = power_reset_reason_;
+  result.startup_refused = power_startup_refused_;
+  if (power_config_.enabled && power_backend_)
+    result.backend = power_backend_->status();
+  if (telemetry_) {
+    const auto s = telemetry_->status();
+    result.storage = s.storage;
+    result.telemetry_fault = s.fault;
+    result.storage_error = s.storage_error;
+    if (s.storage.accepted >= s.storage.flushed)
+      result.uncertain_rows = s.storage.accepted - s.storage.flushed;
+  }
+  return result;
+}
+void SupervisedEsp32Application::servicePower(bool manual) {
+  const uint32_t now = millis();
+  PowerObservation observation;
+  if (power_config_.enabled && power_config_.qualified && power_backend_) {
+    if (!power_initialized_) {
+      power_initialized_ = true;
+      power_backend_->initialize();
+    }
+    if (power_backend_->status().ready)
+      observation = power_backend_->observe(now);
+    const auto backend = power_backend_->status();
+    observation.io_error =
+        !backend.ready || backend.initialization_error || backend.read_error || backend.off_error;
+  } else if (power_config_.enabled)
+    observation.io_error = true;
+  observation.teardown_complete = canRelease();
+  if (telemetry_) {
+    const auto s = telemetry_->status();
+    observation.io_error = observation.io_error || s.storage_error || s.storage.terminal ||
+                           s.fault != TelemetryFault::None;
+    observation.terminal_loss =
+        s.storage.lost != 0 || (s.storage.terminal && s.storage.accepted > s.storage.flushed);
+  }
+  auto actions = power_policy_.service(now, observation, manual);
+  if (actions.seal || actions.request_drain) {
+    camera_allowed_ = reset_current_ = false;
+    revokeReset();
+    if (telemetry_)
+      telemetry_->requestStop(); // Existing final-producer and real-worker barriers.
+  }
+  if (actions.request_off && power_config_.enabled && power_backend_) {
+    // This request cannot prove removal; independently timed hardware owns cut.
+    if (!power_backend_->requestOff()) {
+      observation.io_error = true;
+      power_policy_.service(now, observation);
+    }
+  }
+  const auto state = power_policy_.status(now);
+  if (state.state != last_power_status_.state || state.cause != last_power_status_.cause ||
+      state.outcome != last_power_status_.outcome ||
+      state.io_error != last_power_status_.io_error ||
+      state.teardown_complete != last_power_status_.teardown_complete ||
+      state.protected_ready != last_power_status_.protected_ready ||
+      observation.reserve != power_observation_.reserve ||
+      observation.supply != power_observation_.supply ||
+      observation.acc != power_observation_.acc ||
+      observation.power_fail != power_observation_.power_fail || actions.report) {
+    if (power_report_generation_ != UINT32_MAX)
+      ++power_report_generation_;
+  }
+  last_power_status_ = state;
+  power_observation_ = observation;
+}
+bool SupervisedEsp32Application::startupReady() {
+  servicePower();
+  const auto power = power_policy_.status(millis());
+  return !power_startup_refused_ && !power.sealed &&
+         (!power_config_.enabled || (power.automatic_active && power.protected_ready));
+}
+bool SupervisedEsp32Application::requestShutdown() {
+  servicePower(true);
+  return power_policy_.status(millis()).sealed;
+}
 SupervisedEsp32Application::~SupervisedEsp32Application() {
   // No waits or filesystem access. Boot-lifetime caller retains this object and
   // all its resources until the actual worker barriers permit destruction.
@@ -145,6 +233,13 @@ void SupervisedEsp32Application::launch() {
   if (!prepared_ || launched_)
     return;
   launched_ = true;
+  if (!startupReady()) {
+    power_startup_refused_ = true; // Lost qualification after supervisor handshake; no retry.
+    for (unsigned i = 0; i < policy_.size(); ++i)
+      if (policy_[i].enabled)
+        supervisor_->progress(static_cast<Worker>(i)).refused();
+    return;
+  }
   telemetry_ = new (&telemetry_memory_)
       Esp32LocalTelemetry(uart_, spi_, wire_, qualification_, motion_source_, &cameras_runtime_);
   telemetry_->owner().configurationStartup(configuration_);
@@ -167,8 +262,9 @@ void SupervisedEsp32Application::current(const SettingsSnapshot &s, bool safe, b
   safe_mode_ = safe;
   // Any new settings generation retires this session's control authorization;
   // a fresh owner is required. No remap or replay in an active session.
-  camera_allowed_ = camera_allowed_ && s.completed && s.effective && s.peers_valid &&
-                    s.epoch == epoch_ && s.generation == generation_ && !safe && nvs;
+  camera_allowed_ = camera_allowed_ && !power_policy_.status(millis()).sealed && s.completed &&
+                    s.effective && s.peers_valid && s.epoch == epoch_ &&
+                    s.generation == generation_ && !safe && nvs;
   reset_current_ = camera_allowed_;
   if (!reset_current_)
     revokeReset();
@@ -440,6 +536,7 @@ void SupervisedEsp32Application::publishWorkers(const LocalTelemetryStatus &s) {
   }
 }
 void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool fault) {
+  servicePower(); // Seal before admitting this pass's controls/producers.
   if (!telemetry_)
     return;
   telemetry_->owner().supervision(stalls, refused, fault);
@@ -452,6 +549,7 @@ void SupervisedEsp32Application::service(uint8_t stalls, uint8_t refused, bool f
   telemetry_->service(); // Exactly one bound application/camera/admission pass.
   const auto s = telemetry_->status();
   publishWorkers(s);
+  servicePower(); // Consume returned final-access/error observations.
 }
 } // namespace ridesync
 extern "C" ridesync::SupervisedEsp32Application &ridesync_supervised_application(

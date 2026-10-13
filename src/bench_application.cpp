@@ -111,14 +111,36 @@ bool optionalBusPins(const BenchBusPins &p, PinReservations &pins) {
       return false;
   return true;
 }
-} // namespace
-bool validateBenchBusPins(const BenchBusPins &p) {
-  PinReservations pins;
-  if (!requiredBusPins(p, pins))
+bool activeBusPins(const BenchBusPins &p, PinReservations &pins) {
+  if (!requiredBusPins(p, pins) || !optionalBusPins(p, pins))
     return false;
   if (p.imu_enabled && (!pins.add(p.i2c_sda, true) || !pins.add(p.i2c_scl, true)))
     return false;
-  return optionalBusPins(p, pins);
+  return p.imu_interrupt == -1 || (p.imu_enabled && pins.add(p.imu_interrupt, false));
+}
+bool powerBusPins(const BenchBusPins &p, PinReservations &pins) {
+  const int inputs[] = {p.power_acc, p.power_fail, p.power_ready};
+  for (int pin : inputs)
+    if (pin != -1 && !pins.add(pin, false))
+      return false;
+  return p.power_off == -1 || pins.add(p.power_off, true);
+}
+} // namespace
+bool validateBenchBusPins(const BenchBusPins &p) {
+  PinReservations pins;
+  return activeBusPins(p, pins) && powerBusPins(p, pins);
+}
+bool validateBenchPowerPins(const BenchBusPins &p, const PowerBackendConfig &c) {
+  if (!c.enabled)
+    return p.power_acc == -1 && p.power_fail == -1 && p.power_ready == -1 && p.power_off == -1;
+  if (!validatePowerBackendConfig(c) || p.power_acc != c.acc.pin ||
+      p.power_fail != c.power_fail.pin || p.power_ready != c.reserve_ready.pin ||
+      p.power_off != c.off_pin)
+    return false;
+  PinReservations pins;
+  if (!activeBusPins(p, pins) || (c.reserved_pins & pins.used) != pins.used)
+    return false;
+  return powerBusPins(p, pins);
 }
 } // namespace ridesync
 #if defined(ARDUINO_ARCH_ESP32) && defined(RIDESYNC_BENCH_APPLICATION)
@@ -147,6 +169,9 @@ HardwareSerial modem(2);
 SPIClass storage_spi(HSPI);
 TwoWire imu_wire(0);
 BenchDynamicReference stationary_reference;
+Esp32PowerGpioPort power_gpio;
+typename std::aligned_storage<sizeof(Esp32PowerBackend), alignof(Esp32PowerBackend)>::type
+    power_backend_memory;
 bool runtimeDeclared(const QualifiedLocalTelemetry &q) {
   return q.runtime.opt_in && q.runtime.gps_qualified && q.runtime.firmware &&
          q.runtime.provenance && q.runtime.modem.documentary_profile_opt_in &&
@@ -257,11 +282,23 @@ bool peersQualified(const BenchApplicationConfig &c) {
       return false;
   return true;
 }
+bool powerQualified() {
+  const auto &p = config.power_shutdown;
+  const auto &b = config.power_backend;
+  if (!p.enabled)
+    return !b.enabled && validateBenchPowerPins(config.pins, b);
+  const auto state = PowerShutdown(p).status(0);
+  const uint64_t needed = uint64_t(p.acc_off_ms) + p.drain_ms + config.power_cut_margin_ms;
+  return state.automatic_active && !p.voltage_enabled && config.power_cut_margin_ms &&
+         config.power_cut_margin_ms < 0x80000000UL &&
+         p.off_qualified == (b.off_enabled && b.off_qualified) &&
+         uint64_t(b.independent_timer_ms) >= needed && validateBenchPowerPins(config.pins, b);
+}
 bool validConfig() {
   Settings fixed;
   return config.enabled && config.board_routing_reviewed && copySettings(config.source, fixed) &&
-         telemetryQualified(config) && handlebarQualified(config) && motionQualified(config) &&
-         peersQualified(config);
+         telemetryQualified(config) && handlebarQualified(config) && powerQualified() &&
+         motionQualified(config) && peersQualified(config);
 }
 bool stationaryReferenceConfigured() {
   return owner && owner->telemetry() && config.telemetry.runtime.dynamic_motion.enabled &&
@@ -371,9 +408,12 @@ ApplicationWorkers *commissionedApplication() {
   }
   if (!initializeBuses())
     return nullptr;
-  owner = new (application_memory)
-      SupervisedEsp32Application(modem, storage_spi, imu_wire, config.telemetry, config.handlebar,
-                                 config.cameras, config.motion_reference);
+  PowerEventBackend *power = nullptr;
+  if (config.power_shutdown.enabled)
+    power = new (&power_backend_memory) Esp32PowerBackend(power_gpio, config.power_backend);
+  owner = new (application_memory) SupervisedEsp32Application(
+      modem, storage_spi, imu_wire, config.telemetry, config.handlebar, config.cameras,
+      config.motion_reference, config.power_shutdown, power);
   status.configured = true;
   status.error = BenchProviderError::None;
   return owner;

@@ -3,6 +3,7 @@
 #include "application_startup.h"
 #include "ble_pairing_reset.h"
 #include "handlebar_control_esp32.h"
+#include "power_shutdown_esp32.h"
 #include "profiles/gopro_hero12_esp32.h"
 #include "profiles/mixed_camera_esp32.h"
 namespace ridesync {
@@ -25,6 +26,17 @@ struct ApplicationPairingResetStatus {
   bool finished = false, releasable = true, mutation = false, requalification_required = false;
   bool proof_denied = false, proof_write_attempted = false, cancelled = false, timed_out = false;
 };
+struct ApplicationPowerStatus {
+  PowerShutdownStatus policy;
+  PowerBackendStatus backend;
+  PowerObservation observation;
+  int32_t storage_error = 0;
+  StorageHealth storage{};
+  TelemetryFault telemetry_fault = TelemetryFault::None;
+  uint32_t uncertain_rows = 0, report_generation = 0;
+  int32_t reset_reason = 0;
+  bool startup_refused = false;
+};
 // Commissioning supplies initialized dedicated buses and actual camera evidence.
 // Boot-lifetime owner; no implicit pins, namespace, peripheral begin or retry.
 class SupervisedEsp32Application final : public ApplicationWorkers {
@@ -34,11 +46,18 @@ public:
                              const QualifiedHandlebar &handlebar = QualifiedHandlebar{},
                              const std::array<Hero12Qualification, kMaxCameras> &hero12 =
                                  std::array<Hero12Qualification, kMaxCameras>{},
-                             StaticMotionReferenceSource *source = nullptr);
+                             StaticMotionReferenceSource *source = nullptr,
+                             const PowerShutdownConfig &power = PowerShutdownConfig{},
+                             PowerEventBackend *power_backend = nullptr);
   SupervisedEsp32Application(HardwareSerial &, SPIClass &, TwoWire &,
                              const QualifiedLocalTelemetry &, const QualifiedHandlebar &,
                              const MixedCameraQualifications &,
-                             StaticMotionReferenceSource *source = nullptr);
+                             StaticMotionReferenceSource *source = nullptr,
+                             const PowerShutdownConfig &power = PowerShutdownConfig{},
+                             PowerEventBackend *power_backend = nullptr);
+  bool startupReady() override;
+  bool requestShutdown();
+  ApplicationPowerStatus powerStatus() const;
   CameraPeers peers() const override { return qualification_.runtime.peers; }
   ~SupervisedEsp32Application(); // caller must first observe canRelease()
   std::array<WorkerPolicy, 4> prepare(const SettingsSnapshot &, bool, bool,
@@ -58,6 +77,15 @@ public:
   bool canRelease() const { return (!telemetry_ || telemetry_->canRelease()) && reset_.releasable; }
 
 private:
+  PowerShutdownConfig power_config_;
+  PowerShutdown power_policy_;
+  PowerEventBackend *power_backend_ = nullptr;
+  bool power_initialized_ = false, power_startup_refused_ = false;
+  uint32_t power_report_generation_ = 0;
+  int32_t power_reset_reason_ = 0;
+  PowerShutdownStatus last_power_status_;
+  PowerObservation power_observation_;
+  void servicePower(bool manual = false);
   HardwareSerial &uart_;
   SPIClass &spi_;
   TwoWire &wire_;

@@ -1,6 +1,7 @@
 #if defined(ARDUINO_ARCH_ESP32) && defined(RIDESYNC_BENCH_APPLICATION)
 #include "bench_application.h"
 #include "bench_console.h"
+#include "power_shutdown_report.h"
 #include "profiles/mixed_camera_esp32.h"
 #include <Arduino.h>
 #include <esp_heap_caps.h>
@@ -10,14 +11,75 @@ BenchConsole console;
 bool waiting = false;
 bool clear_requested = false;
 BenchCommand current_command = BenchCommand::Status;
+PowerReportBuffer power_report;
+uint32_t power_report_generation = 0;
+bool ordinary_report_requested = false;
+void reportDetails();
+void capturePowerReport(SupervisedEsp32Application *application) {
+  PowerReportSnapshot snapshot;
+  if (application) {
+    const auto status = application->powerStatus();
+    snapshot.available = true;
+    snapshot.policy = status.policy;
+    snapshot.observation = status.observation;
+    snapshot.backend = status.backend;
+    snapshot.storage = status.storage;
+    snapshot.storage_error = status.storage_error;
+    snapshot.telemetry_fault = unsigned(status.telemetry_fault);
+    snapshot.uncertain_rows = status.uncertain_rows;
+    snapshot.generation = status.report_generation;
+    snapshot.reset_reason = status.reset_reason;
+    snapshot.startup_refused = status.startup_refused;
+  }
+  power_report.capture(snapshot);
+}
+void writePowerReport() {
+  const int available = Serial.availableForWrite();
+  if (available <= 0 || !power_report.pending())
+    return;
+  size_t bytes = power_report.pending();
+  if (bytes > static_cast<size_t>(available))
+    bytes = static_cast<size_t>(available);
+  if (bytes > 64)
+    bytes = 64;
+  const auto written = Serial.write(reinterpret_cast<const uint8_t *>(power_report.data()), bytes);
+  power_report.consume(written < bytes ? written : bytes);
+}
+void servicePowerReport() {
+  auto *application = benchApplicationOwner();
+  if (application) {
+    const auto generation = application->powerStatus().report_generation;
+    if (generation != power_report_generation) {
+      power_report_generation = generation;
+      capturePowerReport(application);
+    }
+  }
+  writePowerReport();
+  if (!power_report.pending() && ordinary_report_requested) {
+    ordinary_report_requested = false;
+    reportDetails();
+  }
+}
+
 const char *observed(RecordingState state) {
   return state == RecordingState::Recording ? "Recording"
          : state == RecordingState::Stopped ? "Stopped"
                                             : "Unknown";
 }
 void report() {
+  auto *application = benchApplicationOwner();
+  capturePowerReport(application);
+  const auto power = application ? application->powerStatus().policy : PowerShutdownStatus{};
+  ordinary_report_requested = !application || (!power.enabled && !power.sealed);
+}
+void reportDetails() {
   const auto provider = benchApplicationStatus();
   auto *application = benchApplicationOwner();
+  if (application) {
+    const auto power = application->powerStatus().policy;
+    if (power.enabled || power.sealed)
+      return; // Protected mode and sealed drains require only bounded power evidence.
+  }
   Serial.printf("BENCH provider=%u configured=%u provider_error=%u spi=%u i2c=%u\n",
                 unsigned(provider.supplied), unsigned(provider.configured),
                 unsigned(provider.error), unsigned(provider.spi_initialized),
@@ -60,6 +122,9 @@ void report() {
 bool admitted(SupervisedEsp32Application *application) {
   if (!application || !application->telemetry())
     return false;
+  const auto power = application->powerStatus().policy;
+  if (power.sealed || (power.enabled && !power.admission_allowed))
+    return false;
   const auto state = application->telemetry()->status();
   return state.phase == TelemetryPhase::Running && state.camera == CameraAdmission::Admitted &&
          !state.safe_mode && !state.supervision_fault && !state.worker_stalls &&
@@ -100,6 +165,20 @@ void execute(BenchCommand command) {
     report();
     return;
   }
+  if (command == BenchCommand::Shutdown) {
+    if (application) {
+      waiting = application->requestShutdown();
+      current_command = command;
+      capturePowerReport(application);
+    } else {
+      capturePowerReport(nullptr);
+    }
+    return;
+  }
+  if (application && application->powerStatus().policy.sealed) {
+    capturePowerReport(application);
+    return; // No CLEAR, stationarity, bookmark or camera intent after sealing.
+  }
   if (command == BenchCommand::Clear) {
     clear_requested = true;
     Serial.println("BENCH safe-mode clear requested; retired camera admission is not reopened.");
@@ -111,17 +190,7 @@ void execute(BenchCommand command) {
                   unsigned(benchArmStationaryReference()));
     return;
   }
-  if (command == BenchCommand::Shutdown) {
-    if (application && application->telemetry()) {
-      application->telemetry()->requestStop();
-      waiting = true;
-      current_command = command;
-      Serial.println("BENCH shutdown requested; wait for releasable=1 before removing power.");
-    } else {
-      Serial.println("BENCH command refused: application unavailable.");
-    }
-    return;
-  }
+
   if (!admitted(application)) {
     Serial.println("BENCH command refused: commissioned running camera owner required.");
     report();
@@ -157,6 +226,11 @@ void terminal() {
   if (!waiting)
     return;
   auto *application = benchApplicationOwner();
+  if (application && application->powerStatus().policy.sealed) {
+    if (application->powerStatus().policy.outcome != PowerShutdownOutcome::None)
+      waiting = false;
+    return; // Transition report is bounded and owns power-shutdown terminal evidence.
+  }
   if (!application || !application->telemetry()) {
     waiting = false;
     return;
@@ -178,6 +252,7 @@ void terminal() {
 }
 } // namespace
 void benchConsoleService() {
+  servicePowerReport();
   // One bounded line slot, no buffered command replay. Drain the current burst
   // before dispatch so two complete pasted commands lose intent admission.
   for (unsigned i = 0; i < 64 && Serial.available(); ++i)
@@ -192,11 +267,17 @@ void benchConsoleService() {
   if (console.take(command, error)) {
     if (error == BenchConsoleError::None)
       execute(command);
-    else
-      Serial.printf("BENCH input refused error=%u; send one complete uppercase command.\n",
-                    unsigned(error));
+    else {
+      auto *application = benchApplicationOwner();
+      if (application && application->powerStatus().policy.sealed)
+        capturePowerReport(application);
+      else
+        Serial.printf("BENCH input refused error=%u; send one complete uppercase command.\n",
+                      unsigned(error));
+    }
   }
   terminal();
+  servicePowerReport();
 }
 bool benchConsoleTakeClear() {
   const bool requested = clear_requested;

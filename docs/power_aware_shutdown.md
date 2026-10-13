@@ -45,7 +45,8 @@ USB/battery selection FETs and a VBUS/GPIO12-controlled branch; GPIO12 is
 not an established whole-board cut-off. GPIO35 senses `VV_BAT` through equal
 100 kΩ R7/R9 with 10 nF C57. CN3065 CHRG/STDBY drive indicators; no ESP32
 power-fail interrupt or programmable PMIC status bus is established. Sheet 3
-also has a `SOLAR_IN` ADC divider. These are documentary routes, not measured
+also routes its `SOLAR_IN` ADC divider through RZ4 to SENSOR_VP/GPIO36.
+These are documentary routes, not measured
 electrical behavior; module labels include other A767x variants.
 
 Do not apply vehicle voltage to USB, battery, SOLAR_IN or GPIO on the strength
@@ -104,7 +105,8 @@ software recovery hysteresis is separate.
 
 ACC sense and power-fail status need distinct inputs. GPIO34 and GPIO39 are
 provisional input-only candidates with external pulls; identify matching header
-nets and every active reservation first. Reserve GPIO35 for the board divider.
+nets and every active reservation first. Reserve GPIO35 for the battery divider
+and GPIO36 for the schematic's SOLAR_IN divider; neither is an accessory input.
 Reject modem 4/5/25/26/27/33, power 12, SD 2/13/14/15, PSRAM 16/17, flash 6–11,
 serial 1/3, straps including 0, button/LED and IMU/I2C/interrupt conflicts.
 Extend existing reservation validation rather than approving unused-looking pins.
@@ -317,3 +319,100 @@ pins, motorcycle ACC/transient envelope and parked draw. Until these are
 resolved by the existing owners, automatic power protection is **Deferred /
 Not tested**. Manual shutdown remains useful software behavior, with the same
 limits on SD durability.
+
+## Software implementation — October 13, 2026
+
+Implementation tasks are [#58](https://github.com/llazzaro/RideSync/issues/58),
+[#59](https://github.com/llazzaro/RideSync/issues/59) and
+[#75](https://github.com/llazzaro/RideSync/issues/75). This section describes the
+implemented software route; the investigation and synthetic hardware sizing
+above remain the decision record, not physical qualification.
+
+`PowerShutdown` in `include/power_shutdown.h` / `src/power_shutdown.cpp` consumes
+fixed copied `PowerObservation` signals and emits one-shot admission, seal,
+drain, report and qualified OFF requests. Its typed state/cause/outcome snapshot
+keeps lifetime completion separate from IO/loss. ACC-on and reserve readiness
+must remain qualified through startup; emergency upstream fail bypasses the
+ordinary debounce. A sealed episode never reopens. A late error revokes Clean;
+a timeout remains uncertain even if a worker later finishes. Invalid timing
+configurations are inert; manual shutdown with the valid default disabled
+configuration still seals/drains without GPIO/OFF.
+
+`PowerEventBackend` / `Esp32PowerBackend` in `power_shutdown_esp32` provide a
+portable SDK seam and the real ESP32 GPIO route. `PowerBackendConfig` is
+source/private commissioning only: enabled, electrical qualification, complete
+reservations, supply-profile premise, independent cut-off qualification, distinct
+ACC/fail/ready pins, evidenced external pulls/polarity, and separate OFF
+qualification/startup safety. `gpio_get_level` has no SDK error channel; unexpected
+nonbinary results are refused, but this does not detect a broken wire. The
+qualified circuit and active polarity must make unavailable hardware detectable.
+Optional ADC diagnostics are deferred and cannot be enabled in the composed
+GPIO-only profile. GPIO35 and GPIO36 are refused as known documentary dividers;
+GPIO34/39 are candidates only. No source profile supplies guessed default pins.
+
+The held-rail supply premise must establish that upstream fail deasserted means
+usable supply, and asserted fail with an independently valid Ready reserve means
+usable backup. Without those explicit source facts, observations remain Unknown.
+Backend initialization/OFF failures are terminal and retain their first SDK code;
+reads invalidate availability rather than reuse stale readiness. OFF preloads
+its qualified inactive level before driver enable; electrical boot behavior still
+requires #30. Monitoring-only profiles may omit the OFF pin, but still require
+independent timer qualification.
+
+`BenchApplicationConfig` supplies separate `power_shutdown`, `power_backend` and
+`power_cut_margin_ms` fields. Validation checks exact signal routing and all
+active bus/button/LED/IMU interrupt reservations before IO. It refuses mismatched
+policy/backend activation, unsupported ADC policy, incomplete electrical facts,
+and an independent timer shorter than ACC debounce + drain policy + declared
+cut margin. These numbers and the ready-signal premise must match measured
+reserve energy in #30; software validation does not measure hold-up.
+
+The application owner's `startupReady` gate runs before worker policy preparation
+and supervisor admission. Configuration receipt freezes independently so a
+legitimate two-second ignition wait cannot turn received settings into a timeout
+or consume the one-second required-worker startup grace. Launch checks readiness
+again before creating workers. Lost launch readiness is a terminal admission
+refusal, not permission to retry automatically.
+
+`SupervisedEsp32Application` consumes power before each producer pass, retires
+control/pairing-reset admission and requests the existing local stop path once.
+It continues real returned work and observes the whole application's release
+barrier, including outstanding reset/proof ownership. Clean additionally excludes
+storage errors, terminal loss and start faults. Timed-out owners remain alive.
+Manual `SHUTDOWN` uses this same route even before telemetry exists. No camera
+shutter STOP or automatic Start is added; no ledger repair, new persistence schema,
+formatting, deletion or recommissioning is part of shutdown/recovery.
+
+`power_shutdown_report` keeps one fixed latest serial snapshot with a cursor.
+The bench console copies state/cause/outcome, qualification/readiness, explicit
+reserve/supply validity, numeric storage error, elapsed
+policy time, reset reason, IO/fault/OFF results and storage counters/uncertainty.
+It writes bounded pieces only when the UART reports free capacity; a newer
+snapshot can replace pending evidence. Reports are best-effort and cannot prove
+power removal or durable SD data. Explicit STATUS includes power when telemetry
+has not started. With automatic protection enabled or an episode sealed, STATUS
+uses the bounded power snapshot only; the full legacy camera/provider details
+remain available when automatic protection is disabled and unsealed. Shutdown
+cannot depend on a completed serial report.
+
+Physical power protection remains **Deferred / Not tested** pending #30 and #31.
+Existing reset-reason reporting and exclusive committed session allocation are
+reused; no reset cause is treated as proof of a lost row or a supply fault.
+
+Software verification used an immutable snapshot of the staged power-only tree,
+so concurrent setup/health/bookmark edits were excluded from delivery evidence.
+The complete native suite passed **600 cases**, including 28 new policy cases.
+The real application composition suite passed with 15 power scenarios plus the
+unchanged camera/session/reset scenarios; the added HERO12 fixture reached
+observed Recording, then verified no shutter STOP or post-seal Start/connect
+replay through actual adapter teardown. These are synthetic SDK observations.
+Backend/console/report/startup SDK tests, all four existing diagnostic bench
+cases, Linux GCC/libstdc++ portability, Ruff and pinned formatting passed.
+Repository Python tests passed after supplying the existing checksum-pinned GPX
+schema cache prerequisite; unchanged passing checks were reused. Pinned builds
+passed for `lilygo_t_a7670e_r2`, `bench_application` and
+`bench_application_private_compile`; symbol inspection retained the actual power
+policy and real ESP32 backend input/output methods. No firmware was uploaded.
+Review corrections added GPIO36 refusal, preserved disabled-mode camera command
+admission, and exposed independent reserve validity and numeric storage errors.
+Physical evidence and compatibility remain unchanged.

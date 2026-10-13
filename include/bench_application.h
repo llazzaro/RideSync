@@ -1,5 +1,6 @@
 #pragma once
 #include "motion_admission.h"
+#include "power_shutdown_esp32.h"
 #include "status_led.h"
 #include <array>
 #include <cstdint>
@@ -8,9 +9,12 @@ struct BenchBusPins {
   int power_enable = -1, spi_sck = -1, spi_miso = -1, spi_mosi = -1, spi_cs = -1;
   int modem_tx = -1, modem_rx = -1, modem_key = -1, i2c_sda = -1, i2c_scl = -1, button = -1;
   std::array<int, 3> led{{-1, -1, -1}};
+  int imu_interrupt = -1;
+  int power_acc = -1, power_fail = -1, power_ready = -1, power_off = -1;
   bool imu_enabled = false;
 };
 bool validateBenchBusPins(const BenchBusPins &);
+bool validateBenchPowerPins(const BenchBusPins &, const PowerBackendConfig &);
 bool validateBenchMotionMetadata(const MotionAdmissionConfig &, const ImuConfig &);
 class BenchDynamicReference final : public DynamicMotionReferenceSource {
 public:
@@ -44,6 +48,9 @@ struct BenchApplicationConfig {
   MixedCameraQualifications cameras;
   // Independent reviewed host/store receipt for setup discovery without an X5.
   BleStoreProof setup_store;
+  PowerShutdownConfig power_shutdown;
+  PowerBackendConfig power_backend;
+  uint32_t power_cut_margin_ms = 500;
   StaticMotionReferenceSource *motion_reference = nullptr;
 };
 enum class BenchProviderError : uint8_t {

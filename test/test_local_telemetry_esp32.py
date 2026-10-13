@@ -6,6 +6,7 @@ clock, modem, IMU manager and stop code execute unchanged.
 """
 from pathlib import Path
 import re
+import os
 from telemetry_parser import parse
 import subprocess
 import tempfile
@@ -22,13 +23,16 @@ class LocalTelemetryEsp32Test(unittest.TestCase):
 #pragma once
 #include <cstdint>
 using gpio_num_t=int;
-constexpr int GPIO_MODE_OUTPUT=1, GPIO_PULLUP_DISABLE=0;
+using gpio_mode_t=int;
+constexpr int GPIO_MODE_INPUT=0, GPIO_MODE_OUTPUT=1, GPIO_PULLUP_DISABLE=0;
+constexpr int ESP_ERR_INVALID_RESPONSE=99;
 constexpr int GPIO_PULLDOWN_DISABLE=0, GPIO_INTR_DISABLE=0;
 struct gpio_config_t { uint64_t pin_bit_mask; int mode,pull_up_en,pull_down_en,intr_type; };
 extern unsigned led_configs,led_writes;
 extern int gpio_failure;
 inline int gpio_config(const gpio_config_t *) { ++led_configs;return gpio_failure; }
 inline int gpio_set_level(gpio_num_t,uint32_t) { ++led_writes;return gpio_failure; }
+inline int gpio_get_level(gpio_num_t) { return 0; }
 ''',
             'esp_attr.h': '#pragma once\n#define RTC_NOINIT_ATTR\n',
             'esp_system.h': '''#pragma once
@@ -182,7 +186,7 @@ int test_close(int);
                    str(folder / 'storage_sd.cpp'), str(folder / 'bmi270_imu.cpp'), *map(str, portable), '-o', str(exe)]
             build = subprocess.run(cmd, capture_output=True)
             self.assertEqual(0, build.returncode, build.stderr.decode())
-            for mode in ('main-reset-completed-late','main-reset-completed-late-beyond','main-reset-completed-late-wrap','main-reset-completed-current','main-reset-busy-deadline','main-reset-terminal-busy','main-reset-scan','main-reset-host-late','main-reset-host-nvs','main-reset-host-supervision','main-reset-success','main-reset-query','main-reset-rec','main-reset-stop','main-reset-recovery','main-reset-retained','main-reset-cancel','main-reset-timeout','main-reset-wrap','main-reset-stale','main-reset-ambiguous','main-reset-admission','main-reset-config','main-reset-safe','main-reset-proof-set-error','main-reset-proof-commit-error','main-reset-proof-read-error','main-reset-proof-blocked','main-reset-proof-final','main-reset-busy','main-reset-host-blocked','main-reset-host-timeout','main-reset-host-error','main-reset-seal', 'main-terminal-at', 'main-ble-refusal', 'main-runtime-safe-mode', 'main-button-unqualified', 'main-delayed-config', 'main-late-config', 'main-config-timeout', 'main-config-task-refusal',
+            modes = ('power-camera-leave-recording','power-off-failure','power-init-refusal','power-read-refusal','power-running-read-failure','power-reserve-unknown','power-reserve-not-ready','power-sd-refusal','power-imu-final-barrier','power-boot-off','power-manual-prelaunch','power-launch-loss','power-manual-disabled','power-clean','power-blocked-close','main-reset-completed-late','main-reset-completed-late-beyond','main-reset-completed-late-wrap','main-reset-completed-current','main-reset-busy-deadline','main-reset-terminal-busy','main-reset-scan','main-reset-host-late','main-reset-host-nvs','main-reset-host-supervision','main-reset-success','main-reset-query','main-reset-rec','main-reset-stop','main-reset-recovery','main-reset-retained','main-reset-cancel','main-reset-timeout','main-reset-wrap','main-reset-stale','main-reset-ambiguous','main-reset-admission','main-reset-config','main-reset-safe','main-reset-proof-set-error','main-reset-proof-commit-error','main-reset-proof-read-error','main-reset-proof-blocked','main-reset-proof-final','main-reset-busy','main-reset-host-blocked','main-reset-host-timeout','main-reset-host-error','main-reset-seal', 'main-terminal-at', 'main-ble-refusal', 'main-runtime-safe-mode', 'main-button-unqualified', 'main-delayed-config', 'main-late-config', 'main-config-timeout', 'main-config-task-refusal',
                          'main-supervisor-refusal', 'main-health-task-refusal', 'main-qualification',
                          'main-sd-refusal', 'main-imu-refusal', 'main-blocked-allocation',
                          'main-blocked-close', 'main-current-gate', 'main-supervisor-timeout',
@@ -193,12 +197,15 @@ int test_close(int);
                          'sd-task', 'imu-task', 'safe-mode', 'local', 'camera', 'close-barrier',
                          'control-default', 'control', 'control-gpio-fault',
                          'control-gps-refusal', 'control-uart-refusal', 'control-task-refusal',
-                         'control-imu-refusal', 'control-power-refusal', 'control-route-refusal'):
+                         'control-imu-refusal', 'control-power-refusal', 'control-route-refusal')
+            selected = os.environ.get('RIDESYNC_TELEMETRY_CASES')
+            for mode in selected.split(',') if selected else modes:
                 with self.subTest(mode=mode):
                     run = subprocess.run([str(exe), mode], capture_output=True, timeout=10)
                     self.assertEqual(0, run.returncode, run.stderr.decode())
 
-            self.verify_motion_csv(exe)
+            if not selected:
+                self.verify_motion_csv(exe)
 
     def verify_motion_csv(self, exe):
         run = subprocess.run([str(exe), 'motion-csv'], capture_output=True, timeout=10)

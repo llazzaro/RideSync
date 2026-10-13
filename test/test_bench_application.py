@@ -7,6 +7,71 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BenchApplicationTests(unittest.TestCase):
+    def test_power_pins_match_complete_active_reservations(self):
+        program = r'''
+#include "bench_application.h"
+#include <cassert>
+using namespace ridesync;
+int main() {
+  BenchBusPins p;
+  p.power_enable=12;p.spi_sck=14;p.spi_miso=2;p.spi_mosi=15;p.spi_cs=13;
+  p.modem_tx=26;p.modem_rx=27;p.modem_key=4;
+  PowerBackendConfig c;
+  assert(validateBenchPowerPins(p,c)); // Default disabled, no power pins claimed.
+  p.power_acc=34;assert(!validateBenchPowerPins(p,c));
+  p.power_acc=-1;c.enabled=true;
+  c.electrical_qualified=c.reservations_complete=c.supply_profile_qualified=true;
+  c.independent_cutoff_qualified=c.off_enabled=c.off_qualified=c.off_startup_safe=true;
+  c.electrical_profile="synthetic";c.provenance="fixture";c.independent_timer_ms=7000;
+  c.acc.pin=34;c.power_fail.pin=39;c.reserve_ready.pin=23;c.off_pin=32;
+  c.acc.polarity=c.power_fail.polarity=c.reserve_ready.polarity=c.off_polarity=PowerPolarity::ActiveHigh;
+  c.acc.pull=c.power_fail.pull=c.reserve_ready.pull=PowerExternalPull::Down;
+  p.power_acc=34;p.power_fail=39;p.power_ready=23;p.power_off=32;
+  assert(!validateBenchPowerPins(p,c)); // Claim "complete" cannot omit active bus pins.
+  for(int pin : {12,14,2,15,13,26,27,4})c.reserved_pins|=uint64_t(1)<<pin;
+  assert(validateBenchPowerPins(p,c));
+  auto solar=c;auto solar_pins=p;
+  solar.acc.pin=36;solar.reserve_ready.pin=23;
+  solar_pins.power_acc=36;solar_pins.power_ready=23;
+  assert(!validateBenchPowerPins(solar_pins,solar)); // Hardwired SOLAR_IN cannot become digital ACC.
+  for(int pin : {12,14,2,15,13,26,27,4}) {
+    auto incomplete=c;incomplete.reserved_pins&=~(uint64_t(1)<<pin);
+    assert(!validateBenchPowerPins(p,incomplete));
+  }
+  p.led[0]=32;assert(!validateBenchBusPins(p));assert(!validateBenchPowerPins(p,c));
+  p.led[0]=18;assert(!validateBenchPowerPins(p,c));c.reserved_pins|=uint64_t(1)<<18;
+  assert(validateBenchPowerPins(p,c));
+  p.imu_enabled=true;p.i2c_sda=21;p.i2c_scl=22;p.imu_interrupt=23;
+  assert(!validateBenchBusPins(p)); // IRQ23 deliberately conflicts with power-ready23.
+  assert(!validateBenchPowerPins(p,c));
+  p.imu_interrupt=19; // Separate synthetic IRQ pin in the non-conflicting baseline.
+  assert(!validateBenchPowerPins(p,c));
+  for(int pin : {21,22,19})c.reserved_pins|=uint64_t(1)<<pin;
+  assert(validateBenchPowerPins(p,c));
+  p.imu_interrupt=34;assert(!validateBenchBusPins(p));assert(!validateBenchPowerPins(p,c));
+  p.imu_interrupt=19;p.power_ready=39;assert(!validateBenchBusPins(p));
+  p.power_ready=23;p.power_off=34;assert(!validateBenchBusPins(p));
+  p.power_off=32;p.button=34;assert(!validateBenchPowerPins(p,c));
+  p.imu_interrupt=-1;c.reserved_pins&=~(uint64_t(1)<<19); // Retire IRQ before reusing19 as button.
+  p.button=19;assert(!validateBenchPowerPins(p,c));c.reserved_pins|=uint64_t(1)<<19;
+  assert(validateBenchPowerPins(p,c));
+  c.off_enabled=false;c.off_pin=-1;c.off_polarity=PowerPolarity::Unspecified;p.power_off=-1;
+  assert(validateBenchPowerPins(p,c));
+  p.power_off=32;assert(!validateBenchPowerPins(p,c));
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'check.cpp'
+            binary = Path(directory) / 'check'
+            source.write_text(program)
+            subprocess.run(['c++', '-std=c++11', '-I', str(ROOT / 'include'),
+                            str(source), str(ROOT / 'src/bench_application.cpp'),
+                            str(ROOT / 'src/power_shutdown_esp32.cpp'),
+                            str(ROOT / 'src/motion_estimator.cpp'),
+                            str(ROOT / 'src/dynamic_motion_estimator.cpp'),
+                            str(ROOT / 'src/status_led.cpp'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_bus_conflicts_and_optional_imu(self):
         program = r'''
 #include "bench_application.h"
@@ -112,6 +177,7 @@ int main() {
             source.write_text(program)
             subprocess.run(['c++', '-std=c++11', '-I', str(ROOT / 'include'),
                             str(source), str(ROOT / 'src/bench_application.cpp'),
+                            str(ROOT / 'src/power_shutdown_esp32.cpp'),
                             str(ROOT / 'src/motion_estimator.cpp'),
                             str(ROOT / 'src/dynamic_motion_estimator.cpp'),
                             str(ROOT / 'src/status_led.cpp'),

@@ -196,6 +196,7 @@ void pass(Esp32LocalTelemetry &r) {
   std::this_thread::sleep_for(std::chrono::microseconds(100));
 }
 #include "main_app.inc"
+#include "power_cases.inc"
 struct LocalTelemetryContext {
   const std::string mode;
   HardwareSerial uart;
@@ -557,6 +558,8 @@ struct LocalTelemetryScenario {
 int main(int argc, char **argv) {
   assert(argc == 2);
   const std::string mode = argv[1];
+  if (mode.find("power-") == 0)
+    return powerApplication(mode);
   if (mode.find("main-") == 0)
     return mainApplication(mode);
   LocalTelemetryScenario scenario(mode);

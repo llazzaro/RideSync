@@ -18,6 +18,9 @@ class ApplicationWorkers {
 public:
   virtual ~ApplicationWorkers() = default;
   virtual CameraPeers peers() const { return {}; }
+  // Optional qualified power gate, polled on the serialized owner before
+  // supervisor admission. Waiting must not start required-worker grace clocks.
+  virtual bool startupReady() { return true; }
   virtual std::array<WorkerPolicy, 4> prepare(const SettingsSnapshot &, bool safe_mode,
                                               bool nvs_allowed, HealthSupervisor &) = 0;
   virtual void launch() = 0;

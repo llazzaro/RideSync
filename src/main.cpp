@@ -184,7 +184,7 @@ StartupState startup_state = StartupState::WaitingConfig;
 StartupState config_startup = StartupState::WaitingConfig;
 uint32_t config_started = 0, supervisor_started = 0;
 ApplicationWorkers *workers = nullptr;
-bool policy_fixed = false, workers_launched = false;
+bool configuration_fixed = false, policy_fixed = false, workers_launched = false;
 SettingsSnapshot received_settings; // loop-only scratch; no large loop stack envelope
 #if defined(RIDESYNC_SETUP_APPLICATION) && defined(RIDESYNC_BENCH_APPLICATION)
 void setupDiscoveryInitialization(uint32_t now) {
@@ -299,7 +299,7 @@ void healthTask(void *) {
 void receiveSettings() {
   // Admission is bounded by receipt on this owner, even if publication becomes
   // ready before the first post-deadline pass. Never accept that late envelope.
-  if (!policy_fixed && millis() - config_started >= kConfigStartupMs)
+  if (!configuration_fixed && millis() - config_started >= kConfigStartupMs)
     config_startup = StartupState::ConfigTimedOut;
   if (settings_publication.take(received_settings) &&
       config_startup != StartupState::ConfigTimedOut &&
@@ -320,8 +320,8 @@ void receiveSettings() {
 }
 
 void fixWorkerPolicy() {
-  if (!policy_fixed && (application_settings.snapshot().completed ||
-                        millis() - config_started >= kConfigStartupMs)) {
+  if (!configuration_fixed && (application_settings.snapshot().completed ||
+                               millis() - config_started >= kConfigStartupMs)) {
     // Timeout is terminal for this boot. Keep the permanent NVS owner/resources;
     // consume but never apply a late snapshot. No erase/reinit/retry is admitted.
     config_startup = !application_settings.snapshot().completed  ? StartupState::ConfigTimedOut
@@ -329,6 +329,11 @@ void fixWorkerPolicy() {
                                                                  : StartupState::ConfigUnavailable;
     Serial.printf("RideSync: configuration startup outcome=%u\n",
                   static_cast<unsigned>(config_startup));
+    configuration_fixed = true;
+  }
+  if (configuration_fixed && !policy_fixed) {
+    if (workers && !workers->startupReady())
+      return; // Qualified power wait precedes supervisor/worker grace clocks.
     std::array<WorkerPolicy, 4> policy{};
     if (workers)
       policy = workers->prepare(application_settings.snapshot(), safe_mode.load(),
