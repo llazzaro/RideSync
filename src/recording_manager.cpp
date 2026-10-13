@@ -117,6 +117,7 @@ void RecordingManager::begin(bool query) {
   error_ = GroupError::None;
   ++generation_;
   for (size_t i = 0; i < cameras_.size(); ++i) {
+    cameras_.admittedGroupIntent(i, query ? RecordingState::Unknown : intent_, generation_);
     auto l = cameras_.state(i)->lifecycle;
     if (l == Lifecycle::Disabled || cameras_.sealed(i))
       continue;
@@ -163,9 +164,11 @@ void RecordingManager::command(size_t i) {
   }
   p.stage = Stage::Command;
   p.fresh = p.acknowledged = false;
-  auto e = cameras_.request(i, syncing_                               ? Operation::Query
-                               : intent_ == RecordingState::Recording ? Operation::Start
-                                                                      : Operation::Stop);
+  auto e = cameras_.request(i,
+                            syncing_                               ? Operation::Query
+                            : intent_ == RecordingState::Recording ? Operation::Start
+                                                                   : Operation::Stop,
+                            generation_);
   if (e != CameraError::None) {
     p.stage = Stage::Error;
     p.error = e;
@@ -177,6 +180,7 @@ void RecordingManager::expireConfirm(size_t i) {
   p.hasRetired = true;
   p.stage = Stage::Error;
   p.error = CameraError::Timeout;
+  cameras_.groupFailure(i);
 }
 GroupError RecordingManager::request(RecordingState intent) {
   if (intent == RecordingState::Unknown)
@@ -325,13 +329,18 @@ void RecordingManager::decideIntentAfterSync() {
   intent_ = recording == known ? RecordingState::Stopped : RecordingState::Recording;
   // Failed resync peers retain explicit errors; successful peers proceed together.
   for (size_t i = 0; i < cameras_.size(); ++i)
-    if (peers_[i].stage == Stage::Done)
+    if (peers_[i].stage == Stage::Done) {
+      cameras_.admittedGroupIntent(i, intent_, generation_);
       command(i);
+    }
 }
 void RecordingManager::advance() {
   ++advancements_;
-  for (size_t i = 0; i < cameras_.size(); ++i)
+  for (size_t i = 0; i < cameras_.size(); ++i) {
     advancePeer(i);
+    if (peers_[i].stage == Stage::Error)
+      cameras_.groupFailure(i);
+  }
   if (!syncing_ || status().pending)
     return;
   syncing_ = false;

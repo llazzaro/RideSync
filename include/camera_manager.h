@@ -70,6 +70,9 @@ struct Event {
   EventKind kind;
   RecordingState recording = RecordingState::Unknown;
   Capabilities capabilities;
+  // Valid only when adapter supplies validated sequence and transport receipt.
+  QualifiedHealthSample health;
+  bool has_health = false;
 };
 struct RetryPolicy {
   uint32_t timeout_ms = 1000;
@@ -86,6 +89,8 @@ struct CameraState {
   bool has_last_seen = false;
   uint32_t last_observed_ms = 0;
   bool has_observation = false;
+  uint32_t observed_sequence = 0, qualified_received_ms = 0;
+  bool has_qualified_observation = false;
   uint32_t deadline_ms = 0;
   uint8_t attempts = 0;
   Token token;
@@ -119,12 +124,38 @@ public:
   virtual void wireAck(size_t peer, Operation, Token, uint32_t intent_id, CameraAckDomain,
                        CameraAckAction) = 0;
 };
+// Separate attachment from CameraAudit: health never steals the event logger.
+class CameraHealthObserver {
+public:
+  virtual ~CameraHealthObserver() = default;
+  virtual void healthIntent(size_t, Operation, uint32_t intent, uint32_t group, bool queued, Token,
+                            uint32_t now, uint32_t deadline) = 0;
+  virtual void healthAttempt(size_t, Operation, Token, uint32_t intent, uint32_t now) = 0;
+  virtual void healthGroupIntent(size_t, RecordingState, uint32_t group, Token, uint32_t now) = 0;
+  virtual void healthRetired(size_t, Token, uint32_t now) = 0;
+  virtual void healthReset(size_t, Token, uint32_t now) = 0;
+  virtual void healthAccepted(const Event &, Operation, uint32_t intent, uint32_t now) = 0;
+  virtual void healthFailure(size_t, Token, bool terminal, uint32_t now) = 0;
+  virtual void healthConnection(size_t, CameraModel, Token, bool connected, uint32_t now) = 0;
+};
 class CameraManager {
 public:
   static constexpr size_t kQueueDepth = 4;
   CameraManager(Clock &clock, CameraTransport &transport, RetryPolicy policy = RetryPolicy{});
   ConfigResult configure(const SourceConfig &config);
-  CameraError request(size_t peer, Operation operation);
+  CameraError request(size_t peer, Operation operation, uint32_t group_generation = 0);
+  bool attachHealthObserver(CameraHealthObserver &observer) {
+    if (health_ && health_ != &observer)
+      return false;
+    health_ = &observer;
+    return true;
+  }
+  void detachHealthObserver(const CameraHealthObserver *expected = nullptr) {
+    if (!expected || health_ == expected)
+      health_ = nullptr;
+  }
+  void admittedGroupIntent(size_t peer, RecordingState, uint32_t generation);
+  void groupFailure(size_t peer);
   CameraError cancel(size_t peer);
   // Permanent for this manager lifetime; configuration/reset cannot reopen it.
   CameraError seal(size_t peer);
@@ -177,6 +208,7 @@ private:
   RetryPolicy policy_;
   SourceConfig config_;
   CameraAudit *audit_ = nullptr;
+  CameraHealthObserver *health_ = nullptr;
   uint32_t ticks_ = 0, resets_ = 0;
   std::array<Peer, kMaxCameras> peers_;
   std::array<bool, kMaxCameras> maintenance_{};

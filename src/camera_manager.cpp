@@ -82,7 +82,7 @@ CameraError CameraManager::peerAdmission(size_t i) const {
     return CameraError::Cancelled;
   return CameraError::None;
 }
-CameraError CameraManager::request(size_t i, Operation op) {
+CameraError CameraManager::request(size_t i, Operation op, uint32_t group_generation) {
   if (i >= size())
     return CameraError::InvalidPeer;
   auto &p = peers_[i];
@@ -102,6 +102,15 @@ CameraError CameraManager::request(size_t i, Operation op) {
   const bool queued = p.active;
   if (audit_)
     audit_->request(i, op, CameraError::None, queued, intent_id);
+  if (health_) {
+    const uint64_t operation_window = uint64_t(policy_.timeout_ms) * policy_.max_attempts +
+                                      uint64_t(policy_.backoff_ms) * (policy_.max_attempts - 1) +
+                                      1000;
+    const uint64_t window = operation_window * (queued ? p.queued + 2 : 1);
+    const uint32_t bounded = window > INT32_MAX ? INT32_MAX : static_cast<uint32_t>(window);
+    health_->healthIntent(i, op, intent_id, group_generation, queued, p.state.token, clock_.now(),
+                          clock_.now() + bounded);
+  }
   if (op == Operation::Start)
     p.state.desired = RecordingState::Recording;
   if (op == Operation::Stop)
@@ -132,10 +141,15 @@ void CameraManager::attempt(size_t i) {
     p.state.observed = RecordingState::Unknown;
     p.state.has_observation = false;
     p.state.capabilities = Capabilities{};
+    p.state.has_qualified_observation = false;
+    if (health_)
+      health_->healthConnection(i, config_.cameras[i].model, p.state.token, false, clock_.now());
   }
   p.state.lifecycle =
       p.current == Operation::Connect ? Lifecycle::Connecting : Lifecycle::Operating;
   p.state.deadline_ms = clock_.now() + policy_.timeout_ms;
+  if (health_)
+    health_->healthAttempt(i, p.current, p.state.token, p.active_intent_id, clock_.now());
   const bool delivered = transport_.begin(i, config_.cameras[i], p.current, p.state.token);
   if (audit_)
     audit_->attempt(i, p.current, p.state.token, p.active_intent_id, delivered);
@@ -147,9 +161,15 @@ void CameraManager::fail(size_t i, CameraError error) {
   p.completed_observation_open = false;
   if (audit_)
     audit_->failure(i, p.current, p.state.token, p.active_intent_id, error);
+  if (health_)
+    health_->healthFailure(i, p.state.token, p.state.attempts >= policy_.max_attempts,
+                           clock_.now());
   transport_.cancel(i, p.state.token);
-  if (p.current == Operation::Connect || p.state.attempts >= policy_.max_attempts)
+  if (p.current == Operation::Connect || p.state.attempts >= policy_.max_attempts) {
     transport_.close(i, p.state.token);
+    if (health_)
+      health_->healthConnection(i, config_.cameras[i].model, p.state.token, false, clock_.now());
+  }
   Token::advance(p.state.token.operation); // Late response is invalid even during backoff.
   p.state.error = error;
   p.state.observed = RecordingState::Unknown;
@@ -184,6 +204,8 @@ CameraError CameraManager::cancel(size_t i) {
   auto &p = peers_[i];
   if (!config_.cameras[i].enabled)
     return CameraError::Disabled;
+  if (health_)
+    health_->healthRetired(i, p.state.token, clock_.now());
   if (p.active)
     transport_.cancel(i, p.state.token);
   if (audit_ && p.active)
@@ -218,12 +240,18 @@ CameraError CameraManager::seal(size_t i) {
   state.desired = state.observed = RecordingState::Unknown;
   state.has_observation = false;
   state.capabilities = Capabilities{};
+  if (health_) {
+    health_->healthReset(i, state.token, clock_.now());
+    health_->healthConnection(i, CameraModel::Unknown, state.token, false, clock_.now());
+  }
   return CameraError::None;
 }
 void CameraManager::reset() {
   Token::advance(resets_);
   for (size_t i = 0; i < kMaxCameras; ++i) {
     auto &p = peers_[i];
+    if (health_)
+      health_->healthReset(i, p.state.token, clock_.now());
     if (audit_ && p.active)
       audit_->cancelled(i, p.current, p.state.token, p.active_intent_id);
     if (p.active)
@@ -237,6 +265,8 @@ void CameraManager::reset() {
     p = Peer{};
     p.state.token = t;
     p.next_intent_id = next_intent_id;
+    if (health_ && i < size())
+      health_->healthConnection(i, config_.cameras[i].model, t, false, clock_.now());
     if (i < size() && !config_.cameras[i].enabled)
       p.state.lifecycle = Lifecycle::Disabled;
   }
@@ -307,8 +337,12 @@ bool CameraManager::validateEvent(const Event &e, Peer *&peer, bool &connectionE
 bool CameraManager::handleCompleted(size_t peer, const Event &e, Peer &p) {
   if (!p.active)
     return false;
-  if (p.current == Operation::Connect)
+  if (p.current == Operation::Connect) {
     p.state.capabilities = e.capabilities;
+    if (health_)
+      health_->healthConnection(peer, config_.cameras[peer].model, p.state.token, true,
+                                clock_.now());
+  }
   p.completed_observation_open = p.current != Operation::Connect;
   p.completed_observation_deadline_ms = clock_.now() + kCompletedObservationMs;
   p.active = false;
@@ -321,8 +355,22 @@ bool CameraManager::handleCompleted(size_t peer, const Event &e, Peer &p) {
 bool CameraManager::handleObservation(const Event &e, Peer &p) {
   if (p.state.lifecycle == Lifecycle::Connecting)
     return false;
+  if (e.has_health) {
+    const auto &s = e.health;
+    const auto delta = s.sequence - p.state.observed_sequence;
+    if (s.field != HealthField::Recording || s.unit != HealthUnit::RecordingState ||
+        s.connection != p.state.token.connection || clock_.now() - s.received_ms >= 0x80000000UL ||
+        (s.validity == HealthValidity::Valid && s.value != static_cast<uint64_t>(e.recording)) ||
+        (p.state.has_qualified_observation &&
+         (!delta || delta >= 0x80000000UL ||
+          s.received_ms - p.state.qualified_received_ms >= 0x80000000UL)))
+      return false;
+    p.state.observed_sequence = s.sequence;
+    p.state.qualified_received_ms = s.received_ms;
+    p.state.has_qualified_observation = true;
+  }
   p.state.observed = e.recording;
-  p.state.last_observed_ms = clock_.now();
+  p.state.last_observed_ms = e.has_health ? e.health.received_ms : clock_.now();
   p.state.has_observation = true;
   return true;
 }
@@ -340,6 +388,10 @@ bool CameraManager::handleDisconnected(size_t peer, Peer &p) {
   p.state.observed = RecordingState::Unknown;
   p.state.has_observation = false;
   p.state.capabilities = Capabilities{};
+  p.state.has_qualified_observation = false;
+  if (health_)
+    health_->healthConnection(peer, config_.cameras[peer].model, p.state.token, false,
+                              clock_.now());
   return true;
 }
 
@@ -370,9 +422,19 @@ bool CameraManager::event(const Event &e) {
     return false;
   peer->state.last_seen_ms = clock_.now();
   peer->state.has_last_seen = true;
+  if (health_ && e.kind != EventKind::Failed)
+    health_->healthAccepted(e, operation, intent_id, clock_.now());
   if (audit_ && e.kind != EventKind::Failed)
     audit_->accepted(e, operation, intent_id);
   return true;
+}
+void CameraManager::admittedGroupIntent(size_t i, RecordingState state, uint32_t generation) {
+  if (health_ && i < size() && config_.cameras[i].enabled && !sealed(i))
+    health_->healthGroupIntent(i, state, generation, peers_[i].state.token, clock_.now());
+}
+void CameraManager::groupFailure(size_t i) {
+  if (health_ && i < size())
+    health_->healthFailure(i, peers_[i].state.token, true, clock_.now());
 }
 namespace {
 bool validAck(CameraAckDomain domain, CameraAckAction action) {
