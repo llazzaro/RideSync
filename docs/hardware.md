@@ -51,6 +51,15 @@ debounce and appropriate environmental protection. External RGB LED wiring and
 power conditioning are tracked by #30; button and LED firmware are #8 and #23. Validate startup straps, peripheral
 conflicts and modem supply current before wiring accessories.
 
+## Automatic power-event handling (#57)
+
+The [power-aware shutdown investigation](power_aware_shutdown.md) audits the
+V1.4 supply routes and existing teardown, proposes protected ACC sensing with
+independent power-fail/hold-up/cut-off hardware, and defines a finite software
+and physical verification plan. Automatic protection is deferred pending
+electrical and load measurements; no hold-up or SD durability is confirmed.
+Installation and cut observations remain with #30/#31.
+
 ## Planned motion logger hardware
 
 Acceleration and motorcycle lean/pitch logging require an external IMU with an
