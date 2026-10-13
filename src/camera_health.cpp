@@ -214,6 +214,8 @@ void CameraHealthEvaluator::configure(size_t i, CameraModel model, uint32_t conn
 void CameraHealthEvaluator::pollPeriod(size_t i, uint32_t period, uint32_t now) {
   if (i >= kMaxCameras)
     return;
+  // Metadata must not revive evidence that expired under the previous floor.
+  expire(i, now, false);
   peers_[i].minimum_poll_ms = period && period <= 30000 ? period : 0;
   expire(i, now, false);
   availability(i, now);

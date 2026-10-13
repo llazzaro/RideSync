@@ -244,6 +244,47 @@ void hero12_reconnect_requires_a_new_generation_qualified_poll_floor() {
   h.tick(61203);
   TEST_ASSERT_EQUAL(2, level(h, HealthReason::RecordingEvidenceLost));
 }
+void longer_poll_floor_cannot_revive_expired_observations_before_owner_tick() {
+  for (uint32_t late = 0; late <= 1; ++late) {
+    CameraHealthEvaluator h;
+    h.configure(0, CameraModel::HERO12_BLACK, 1, true, 0, 5000);
+    start(h);
+    TEST_ASSERT_TRUE(h.observe(0, sample(HealthField::Recording, 2, 0, 1), 0));
+    // Adapter metadata can arrive before the owner tick at or after the old TTL.
+    const uint32_t recording_now = 11000 + late;
+    h.pollPeriod(0, 30000, recording_now);
+    const auto &recording = h.snapshot(0)->fields[0];
+    TEST_ASSERT_EQUAL(static_cast<int>(HealthValidity::Unknown),
+                      static_cast<int>(recording.validity));
+    TEST_ASSERT_TRUE(recording.historical);
+    TEST_ASSERT_EQUAL_UINT64(2, recording.value);
+    TEST_ASSERT_EQUAL_UINT32(30000, h.snapshot(0)->minimum_poll_ms);
+    TEST_ASSERT_EQUAL(2, level(h, HealthReason::RecordingEvidenceLost));
+    TEST_ASSERT_TRUE(
+        h.observe(0, sample(HealthField::Recording, 2, recording_now + 1, 2), recording_now + 1));
+    TEST_ASSERT_EQUAL(static_cast<int>(HealthValidity::Valid),
+                      static_cast<int>(recording.validity));
+    TEST_ASSERT_EQUAL(0, level(h, HealthReason::RecordingEvidenceLost));
+
+    h.configure(1, CameraModel::HERO12_BLACK, 1, true, 0, 5000);
+    TEST_ASSERT_TRUE(h.observe(1, sample(HealthField::BatteryPercent, 5, 0, 1), 0));
+    const uint32_t resource_now = 31000 + late;
+    h.pollPeriod(1, 30000, resource_now);
+    const auto &battery = h.snapshot(1)->fields[static_cast<size_t>(HealthField::BatteryPercent)];
+    TEST_ASSERT_EQUAL(static_cast<int>(HealthValidity::Unknown),
+                      static_cast<int>(battery.validity));
+    TEST_ASSERT_TRUE(battery.historical);
+    TEST_ASSERT_EQUAL_UINT64(5, battery.value);
+    TEST_ASSERT_EQUAL(2, level(h, HealthReason::BatteryLow, 1));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(HealthSeverity::Critical),
+        static_cast<int>(h.snapshot(1)->alerts[static_cast<size_t>(HealthReason::BatteryLow)]));
+    TEST_ASSERT_TRUE(h.observe(1, sample(HealthField::BatteryPercent, 5, resource_now + 1, 2),
+                               resource_now + 1));
+    TEST_ASSERT_EQUAL(static_cast<int>(HealthValidity::Valid), static_cast<int>(battery.validity));
+    TEST_ASSERT_EQUAL(3, level(h, HealthReason::BatteryLow, 1));
+  }
+}
 void reset_retires_resource_faults_and_poll_floor_without_claiming_recovery() {
   CameraHealthEvaluator h;
   h.configure(0, CameraModel::HERO12_BLACK, 1, true, 0, 5000);
@@ -549,6 +590,7 @@ int main() {
   RUN_TEST(unsupported_monitoring_and_invalid_poll_period_are_explicit);
   RUN_TEST(reset_retirement_and_reconnect_require_current_generation);
   RUN_TEST(hero12_reconnect_requires_a_new_generation_qualified_poll_floor);
+  RUN_TEST(longer_poll_floor_cannot_revive_expired_observations_before_owner_tick);
   RUN_TEST(reset_retires_resource_faults_and_poll_floor_without_claiming_recovery);
   RUN_TEST(transition_ring_is_bounded_and_retains_current_fault);
   RUN_TEST(stale_fault_transition_names_the_unavailable_resource_and_keeps_history);

@@ -53,7 +53,8 @@ Qualified HERO12 resources use the design thresholds: battery warning <=20%,
 critical <=5%; ordinary-video remaining time warning <=300 s, critical <=60 s;
 source overheating true is critical. Hysteresis requires fresh distinct samples
 at least 5 s apart. Absent battery/unqualified mode does not become numeric zero.
-Each field expires independently. Previously critical resource history becomes
+Each field expires independently. A reported polling-period change cannot restore
+expired observations; a new qualified sample is required. Previously critical resource history becomes
 current Warning/Partial when stale, with historical severity retained; fresh
 qualified samples are needed for recovery. Reconnect requires a new qualified
 poll floor and new observations. Shutdown retires all reasons before logger finish,
@@ -101,7 +102,7 @@ exercise real version-7 serialization/parsing, malformed fields, combined existi
 rows and unchanged old-version bytes; pressure/lifetime checks use sanitizers.
 These are **Synthetic** results, not footage, notice-latency or thermal evidence.
 
-The isolated October 13 delivery snapshot passed 185 Python tests and 679 native
+The isolated October 13 delivery snapshot passed 185 Python tests and 680 native
 cases, including the common V6/V7 producer and session contracts, Linux C++
 portability, Python lint and C++ formatting. Pinned `hero12_adapter_compile` and
 `bench_application` builds passed; the resource probe measured 3952 bytes and
