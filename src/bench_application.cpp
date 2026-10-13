@@ -285,9 +285,11 @@ bool peersQualified(const BenchApplicationConfig &c) {
 bool powerQualified() {
   const auto &p = config.power_shutdown;
   const auto &b = config.power_backend;
+  const auto state = PowerShutdown(p).status(0);
+  if (!state.config_valid)
+    return false;
   if (!p.enabled)
     return !b.enabled && validateBenchPowerPins(config.pins, b);
-  const auto state = PowerShutdown(p).status(0);
   const uint64_t needed = uint64_t(p.acc_off_ms) + p.drain_ms + config.power_cut_margin_ms;
   return state.automatic_active && !p.voltage_enabled && config.power_cut_margin_ms &&
          config.power_cut_margin_ms < 0x80000000UL &&

@@ -86,8 +86,20 @@ int powerApplication(const std::string &mode) {
   const bool manual = mode == "power-manual-disabled";
   if (manual)
     config = {};
+  if (mode == "power-invalid-disabled" || mode == "power-invalid-enabled") {
+    config.enabled = mode == "power-invalid-enabled";
+    config.drain_ms = 0;
+  }
   SupervisedEsp32Application app(uart, spi, wire, q, QualifiedHandlebar{}, cameras, nullptr, config,
                                  &power);
+  if (mode == "power-invalid-disabled" || mode == "power-invalid-enabled") {
+    assert(!app.startupReady());
+    assert(!app.powerStatus().policy.config_valid);
+    assert(!app.requestShutdown() && !uart.writes);
+    assert(power.initializes == 0 && power.reads == 0 && power.offs == 0);
+    assert(!app.telemetry() && worker_threads.empty() && !mounts);
+    return 0;
+  }
   if (mode == "power-init-refusal" || mode == "power-read-refusal") {
     for (unsigned i = 0; i < 3; ++i) {
       assert(!app.startupReady());

@@ -371,7 +371,9 @@ The application owner's `startupReady` gate runs before worker policy preparatio
 and supervisor admission. Configuration receipt freezes independently so a
 legitimate two-second ignition wait cannot turn received settings into a timeout
 or consume the one-second required-worker startup grace. Launch checks readiness
-again before creating workers. Lost launch readiness is a terminal admission
+again before creating workers. Invalid policy timings refuse startup and backend
+IO even when automatic sensing is disabled, so an owner cannot admit logging
+with an unusable manual-drain policy. Lost launch readiness is a terminal admission
 refusal, not permission to retry automatically.
 
 `SupervisedEsp32Application` consumes power before each producer pass, retires
@@ -402,7 +404,7 @@ reused; no reset cause is treated as proof of a lost row or a supply fault.
 Software verification used an immutable snapshot of the staged power-only tree,
 so concurrent setup/health/bookmark edits were excluded from delivery evidence.
 The complete native suite passed **600 cases**, including 28 new policy cases.
-The real application composition suite passed with 15 power scenarios plus the
+The real application composition suite passed with 17 power scenarios plus the
 unchanged camera/session/reset scenarios; the added HERO12 fixture reached
 observed Recording, then verified no shutter STOP or post-seal Start/connect
 replay through actual adapter teardown. These are synthetic SDK observations.

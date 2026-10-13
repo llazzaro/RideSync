@@ -96,7 +96,8 @@ ApplicationPowerStatus SupervisedEsp32Application::powerStatus() const {
 void SupervisedEsp32Application::servicePower(bool manual) {
   const uint32_t now = millis();
   PowerObservation observation;
-  if (power_config_.enabled && power_config_.qualified && power_backend_) {
+  if (power_config_.enabled && power_config_.qualified && power_policy_.status(now).config_valid &&
+      power_backend_) {
     if (!power_initialized_) {
       power_initialized_ = true;
       power_backend_->initialize();
@@ -149,7 +150,7 @@ void SupervisedEsp32Application::servicePower(bool manual) {
 bool SupervisedEsp32Application::startupReady() {
   servicePower();
   const auto power = power_policy_.status(millis());
-  return !power_startup_refused_ && !power.sealed &&
+  return power.config_valid && !power_startup_refused_ && !power.sealed &&
          (!power_config_.enabled || (power.automatic_active && power.protected_ready));
 }
 bool SupervisedEsp32Application::requestShutdown() {
