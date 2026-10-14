@@ -227,3 +227,38 @@ in addition to the earlier confirmed first cycle. Clip playback, the third
 camera-observed cycle, observed reconnect/no-replay and production integration
 remain unconfirmed. The short-test process exited after disconnect; no camera
 operation remains scheduled or running.
+
+
+## Targeted wake advertisement: observed failure
+
+The owner requested power-off wake testing after confirming the short recording
+cycle. The retained, previously audited CE80 peripheral image was restored only
+after full on-device verification of the reconstructed current central backup.
+Its four upload regions were independently verified and NVS remained identical
+to the original baseline. The owner supplied the GO 3S's six-character camera
+identifier; it was loaded privately into RAM using W, with wake-only mode
+confirmed before asking for the observation window. No camera identifier is
+included in this report.
+
+One explicit GO submitted A. Advertising ran from boot time 318.812 s to
+321.831 s, then stopped at its finite deadline. All 16 events were reported,
+with zero dropped/truncated events, no connection, and no shutter operation.
+The owner answered “no” when asked whether the camera powered on. This is an
+observed failure of this particular source-derived three-second wake packet on
+GO 3S, not evidence that GO 3S lacks Bluetooth wake. Post-session NVS readback
+matched the preserved baseline byte for byte.
+
+The owner then confirmed that the Insta360 app could wake the powered-off
+camera. Official [app wake instructions](https://onlinemanual.insta360.com/app/en-us/operation-tutorial/camera-connection/bluetooth-wakeup)
+describe tapping Connect for a previously connected GO-series camera on either
+iOS or Android. The pinned Swift source exposes specific wake through the
+vendor SDK and also writes SDK-generated wake authorization data; its six-byte
+identifier encoding alone does not document the transmitted wake packet.
+Therefore, the successful X5/ONE RS wake layout is not qualified for GO 3S.
+
+A preliminary five-second passive Mac scan observed one distinct GO 3S candidate
+matching the owner's identifier. This is discovery evidence only; it does not
+prove ESP32 wake or that a BLE connection powers on the camera. The next
+prepared hypothesis test reuses the exact previously successful central image
+and attempts CONNECT/authorization followed by DISCONNECT, with no recording
+command. Its camera power-on observation remains pending.
