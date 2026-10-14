@@ -135,3 +135,40 @@ not a failed camera-level shutter command or a compatibility verdict. Recording
 and wake remain unperformed on the new image. Wait for explicit camera readiness
 before opening the next pairing window; do not automatically repeat it while
 the owner's camera-side preparation is unknown.
+
+## Legacy shutter attempt: Start observed, Stop unresolved
+
+On the same uploaded image, the owner replied "ready" after being asked for
+stopped video. A fresh L/H/A session connected at boot 3.383 seconds with MTU 23
+and without a subscription event. One S was admitted at 29.463 seconds; the
+addressed CE82 SDK submission returned zero at 29.467 seconds. The owner then
+answered "yes" when asked whether the camera displayed a running recording
+timer. This establishes one camera-observed Start in the isolated legacy trial.
+
+After that observation, a separate S was admitted at 91.235 seconds and its
+SDK submission returned zero at 91.237 seconds. When asked to verify Stop and
+playback, the owner replied "no it show and error. may be wrong command or
+somethung else failed." Exact error wording, actual stopped/running state and
+playback are unresolved. The link disconnected at 98.431 seconds with reason
+520 (`0x208`, HCI connection supervision timeout), before the capture deadline.
+Do not assign the camera error to the shutter bytes or SD without further
+evidence. Neither successful SDK submission completes the Stop hardware check.
+
+Incoming CE81 traffic stopped at boot 69.209 seconds, approximately 22 seconds
+before the Stop request. All 69 incoming writes were complete bounded copies;
+37 sixteen-byte messages appeared after Start. These are opaque observations,
+not a decoder or independent confirmation of stopped/running state. Final
+reports showed 90 events, zero drops/truncation, five admitted/returned SDK
+operations and no pending shutter/SDK work. No automatic shutter retry occurred.
+
+The owner requested a short Start/Stop retry. One session connected only at
+119.226 seconds, reached its finite deadline at 122.743 seconds and disconnected
+locally at 122.830 seconds. No shutter was sent; the owner's disconnected UI
+report is consistent with intentional probe cleanup. Two further requested
+advertising windows received no camera connection and expired without any
+shutter request. These unperformed shutter trials do not constitute camera-level
+command failures. Their repeated expiry motivated a separately tested ten-minute
+L-mode session correction; the original normal/wake limits remain unchanged.
+
+Start is Observed once on this assembly; Stop remains Not confirmed. Three full
+cycles, playback, reconnect/no-replay after control and ONE RS wake remain open.

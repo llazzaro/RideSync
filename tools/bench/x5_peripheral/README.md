@@ -33,6 +33,14 @@ NimBLE suppresses unchanged CCCD events: a zero write when CCCD is already zero
 is not reported and cannot revoke this explicit allowance. Legacy mode is an
 operator-selected addressed notification trial, not enforcement of CCCD consent.
 
+The L-selected normal ONE RS session has a ten-minute cap from A and can be
+ended explicitly with X. This avoids the default capture deadline disconnecting
+a camera just as manual pairing finishes. The GitHub ESP32 and M5 applications
+keep their BLE servers running; their two-minute demo-command timing is not a
+forced connection lifetime. This probe remains finite and stops on a real
+disconnect; a longer window is not a keep-alive protocol or proof of link
+reliability. Default capture and wake-only retain their original limits.
+
 For the ONE RS wake trial, use its independently checked last-six-character
 camera identifier and enable Bluetooth Wakeup in its camera settings before
 power-off. The official [ONE RS phone connection guide](https://onlinemanual.insta360.com/oners/en-us/camera/connect/phone)
@@ -114,6 +122,7 @@ the hardware/upload procedure; this implementation task performs neither.
 Serial is 115200 baud. Default boot is idle with no advertising. Commands:
 
 - `L`: select the experimental ONE RS legacy notification trial before A.
+  Normal ONE RS mode uses a ten-minute session; X can end it sooner.
   It performs no radio/store/shutter operation and is immutable after A.
   It permits each separately requested S on the current connected peer without
   pretending the camera enabled notifications. Actual subscription, stop,
@@ -122,7 +131,8 @@ Serial is 115200 baud. Default boot is idle with no advertising. Commands:
   on the camera before the first S and observe each result before another S.
 
 - `A`: one advertising/capture attempt per boot, including failed startup.
-  The window is 120000 ms from A; stack synchronization/advertising startup
+  The window is 120000 ms from A by default, or 600000 ms in normal L-selected
+  ONE RS mode; stack synchronization/advertising startup
   must complete within the 15000 ms policy limit. A retained SDK owner handles
   startup, advertising preparation/start and cleanup; delayed SDK work cannot
   hold the control loop's deadline service or serial reporting. After preparation,

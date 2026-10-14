@@ -51,18 +51,19 @@ struct Stats {
 class Capture {
 public:
   static constexpr uint32_t kStartupMs = 15000, kWindowMs = 120000;
-  bool begin(uint32_t now) {
+  bool begin(uint32_t now, bool one_rs_session = false) {
     if (used_)
       return false;
     used_ = active_ = true;
     began_ = now;
+    window_ms_ = one_rs_session ? 600000 : kWindowMs;
     return true;
   }
   void ready() { ready_ = true; }
   void tick(uint32_t now) {
     if (!active_)
       return;
-    if (uint32_t(now - began_) >= kWindowMs)
+    if (uint32_t(now - began_) >= window_ms_)
       stop(StopReason::Deadline);
     else if (!ready_ && uint32_t(now - began_) >= kStartupMs)
       stop(StopReason::StartupTimeout);
@@ -111,7 +112,7 @@ public:
   bool active() const { return active_; }
   uint32_t remaining(uint32_t now) const {
     const uint32_t elapsed = now - began_;
-    return active_ && elapsed < kWindowMs ? kWindowMs - elapsed : 0;
+    return active_ && elapsed < window_ms_ ? window_ms_ - elapsed : 0;
   }
   StopReason reason() const { return reason_; }
   const Stats &stats() const { return stats_; }
@@ -122,7 +123,7 @@ private:
   Event queue_[kSlots];
   Stats stats_;
   unsigned head_ = 0, count_ = 0;
-  uint32_t began_ = 0;
+  uint32_t began_ = 0, window_ms_ = kWindowMs;
   bool used_ = false, active_ = false, ready_ = false;
   StopReason reason_ = StopReason::None;
 };

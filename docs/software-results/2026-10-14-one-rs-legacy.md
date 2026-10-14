@@ -64,3 +64,37 @@ Three observed recording cycles, playable footage, reconnect/no
 replay and ONE RS wake remain unperformed. Existing X5 observations do not pass
 those ONE RS checks. The source-qualified ordinary-360 BE80 production adapter
 and its model qualification remain unchanged.
+
+## Session lifetime correction
+
+The owner subsequently asked how the GitHub implementations keep the remote
+connected after repeated manual pairing windows expired. The pinned ESP32
+example's `CAPTURE_DELAY` controls its automatic demonstration commands; it
+does not terminate the BLE server. The M5 implementation keeps its server
+running and restarts normal advertising on disconnect. The Go CLI's remote
+start action waits for context cancellation. No periodic CE80 keep-alive packet
+was found in these inspected control loops. Their continuous server lifecycle
+does not establish ONE RS reliability or explain the separately observed HCI
+connection timeout.
+
+The explicitly selected L-mode normal session now has a ten-minute bound and
+manual X shutdown. `Capture::tick` and its SDK advertising-duration admission
+use the same selected window. Default capture remains two minutes; W/A retains
+its existing three-second wake slice and original capture bound even if L was
+selected. Startup still expires at 15 seconds. A real disconnect ends the
+attempt, and no pending recording command is retained or replayed.
+
+The new session test failed at the original two-minute boundary after the new
+interface was introduced, then passed with selected-window expiry/remaining.
+It verifies ten-minute expiry, startup refusal, manual stop, timestamp wrap and
+single-use admission. The full pipeline passed again (217 Python tests,
+700 native cases, finite bench tests, portability, Ruff and formatting).
+Pinned probe build and final-ELF audit passed, using RAM 45,420 bytes and flash
+574,669 bytes. Independent review found no actionable issue, and graphify was
+updated. The new firmware SHA256 is
+`dac864e592ccf2af946dde6f35c4f497bac138cfc64955d2d8d95458b0a60da8`.
+
+This corrects intentional early shutdown during the interactive test; it is
+not a perpetual-connection implementation, an invented handshake, or a pass
+for Stop, reconnect/no-replay or wake. The owner-confirmed Start and camera
+error/timeout during the first Stop are recorded in the hardware report.

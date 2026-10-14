@@ -148,6 +148,35 @@ static void test_one_rs_legacy_cancellation() {
   }
 }
 
+static void test_one_rs_session_window() {
+  Capture capture;
+  assert(capture.begin(0, true));
+  capture.ready();
+  capture.tick(120000);
+  assert(capture.active());
+  assert(capture.remaining(120000) == 480000);
+  capture.tick(599999);
+  assert(capture.active());
+  capture.tick(600000);
+  assert(!capture.active());
+  assert(capture.remaining(600000) == 0);
+  assert(capture.reason() == StopReason::Deadline);
+  assert(!capture.begin(600001, true));
+
+  Capture startup;
+  assert(startup.begin(0, true));
+  startup.tick(15000);
+  assert(startup.reason() == StopReason::StartupTimeout);
+
+  Capture stopped;
+  assert(stopped.begin(UINT32_MAX - 100000, true));
+  stopped.ready();
+  stopped.tick(19999);
+  assert(stopped.active());
+  stopped.stop(StopReason::Requested);
+  assert(!stopped.active() && stopped.remaining(20000) == 0);
+}
+
 static void test_shutter_cancel_before_submission() {
   for (unsigned scenario = 0; scenario < 4; ++scenario) {
     Capture capture;
@@ -419,6 +448,7 @@ int main() {
   test_shutter_admission();
   test_one_rs_explicit_legacy_shutter();
   test_one_rs_legacy_cancellation();
+  test_one_rs_session_window();
   test_shutter_cancel_before_submission();
   test_shutter_cancel_after_acceptance();
   test_late_sync_after_cancel();

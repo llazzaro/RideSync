@@ -520,7 +520,7 @@ void setup() {
   Serial.setTxBufferSize(2048);
   Serial.begin(115200);
   esp_log_level_set("*", ESP_LOG_NONE); // No SDK peer addresses/credentials in output.
-  const char banner[] = "X5_PROBE: A once=capture120s X=stop L=idle ONE_RS legacy opt-in "
+  const char banner[] = "X5_PROBE: A once=default120s X=stop L=idle ONE_RS legacy10min opt-in "
                         "S=ONE shutter toggle after observation "
                         "W+6ASCII+LF=idle wake-only3s H=private sensitive hex; recording UNKNOWN\n";
   emit(banner, sizeof(banner) - 1);
@@ -545,7 +545,7 @@ void beginCapture(uint32_t now) {
   bool begin;
   {
     Lock lock;
-    begin = wake.allowBegin() && capture.begin(now);
+    begin = wake.allowBegin() && capture.begin(now, one_rs_legacy && !wake.enabled());
     if (begin)
       sdk_control.begin(SdkAction::Startup);
   }
