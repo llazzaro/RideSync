@@ -72,8 +72,8 @@ passing synthetic tests does not promote a camera to Confirmed.
 | Feature | Insta360 | GoPro | DJI Osmo |
 |---|---|---|---|
 | BLE connect | X5: Observed (isolated CE80 probe); ONE RS: Observed (isolated 4K Boost trial); GO 3S: Not tested | Not tested | Not tested |
-| Start recording | X5: Observed in three cycles (isolated probe, 1.11.10); ONE RS: Observed once (isolated legacy trial); GO 3S: Not tested | Not tested | Not tested |
-| Stop recording | X5: Observed in three cycles (isolated probe, 1.11.10); ONE RS: Not confirmed (camera error); GO 3S: Not tested | Not tested | Not tested |
+| Start recording | X5: Observed in three cycles (isolated probe, 1.11.10); ONE RS: Observed (one successful isolated legacy cycle); GO 3S: Not tested | Not tested | Not tested |
+| Stop recording | X5: Observed in three cycles (isolated probe, 1.11.10); ONE RS: Observed (one successful isolated legacy cycle); GO 3S: Not tested | Not tested | Not tested |
 | Wake | X5: Observed once (isolated probe); GO 3S / ONE RS: Not tested | Not tested | Outside scope |
 | GPS telemetry | Not tested | Outside scope | Outside scope |
 
@@ -83,9 +83,10 @@ Tested cameras (isolated probes):
   reconnect on firmware **1.11.10**, plus one observed wake. Final composed
   hardware qualification remains pending.
 - **Insta360 ONE RS Core + 4K Boost Lens**, firmware **v2.0.11.4**:
-  discovery/connection and one remote Start observed in the isolated legacy
-  CE80 trial. The Stop check produced a camera error and the link subsequently
-  timed out; playback and three complete cycles remain unverified. See the
+  discovery/connection, one successful remote Start/Stop cycle and saved-clip
+  playback observed in the isolated legacy CE80 trial. An earlier Stop check
+  produced a camera error and link timeout; its cause remains unresolved.
+  Three complete cycles and production qualification remain pending. See the
   [ONE RS hardware report](docs/hardware-results/2026-10-14-one-rs-4k-pairing.md).
 
 The Insta360 column covers X5, GO 3S and ONE RS; the GoPro column covers HERO12 Black.

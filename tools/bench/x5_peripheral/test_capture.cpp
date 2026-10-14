@@ -177,6 +177,36 @@ static void test_one_rs_session_window() {
   assert(!stopped.active() && stopped.remaining(20000) == 0);
 }
 
+static void test_one_rs_start_stop_after_old_deadline() {
+  Capture capture;
+  SdkControl sdk;
+  ShutterControl shutter;
+  assert(capture.begin(0, true));
+  capture.ready();
+  shutter.connected(7);
+  assert(shutter.legacyCompatibility(7, 18));
+  assert(!shutter.subscribed());
+  uint16_t conn = 0xffff, attr = 0;
+  assert(!shutter.admit(capture, sdk, 120000, conn, attr)); // Connect alone cannot send.
+  assert(shutter.request(capture, sdk, 120001));
+  assert(shutter.admit(capture, sdk, 120002, conn, attr));
+  assert(conn == 7 && attr == 18);
+  sdk.complete(0);
+  assert(!shutter.admit(capture, sdk, 120003, conn, attr));
+  // A separately requested Stop toggle must remain possible on the same
+  // unsubscribed link, without another opt-in or connection/reset.
+  assert(shutter.request(capture, sdk, 180001));
+  assert(shutter.admit(capture, sdk, 180002, conn, attr));
+  assert(conn == 7 && attr == 18);
+  sdk.complete(0);
+  assert(!shutter.subscribed());
+  assert(sdk.snapshot().accepted == 2 && sdk.snapshot().returned == 2);
+  assert(!shutter.admit(capture, sdk, 180003, conn, attr));
+  shutter.disconnected();
+  shutter.connected(7);
+  assert(!shutter.request(capture, sdk, 180004)); // Reused handle cannot replay/grant control.
+}
+
 static void test_shutter_cancel_before_submission() {
   for (unsigned scenario = 0; scenario < 4; ++scenario) {
     Capture capture;
@@ -449,6 +479,7 @@ int main() {
   test_one_rs_explicit_legacy_shutter();
   test_one_rs_legacy_cancellation();
   test_one_rs_session_window();
+  test_one_rs_start_stop_after_old_deadline();
   test_shutter_cancel_before_submission();
   test_shutter_cancel_after_acceptance();
   test_late_sync_after_cancel();

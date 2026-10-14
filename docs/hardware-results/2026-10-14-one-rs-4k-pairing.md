@@ -172,3 +172,47 @@ L-mode session correction; the original normal/wake limits remain unchanged.
 
 Start is Observed once on this assembly; Stop remains Not confirmed. Three full
 cycles, playback, reconnect/no-replay after control and ONE RS wake remain open.
+
+## Ten-minute image: successful Start/Stop and playback
+
+The longer-session image at `24d9e13` was uploaded with firmware SHA256
+`dac864e592ccf2af946dde6f35c4f497bac138cfc64955d2d8d95458b0a60da8`.
+A fresh full-flash backup of the installed legacy image was required before
+upload. Its first 460800-baud read failed with corrupt transfer data and was
+retained as an incomplete read, not accepted as a backup. A new 230400-baud
+read completed and verified against the device. NVS still matched the earlier
+baseline. All four new written regions were independently verified, and
+post-upload NVS remained byte-identical. No erase/recommissioning was used.
+
+One fresh L/H/A session synchronized at boot 2.983 seconds. The Mac independently
+observed `Insta360 GPS Remote` advertising CE80 while the camera was not yet
+connected. Probe reports remained active/advertising beyond the old two-minute
+boundary. The camera connected at 165.140 seconds with MTU 23 and no subscription
+event; the owner reported "now is fixed" after the connected/stopped preparation
+request. No shutter was sent automatically on connection.
+
+One manual S was admitted at 225.652 seconds and its addressed CE82 SDK send
+returned zero at 225.662 seconds. The owner answered "yes" to the running
+recording-timer question. A separate S was admitted at 285.660 seconds and its
+send returned zero at 285.664 seconds. The owner answered "yes" when asked
+whether recording stopped without an error, then "yes" when asked whether the
+new saved clip played correctly. This establishes one successful camera-observed
+Start/Stop cycle with playable footage on the declared ONE RS 4K Boost firmware.
+Owner reply times are not exact camera-action timestamps. Firmware recording
+remained Unknown; no ACK/state decode was fabricated from the SDK results.
+
+The peer disconnected at 391.048 seconds with reason 531 (remote user
+termination), before the ten-minute deadline, and the probe retired normally.
+The owner had been inspecting playback and Camera Info; exact physical action
+timing/cause is unresolved. Final capture contained 134 events with zero
+dropped/truncated events and two shutter requests/results. The owner-provided
+wake identifier independently matched the camera's private incoming identifier;
+its value and raw captures remain outside Git. The owner confirmed Bluetooth
+Wakeup enabled; a powered-off wake observation is still pending.
+
+The owner requested committing this working result and additional regression
+tests. Preserve the earlier error/timeout rather than reclassifying it as a
+pass. Three complete cycles and explicit reconnect/no-replay still remain
+unchecked in #46/#22; this one cycle does not qualify production or a reliability
+campaign. Software CI for `24d9e13` passed in
+[run 38541557108](https://github.com/llazzaro/RideSync/actions/runs/38541557108).

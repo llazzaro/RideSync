@@ -98,3 +98,28 @@ This corrects intentional early shutdown during the interactive test; it is
 not a perpetual-connection implementation, an invented handshake, or a pass
 for Stop, reconnect/no-replay or wake. The owner-confirmed Start and camera
 error/timeout during the first Stop are recorded in the hardware report.
+
+## Owner-requested regression tests after successful camera cycle
+
+After confirming Start, Stop without error and playable saved footage on the
+longer image, the owner requested a commit and additional regression coverage.
+The firmware change was already committed in `24d9e13`; its
+[CI run](https://github.com/llazzaro/RideSync/actions/runs/38541557108) completed
+successfully. The additional test-only change covers:
+
+- Two separately requested shutter submissions on the same unsubscribed legacy
+  link after the old two-minute deadline, without opt-in repetition or reset.
+  Connection alone and repeated admission without a fresh request send nothing;
+  disconnect/reused connection handles cannot inherit control or replay work.
+- The actual `beginCapture` and `dispatchCommand` bodies: L before A selects
+  ten minutes, default/late L retain two minutes, L+W retains wake-only bounds,
+  and X terminates the session without triggering a shutter.
+
+All three focused host tests passed, along with Ruff and source formatting.
+Temporary mutations outside the production checkout demonstrated that clearing
+legacy admission after the first send breaks the Stop regression, and ignoring
+L in the actual entry point breaks the session-window regression. Independent
+review found no actionable issue. Graphify was updated. Production firmware
+did not change; reuse the existing pinned build, full pipeline and hardware
+image evidence. These automated checks validate policy/routing, not physical
+recording-state semantics or wake success.
