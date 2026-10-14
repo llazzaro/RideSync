@@ -96,6 +96,58 @@ static void test_shutter_admission() {
   assert(!shutter.admit(capture, sdk, 11, conn, attr));
 }
 
+static void test_one_rs_explicit_legacy_shutter() {
+  Capture capture;
+  SdkControl sdk;
+  ShutterControl shutter;
+  assert(capture.begin(0));
+  capture.ready();
+  shutter.connected(7);
+  assert(!shutter.request(capture, sdk, 1));
+  assert(!shutter.legacyCompatibility(8, 18)); // Only the current connected peer.
+  assert(!shutter.legacyCompatibility(7, 0));
+  assert(shutter.legacyCompatibility(7, 18));
+  assert(!shutter.subscribed()); // Compatibility never manufactures a subscription.
+  assert(shutter.request(capture, sdk, 2));
+  uint16_t conn = 0xffff, attr = 0;
+  assert(shutter.admit(capture, sdk, 3, conn, attr));
+  assert(conn == 7 && attr == 18);
+  sdk.complete(0);
+  assert(!shutter.admit(capture, sdk, 4, conn, attr)); // No replay.
+  shutter.disconnected();
+  shutter.connected(9);
+  assert(!shutter.request(capture, sdk, 5)); // A different link must be opted in anew.
+}
+
+static void test_one_rs_legacy_cancellation() {
+  for (unsigned scenario = 0; scenario < 5; ++scenario) {
+    Capture capture;
+    SdkControl sdk;
+    ShutterControl shutter;
+    assert(capture.begin(0));
+    capture.ready();
+    shutter.connected(7);
+    assert(shutter.legacyCompatibility(7, 18));
+    assert(shutter.request(capture, sdk, 1));
+    uint32_t now = 2;
+    if (scenario == 0) {
+      capture.stop(StopReason::Requested);
+      sdk.requestStop();
+    } else if (scenario == 1)
+      now = Capture::kWindowMs;
+    else if (scenario == 2)
+      shutter.disconnected();
+    else if (scenario == 3)
+      shutter.subscription(7, 18, false); // Explicit client refusal wins.
+    else
+      shutter.cancel(); // Includes allocation failure.
+    uint16_t conn = 0xffff, attr = 0;
+    assert(!shutter.admit(capture, sdk, now, conn, attr));
+    assert(!shutter.pending());
+    assert(sdk.snapshot().accepted == 0);
+  }
+}
+
 static void test_shutter_cancel_before_submission() {
   for (unsigned scenario = 0; scenario < 4; ++scenario) {
     Capture capture;
@@ -365,6 +417,8 @@ int main() {
   assert(shutter_bytes.size() == sizeof(expected));
   assert(std::memcmp(shutter_bytes.data(), expected, sizeof(expected)) == 0);
   test_shutter_admission();
+  test_one_rs_explicit_legacy_shutter();
+  test_one_rs_legacy_cancellation();
   test_shutter_cancel_before_submission();
   test_shutter_cancel_after_acceptance();
   test_late_sync_after_cancel();

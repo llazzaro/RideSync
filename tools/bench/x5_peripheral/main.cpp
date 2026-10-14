@@ -32,7 +32,7 @@ SdkControl sdk_control; // Sticky stop admission and retained submission/publica
 ShutterControl shutter;
 portMUX_TYPE capture_lock = portMUX_INITIALIZER_UNLOCKED;
 uint16_t connection = BLE_HS_CONN_HANDLE_NONE;
-bool host_synced = false, private_hex = false;
+bool host_synced = false, private_hex = false, one_rs_legacy = false;
 bool stop_reported = false;
 uint32_t last_summary = 0;
 
@@ -137,6 +137,8 @@ void connected(ble_gap_event *event) {
     Lock lock;
     connection = conn;
     shutter.connected(conn);
+    if (one_rs_legacy && wake.shutterAllowed())
+      shutter.legacyCompatibility(conn, attributes[1].handle);
   }
   ble_gap_conn_desc info{};
   const int rc = ble_gap_conn_find(conn, &info);
@@ -518,9 +520,9 @@ void setup() {
   Serial.setTxBufferSize(2048);
   Serial.begin(115200);
   esp_log_level_set("*", ESP_LOG_NONE); // No SDK peer addresses/credentials in output.
-  const char banner[] =
-      "X5_PROBE: A once=capture120s X=stop S=ONE shutter toggle after observation "
-      "W+6ASCII+LF=idle wake-only3s H=private sensitive hex; recording UNKNOWN\n";
+  const char banner[] = "X5_PROBE: A once=capture120s X=stop L=idle ONE_RS legacy opt-in "
+                        "S=ONE shutter toggle after observation "
+                        "W+6ASCII+LF=idle wake-only3s H=private sensitive hex; recording UNKNOWN\n";
   emit(banner, sizeof(banner) - 1);
 }
 int readCommand() {
@@ -585,6 +587,12 @@ void dispatchCommand(int command, uint32_t now) {
   case 'H':
     private_hex = true; // Explicit opt-in. Never print SM keys/passkeys.
     break;
+  case 'L': {
+    Lock lock;
+    if (!capture.used())
+      one_rs_legacy = true; // Immutable after A; no radio or shutter side effect.
+    break;
+  }
   default:
     break;
   }
@@ -664,13 +672,14 @@ void reportSummary(uint32_t now, const LoopState &state, char (&line)[768]) {
     Stats stats;
     SdkPublication sdk;
     unsigned depth;
-    bool shutter_pending;
+    bool shutter_pending, subscribed;
     {
       Lock lock;
       stats = capture.stats();
       depth = capture.queued();
       sdk = sdk_control.snapshot();
       shutter_pending = shutter.pending();
+      subscribed = shutter.subscribed();
     }
     const auto nvs = nvsRefusals();
     const int n = snprintf(
@@ -678,7 +687,7 @@ void reportSummary(uint32_t now, const LoopState &state, char (&line)[768]) {
         "X5_PROBE: boot_ms=%lu used=%u active=%u synced=%u advertising=%u conn=%u stop=%u hex=%u "
         "seen=%lu reported=%lu queued=%u dropped=%lu truncated=%lu "
         "sdk_stop=%u sdk_inflight=%u sdk_op=%u sdk_ops_admitted/returned=%lu/%lu "
-        "sdk_last_op/rc=%u/%d shutter_pending=%u wake_only=%u "
+        "sdk_last_op/rc=%u/%d shutter_pending=%u wake_only=%u one_rs_legacy=%u subscribed=%u "
         "nvs_refused_init/open/erase=%lu/%lu/%lu recording=UNKNOWN kind_counts=",
         static_cast<unsigned long>(now), state.used, state.active, state.synced,
         state.synced ? unsigned(ble_gap_adv_active()) : 0, state.conn, unsigned(state.reason),
@@ -688,8 +697,8 @@ void reportSummary(uint32_t now, const LoopState &state, char (&line)[768]) {
         sdk.stop_requested, sdk.in_flight, unsigned(sdk.action),
         static_cast<unsigned long>(sdk.accepted), static_cast<unsigned long>(sdk.returned),
         unsigned(sdk.last_returned_action), sdk.last_status, shutter_pending, wake.enabled(),
-        static_cast<unsigned long>(nvs.init), static_cast<unsigned long>(nvs.open),
-        static_cast<unsigned long>(nvs.erase));
+        one_rs_legacy, subscribed, static_cast<unsigned long>(nvs.init),
+        static_cast<unsigned long>(nvs.open), static_cast<unsigned long>(nvs.erase));
     if (n > 0 && size_t(n) < sizeof(line))
       reportKindCounts(line, size_t(n), stats);
   }

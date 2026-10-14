@@ -10,6 +10,39 @@ Connection, subscription or successful ATT access alone does not prove that
 the X5 has paired or supports this profile. A camera-side pairing indication,
 firmware version and separately annotated private capture are still required.
 
+The same isolated probe now offers an explicit, default-off ONE RS legacy
+notification trial. The owner's ONE RS Core + 4K Boost Lens on v2.0.11.4 remained
+connected and wrote CE81 traffic without a CE82 subscription event; the normal
+probe therefore refused S. Idle-only `L`, followed by `A`, opts that boot into
+addressed shutter submission to the actual connected peer and registered CE82
+handle without a subscription event. This is a compatibility hypothesis, not
+qualified recording support. `subscribed` reports only actual client subscription;
+`one_rs_legacy` reports the independently selected trial option. Recording remains
+Unknown. Never configure this assembly as X5 or the ordinary-360 BE80 target.
+
+This trial is based on the pinned MIT ESP32 example's BLE2902 notification
+initialization and the pinned MIT M5 example's direct addressed notification
+API. The pinned NimBLE `ble_gatts_notify_custom` sends to the supplied handle
+without inspecting CCCD subscription. No SDK/CCCD state is patched or synthetic
+subscription event generated. Default admission still requires subscription;
+an SDK-reported client unsubscribe cancels and revokes the legacy allowance on that
+link. Disconnect clears the allowance and pending operation. A new connection
+in the explicitly selected boot mode grants only fresh manual S admission,
+never a previous command replay. Wake-only mode always refuses shutter.
+NimBLE suppresses unchanged CCCD events: a zero write when CCCD is already zero
+is not reported and cannot revoke this explicit allowance. Legacy mode is an
+operator-selected addressed notification trial, not enforcement of CCCD consent.
+
+For the ONE RS wake trial, use its independently checked last-six-character
+camera identifier and enable Bluetooth Wakeup in its camera settings before
+power-off. The official [ONE RS phone connection guide](https://onlinemanual.insta360.com/oners/en-us/camera/connect/phone)
+identifies that name suffix as the last six serial characters; do not substitute
+a BLE address. Use the existing idle-only W + identifier + LF, then A, for one
+three-second wake advertisement. L is unnecessary in wake-only mode. Observe
+actual camera power-on separately from advertising/connection. This uses the
+existing experimental source-derived wake layout and does not establish that
+this ONE RS assembly wakes until the physical observation passes.
+
 No modem/SD/IMU GPIO, filesystem, production startup or persistent bond storage
 is linked. Pinned ESP32/Arduino packages match the root project; NimBLE-Arduino
 is pinned at `dfb4ac561a06797081be9e752902a6582e7f029e` (2.3.6).
@@ -80,6 +113,14 @@ the hardware/upload procedure; this implementation task performs neither.
 
 Serial is 115200 baud. Default boot is idle with no advertising. Commands:
 
+- `L`: select the experimental ONE RS legacy notification trial before A.
+  It performs no radio/store/shutter operation and is immutable after A.
+  It permits each separately requested S on the current connected peer without
+  pretending the camera enabled notifications. Actual subscription, stop,
+  deadline, SDK-owner and disconnect outcomes remain independently reported.
+  A reported unsubscribe wins over this allowance. Confirm stopped normal video
+  on the camera before the first S and observe each result before another S.
+
 - `A`: one advertising/capture attempt per boot, including failed startup.
   The window is 120000 ms from A; stack synchronization/advertising startup
   must complete within the 15000 ms policy limit. A retained SDK owner handles
@@ -105,7 +146,8 @@ Serial is 115200 baud. Default boot is idle with no advertising. Commands:
   X before A does not consume the attempt. After an attempt, reset is required
   for another A. Actual disconnection is a separate SDK event.
 - `S`: request exactly one CE82 shutter event. Admission requires the active
-  finite window in normal mode, a current connected peer, its current CE82 notify subscription,
+  finite window in normal mode, a current connected peer, its current CE82 notify subscription
+  or the explicit L legacy allowance,
   and an idle SDK owner with no pending shutter request/stop. One pending slot;
   refused/busy requests are discarded. After preparing an SDK-owned mbuf the
   owner revalidates current time, peer, subscription and stop at submission.

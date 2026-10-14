@@ -28,7 +28,7 @@ Capture capture;
 SdkControl sdk_control;
 ShutterControl shutter;
 struct Wake { bool enabled() const { return false; } } wake;
-bool private_hex = false;
+bool private_hex = false, one_rs_legacy = false;
 uint32_t last_summary = 0;
 Refusals nvsRefusals() { return {}; }
 bool ble_gap_adv_active() { return false; }

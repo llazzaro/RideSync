@@ -196,12 +196,24 @@ public:
     cancel();
     connection_ = 0xffff;
     attribute_ = 0;
+    legacy_attribute_ = 0;
   }
+  // Source-backed, explicitly opted-in addressed notification. Does not change
+  // CCCD/subscription state. Reset on disconnect or actual client unsubscribe.
+  bool legacyCompatibility(uint16_t connection, uint16_t attribute) {
+    if (connection == 0xffff || connection != connection_ || attribute == 0 || pending_)
+      return false;
+    legacy_attribute_ = attribute;
+    return true;
+  }
+  bool subscribed() const { return attribute_ != 0; }
   void subscription(uint16_t connection, uint16_t attribute, bool notify) {
     if (connection != connection_)
       return;
     if (!notify || attribute != attribute_)
       cancel();
+    if (!notify)
+      legacy_attribute_ = 0;
     attribute_ = notify ? attribute : 0;
   }
   bool request(Capture &capture, const SdkControl &sdk, uint32_t now) {
@@ -217,7 +229,7 @@ public:
     if (!submit || !sdk.begin(SdkAction::Shutter))
       return false;
     connection = connection_;
-    attribute = attribute_;
+    attribute = attribute_ ? attribute_ : legacy_attribute_;
     return true;
   }
   void cancel() { pending_ = false; }
@@ -228,9 +240,9 @@ private:
     capture.tick(now);
     const auto state = sdk.snapshot();
     return capture.active() && !state.stop_requested && !state.in_flight && connection_ != 0xffff &&
-           attribute_ != 0;
+           (attribute_ != 0 || legacy_attribute_ != 0);
   }
-  uint16_t connection_ = 0xffff, attribute_ = 0;
+  uint16_t connection_ = 0xffff, attribute_ = 0, legacy_attribute_ = 0;
   bool pending_ = false;
 };
 inline bool canReport(size_t length, size_t available) { return length && length <= available; }
