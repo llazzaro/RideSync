@@ -66,3 +66,22 @@ Remote in the app's accessory search. Preserve unknown recording state and
 existing bonds; do not silently loosen production security checks or borrow
 other camera models' status fields. Prepare an audited idle diagnostic before
 asking the owner to power on the camera again.
+
+## Later source and local evidence reconciliation
+
+Pinned [authorization.proto](https://github.com/xaionaro-go/insta360ctl/blob/f94193ce03c5af0921a9992bfd1af6bd946150d0/pkg/protocol/protobuf/authorization.proto)
+at `f94193ce03c5af0921a9992bfd1af6bd946150d0` provides a stronger concrete schema
+than the earlier prose description: initiator_type is field 3; field 2 is an
+optional Find My string. Its response enum maps 1 to Authorized, 2 to Not
+Authorized, 3 to Pending, 4 to Denied and 5 to Expired. Do not use the conflicting
+enum numbering in the earlier mutable prose document.
+
+The [later local run](hardware-results/2026-10-14-go3s-handshake.md#proactive-direct-sync-and-authorization-check)
+observed a matching status-200 CheckAuth reply with field 1 value 1 after
+proactive SYNC. This supports authorization for that isolated run, while
+recording and the production security/commissioning path remain unverified.
+The first proactive diagnostic still used the older field-2 tag; its subsequent
+idle receive-queue overflow was an instrumentation defect. A new private probe
+corrects the tag and continuous receive handling before further camera testing.
+These wire facts were implemented independently; no upstream generated code or
+proprietary SDK binary was copied into RideSync.

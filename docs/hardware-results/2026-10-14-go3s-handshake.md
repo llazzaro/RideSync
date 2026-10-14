@@ -120,3 +120,35 @@ statement about the final BE80 probe describes that earlier phase only.
 See [subsequent pinned GitHub research](../go3s_pairing_research.md) for distinct
 handshake and phone-authorization leads. Those sources do not turn either
 failed local trial into successful control.
+
+## Proactive direct SYNC and authorization check
+
+The owner next powered the GO 3S on in normal idle mode. The new direct ESP32
+probe, based on the pinned Kotlin handshake, connected and rediscovered BE80,
+BE81 and BE82. MTU negotiation returned 247. Immediately after subscribing, it
+wrote ten alternating AB/BA bytes; a CRC-valid 17-byte camera SYNC followed.
+A CheckAuth request then received a valid, sequence-1-correlated status-200
+response. Its protobuf body contained field 1 varint value 1.
+
+The subsequently reviewed [pinned authorization schema](https://github.com/xaionaro-go/insta360ctl/blob/f94193ce03c5af0921a9992bfd1af6bd946150d0/pkg/protocol/protobuf/authorization.proto)
+identifies that response value as Authorized. This is positive camera
+protocol authorization evidence in the isolated, unencrypted/unbonded diagnostic.
+There was no owner-observed approval prompt, no REC/STOP command, and no claim
+of production security qualification or recording support.
+
+After the check returned, the temporary probe's idle loop failed to drain its
+notification queue. The queue overflowed; a later summary recorded 98 drops.
+Those missing events cannot be reconstructed or used as state evidence. The
+link later ended with reason 531. The owner was told the camera could be turned
+off while preparing a corrected diagnostic. NVS readback again matched the
+retained baseline. This is a probe defect, not evidence of a camera defect.
+
+The pinned schema also identifies initiator_type as field 3, whereas the older
+community packet builder used field 2. The just-observed request therefore did
+not establish the intended user-initiated field, despite its positive reply.
+The prepared replacement uses field 3, drains notifications continuously,
+requires the exact observed positive authorization body as well as the correlated
+ACK before manual control, and uses source-backed idle CheckAuth keepalive.
+Native literal-packet, wrong-state/sequence, CRC and truncation checks passed;
+its physical behavior still requires the next run. The production GO 3S codec
+and adapter have not yet been changed based on these experimental results.
