@@ -252,3 +252,24 @@ byte and reset the ESP32 to idle, without advertising or replay. Initial softwar
 and owner-requested regression work are committed on main; the one successful
 recording cycle/playback and one wake do not close the remaining three-cycle,
 explicit reconnect/no-replay or production qualification checklist.
+
+## Post-wake reconnect: no recording replay
+
+A fresh normal L/H/A attempt used the same ten-minute firmware after the wake
+trial. Host synchronization occurred at boot 3.058 seconds and the camera
+connected at 81.949 seconds with MTU 23 and no subscription event. When asked
+to confirm that reconnecting alone did not start recording, the owner replied
+"confirm". This establishes reconnect without automatic recording in the
+isolated normal remote session; the preceding wake-only link timeout remains
+recorded above.
+
+A manual second-cycle Start request was admitted at 122.396 seconds and its
+SDK send returned zero at 122.405 seconds. No camera-timer confirmation was
+received, so no Stop toggle was issued and this is not another observed
+recording cycle. The attempt reached its ten-minute deadline and retired;
+the local disconnect at 602.874 seconds had reason 534. Final reports contained
+88 events with zero dropped/truncated events and no pending SDK/shutter work.
+Camera recording state after this command is unconfirmed. One complete
+Start/Stop cycle with playable footage, one powered-off wake, and one reconnect
+without replay are observed; the three-cycle smoke check and recording control
+after reconnect remain pending.
