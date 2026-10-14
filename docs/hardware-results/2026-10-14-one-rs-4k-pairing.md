@@ -63,3 +63,42 @@ attempt. Inspect that exchange before proposing a handshake or service change;
 the current write lengths and disconnect code do not establish such a fix.
 These observations belong to the existing #46/#22 camera investigation and do
 not close either checklist or promote the 4K Boost assembly to the BE80 target.
+
+## Third attempt: connected UI and shutter admission blocked
+
+The owner requested another attempt. A fresh idle boot preceded `H` and `A`;
+complete incoming bytes were retained privately and excluded from public output.
+Advertising synchronization was reported at boot 3.046 seconds. The camera
+connected at 27.544 seconds with MTU 23, and the owner reported "connected".
+The owner later confirmed readiness after being asked to return to the main
+video screen and leave the camera stopped. The connection remained active until
+the probe's finite deadline, approximately 95 seconds after connection.
+
+The camera sent 33 complete CE81 writes: 23 of length 11, two of length 7,
+five of length 20, one of length 12 and two of length 14. All had the CE80-family
+`FE EF FE` prefix. No subscription or security-change event was reported. A
+single `S` submitted after the stopped-video readiness report produced a
+ShutterRequest event at boot 103.414 seconds with `value=0` (refused). There was
+no ShutterResult event or additional SDK submission: the current probe requires
+an actual CE82 notification subscription before admitting a shutter operation.
+No shutter notification was sent to the camera, so this is not a failed
+camera-level recording command or a successful REC/STOP observation.
+
+The probe reached its deadline at 122.799 seconds and reported actual disconnect
+at 122.863 seconds with reason 534 (`0x216`, local connection termination),
+consistent with its bounded cleanup. This differs from the second attempt's
+early peer termination. At the last pre-deadline summary, all 49 events were
+reported with zero dropped/truncated events and no pending SDK/shutter work;
+the complete private transcript contains 52 events through disconnect.
+
+Discovery, the owner's connected UI and a sustained finite BLE link are now
+observed. Recording control remains blocked by missing notification admission;
+the three camera-observed cycles/playback and reconnect/no-replay checks remain
+unperformed. Retained traffic is opaque evidence, not a recording-state decoder.
+
+The pinned MIT example initializes its BLE2902 descriptor using
+`setNotifications(true)` and `setIndications(true)` before adding it; the current
+NimBLE probe instead requires a client subscription event. This is a concrete
+source difference to investigate, not proof that pre-enabling notifications is
+required or sufficient on ONE RS 4K Boost. Do not infer a handshake or relax
+production qualification from the camera's connected UI.
