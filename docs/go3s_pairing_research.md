@@ -125,5 +125,6 @@ The concrete next candidate is a separately gated ESP32 wake-auth write using
 the retained controller authorization ID, with CRC/length checks and a finite
 wait for the documented response, then disconnect and owner power-on observation.
 It must not send recording commands or infer power-on from a GATT connection or
-write acknowledgement. This packet has not yet been implemented or transmitted
-on the local ESP32; neither power-off wake nor production GO 3S wake is qualified.
+write acknowledgement. A private isolated encoder/probe was subsequently prepared for the owner-requested
+experiment; see the dated hardware report for transmission and observations.
+Neither power-off wake nor production GO 3S wake is qualified by source review.

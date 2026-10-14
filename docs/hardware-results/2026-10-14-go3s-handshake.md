@@ -280,3 +280,35 @@ This establishes that BLE connectivity to this powered-off camera does not by
 itself wake it under the tested sequence. It does not test the special wake
 packet identified by the subsequent source review. The ESP32 was reset to idle
 by the final NVS read; no camera operation remains running or scheduled.
+
+
+## Simplified wake authorization: protocol rejection
+
+At the owner's request, a private isolated central probe added one explicit WAKE
+command. It selects the supplied camera-name suffix, connects/discovers BE80,
+negotiates MTU and subscribes to BE82, then sends exactly one source-derived
+FF 0C 02 packet with the retained controller authorization ID. This route does
+not send normal SYNC, CheckAuthorization, REC or STOP, does not set recording
+ready, and disconnects after the wake reply or finite five-second response wait.
+The default startup remains idle. Production source and commissioning were not
+changed.
+
+A failing native encoder fixture was observed before implementation; subsequent
+checks passed for exact request bytes, identifier length/alphabet refusal,
+standard MODBUS CRC vector, valid success reply, byte mutations and truncations.
+The pinned build and final-ELF HAL/RAM-store/NVS/owner-only audits passed. Before
+upload, the current reconstructed full central backup verified on-device. All
+four written regions verified independently and post-upload NVS matched the
+original baseline.
+
+The prepared host sent WAKE once. The ESP32 found one unambiguous selected
+camera, connected, subscribed and sent the 39-byte wake authorization packet.
+The camera returned an eight-byte FF 0D 03 frame declaring one payload byte;
+its CRC was valid and result byte was 0. Per the pinned SyncField response
+constants, this is an explicit wake-authorization rejection. The ESP32 then
+disconnected; no recording command or automatic retry was sent. The owner did
+not provide a physical power-on observation for this attempt, instead requesting
+that the next test be fully prepared before the observation window. Do not infer
+an observed power state from the negative protocol result. Post-session NVS also matched the original baseline; its readback reset the
+ESP32 into idle startup. Wake support remains unqualified; normal recording
+authorization does not establish wake authorization.
