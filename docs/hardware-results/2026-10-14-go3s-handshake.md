@@ -312,3 +312,24 @@ that the next test be fully prepared before the observation window. Do not infer
 an observed power state from the negative protocol result. Post-session NVS also matched the original baseline; its readback reset the
 ESP32 into idle startup. Wake support remains unqualified; normal recording
 authorization does not establish wake authorization.
+
+
+## Preloaded wake-auth repeat: owner-confirmed failure
+
+The same installed wake-auth image and controller identifier were reused. The
+host was fully opened and armed before the owner gave GO, with the camera off
+and no pending camera operation. One WAKE was followed by DISCONNECT. The ESP32
+again selected one unambiguous matching GO 3S, connected and sent the wake-auth
+packet. The reply was again an eight-byte, CRC-valid FF 0D 03 with result 0.
+The final status confirmed disconnection, zero drops and no recording command.
+The owner separately answered “no” to camera power-on. This repeat establishes
+an observed failure of the tested wake-auth sequence, while app wake remains
+owner-confirmed working. It does not identify the reason for rejection or
+qualify another wake payload. Post-repeat NVS matched the original baseline;
+readback reset the ESP32 idle. No automatic retry or camera operation is armed.
+
+Both the beacon and connection/SYNC paths also failed their owner-observed
+power-on checks. The next unresolved issue is how to provision or select an
+accepted wake authorization identity; normal CheckAuthorization success and
+working REC/STOP did not establish that identity. Do not repeat the unchanged
+rejected sequence as a repair or infer that GO 3S cannot wake over Bluetooth.
