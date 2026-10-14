@@ -128,3 +128,52 @@ It must not send recording commands or infer power-on from a GATT connection or
 write acknowledgement. A private isolated encoder/probe was subsequently prepared for the owner-requested
 experiment; see the dated hardware report for transmission and observations.
 Neither power-off wake nor production GO 3S wake is qualified by source review.
+
+
+## Follow-up after the repeated wake-auth rejection
+
+The owner requested further GitHub investigation after the CRC-valid result-0
+wake reply and observed failure. Code searches for the exact SDK wake methods
+found the previously inspected SyncField SDK wrappers and insta360ctl format;
+no additional raw GO 3S provisioning implementation was established. GitHub's
+code-search API subsequently returned its rate-limit error, so further exact
+code search was unavailable in this review. Directly inspected repositories
+and schema files supplied the following additional evidence.
+
+**RigacciOrg/insta360-wifi-api**, pinned at
+`89320e06a2395140e9e506a735c59a7ff8d88446`, contains generated
+[Options descriptors](https://github.com/RigacciOrg/insta360-wifi-api/blob/89320e06a2395140e9e506a735c59a7ff8d88446/pb2/options_pb2.py):
+AUTHORIZATION_ID is option type 38, Options.authorization_id is string field 38,
+and BT_WAKEUP_SW / Options.bt_wakeup_sw use 97. The wake-switch enum is off 0,
+on 1, unknown 2. This provides a specific readback candidate rather than another
+blind wake retry. It does not establish that GO 3S exposes these options, that
+field 38 is the SDK's sleep-wake credential, or that writing it registers wake
+permission. The repository targets ONE RS WiFi and lists AUTHORIZATION_ID among
+options not returned by that camera; source/schema existence is not readback
+qualification. No generated upstream implementation was copied into RideSync.
+
+The pinned **syncfield-swift** method configureWakeOnBluetoothIfPossible calls
+writeWakeupAuthDataToCamera separately from phone authorization. Its comment
+requires explicit foreground wake provisioning and warns against racing ordinary
+setOptions/authorization with GO 3S connection preflight. The actual SDK-generated
+wake-data bytes are not implemented by the wrapper. These facts support a
+missing-provisioning hypothesis, but do not prove the root cause of result 0.
+
+Additional repositories were scoped directly: **arsfabula/Insta360-Remote-CIQ**
+at `39c51b3aa7c453227831d811355899371bbb8b94` implements direct BE80 control in
+BLEBarrel.mc without a sleep-wake credential registration path;
+**Daiki-Iijima/insta360-go-ultra-sdk** at
+`f5fa853b153b4483c4494ca087c7cd5b551f3aca` implements powered-on WiFi control,
+not GO 3S BLE wake provisioning. Official Android SDK documentation exposes
+bleWakeUp independently from checkAuthorization but does not document raw
+provisioning bytes.
+
+Next evidence needed: while powered on and explicitly authorized, read only
+AUTHORIZATION_ID and BT_WAKEUP_SW through the isolated ESP32 path, retaining
+responses privately and comparing any returned identifier without publishing
+it. Missing/denied fields remain inconclusive. Do not overwrite the app's working
+identity or claim that SetOptions field 38 is a fix without verifying its role.
+If that readback does not establish the registration route, capture or inspect
+the SDK's writeWakeupAuthDataToCamera transaction before implementing a new wake
+attempt. No confirmed ESP32 GO 3S wake fix was found in this expanded review;
+the camera and ESP32 remained idle throughout research.
