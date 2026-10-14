@@ -1,9 +1,9 @@
 # GO 3S ESP32 pairing and recording probe — October 14, 2026
 
 Current result: an isolated ESP32 diagnostic authorized three connections and
-received successful replies for four separately requested REC/STOP pairs. The
-owner confirmed actual recording start and stop for the first cycle. Further
-camera observations and playable-footage checks remain pending. This is
+received successful replies for four separately requested REC/STOP pairs, followed
+by one successful preloaded short cycle. The owner confirmed actual recording
+start and stop for the first cycle and the later short cycle. Further camera observations and playable-footage checks remain pending. This is
 experimental probe evidence, not production-adapter qualification.
 
 ## Initial scope and result
@@ -207,3 +207,23 @@ cycles, camera no-replay observation, playable clips and production security/
 commissioning remain unresolved. The production adapter was not activated or
 changed during these physical tests. Reuse this evidence for the next phase
 rather than restarting discovery or repeating firmware-version questions.
+
+## Owner-confirmed preloaded short cycle
+
+After the owner requested minimizing camera-on waiting time, the host prepared
+and opened the entire short-test coordinator while the camera was off. Before
+arming, its native host checks covered the authorization gate, one-cycle limit,
+five-second recording interval, whole-run timeout, and rejection of late ACK
+restart or duplicate STOP. The firmware and prior NVS preservation evidence
+were reused; no new upload or camera command was needed for this preparation.
+
+The owner then confirmed the camera was on. A single GO triggered exactly one
+CONNECT, one REC, one STOP and one DISCONNECT, with no intermediate questions or
+automatic retry. Connection/SYNC/authorization passed, both control commands
+received matching success replies, and disconnect completed in 21.47 seconds
+from CONNECT submission. The owner separately confirmed observed recording start
+and stop with “yes works.” This is a second camera-observed successful cycle,
+in addition to the earlier confirmed first cycle. Clip playback, the third
+camera-observed cycle, observed reconnect/no-replay and production integration
+remain unconfirmed. The short-test process exited after disconnect; no camera
+operation remains scheduled or running.
