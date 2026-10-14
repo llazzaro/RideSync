@@ -1,6 +1,12 @@
-# GO 3S ESP32 discovery and handshake — October 14, 2026
+# GO 3S ESP32 pairing and recording probe — October 14, 2026
 
-## Scope and result
+Current result: an isolated ESP32 diagnostic authorized three connections and
+received successful replies for four separately requested REC/STOP pairs. The
+owner confirmed actual recording start and stop for the first cycle. Further
+camera observations and playable-footage checks remain pending. This is
+experimental probe evidence, not production-adapter qualification.
+
+## Initial scope and result
 
 The owner requested testing the powered GO 3S without an Action Pod, using the
 mobile app for possible control approval. The owner reported updating the camera
@@ -152,3 +158,52 @@ ACK before manual control, and uses source-backed idle CheckAuth keepalive.
 Native literal-packet, wrong-state/sequence, CRC and truncation checks passed;
 its physical behavior still requires the next run. The production GO 3S codec
 and adapter have not yet been changed based on these experimental results.
+
+## Controlled recording run after the receive fix
+
+The owner powered the GO 3S on in normal idle mode. No app GPS Remote search was
+used for the direct BE80 route. The corrected probe performed immediate
+proactive SYNC, negotiated MTU 247, used the stable private controller ID with
+initiator field 3, and required a matching status-200 response with the observed
+Authorized payload before accepting manual REC/STOP.
+
+The initial connection and authorization passed. For each REC intent the probe
+sent normal-video options once and StartCapture once; for each STOP it sent the
+explicit Stop command once. All four separately requested pairs received valid
+sequence-correlated status-200 replies. The extra fourth pair was requested by
+the owner after they had not watched the later checks; it was not an automatic
+retry. No write or shutter intent was replayed after reconnect.
+
+| Check | ESP32 protocol result | Owner observation |
+| --- | --- | --- |
+| Cycle 1 REC then STOP | Both successful | Owner separately confirmed actual recording start and stop |
+| Cycle 2 REC then STOP | Both successful | Not confirmed; owner requested another attempt |
+| Cycle 3 REC then STOP | Both successful | Not confirmed; owner requested another attempt |
+| Explicit disconnect/reconnect | Connection, proactive SYNC and authorization successful; no REC/STOP sent on reconnection | Owner reported not watching; camera no-replay observation not confirmed |
+| Owner-requested repeat REC then STOP | Both successful after another explicit connection/authorization | Awaiting owner observation |
+| Clip playback | Not inspected by ESP32 | Not confirmed |
+
+There were three successfully authorized connections in this run. Every captured
+status summary reported failed=0 and drops=0, in contrast with the earlier idle
+queue-overflow diagnostic. Continuous notification draining and CheckAuth
+keepalive ran while connected. Known recording-state decoding was not enabled:
+all protocol ACKs and software summaries still reported recording UNKNOWN.
+Camera-observed state above is an independently reported owner observation.
+
+Controlled probe firmware SHA256: `db8a62d5f4f9b6e00d90fc297432119c16e6e612f74a958296016f122c6dbf4a`.
+This remains a temporary, privately retained diagnostic built from the existing
+pinned central startup/NVS guards and independently authored source-derived
+codec helpers. Literal authorization-tag, positive-state gate, wrong-sequence,
+wrong-state, CRC-mutation and truncation checks passed; the image's ELF audit,
+all four uploaded region checks and post-session NVS byte comparison passed.
+After the run the ESP32 connection was explicitly released and the board reset
+to idle during NVS readback. It sends no automatic connect, wake or shutter
+command. Private controller IDs, notification payloads, filenames and full
+flash/NVS are excluded from this report.
+
+This establishes an observed experimental GO 3S REC/STOP path on the ESP32
+probe. It does not pass the whole finite GO 3S checklist: three camera-observed
+cycles, camera no-replay observation, playable clips and production security/
+commissioning remain unresolved. The production adapter was not activated or
+changed during these physical tests. Reuse this evidence for the next phase
+rather than restarting discovery or repeating firmware-version questions.

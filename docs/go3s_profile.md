@@ -1,8 +1,9 @@
 # GO 3S recording profile (#21)
 
 Implemented October 10, 2026 from pinned Community wire descriptions. Software
-is Experimental; physical GO 3S support remains Not tested. Verification on the
-fitted camera/Action Pod is deferred to [#46](https://github.com/llazzaro/RideSync/issues/46).
+is Experimental. An [isolated ESP32 probe](hardware-results/2026-10-14-go3s-handshake.md)
+has an owner-observed REC/STOP cycle; production GO 3S compatibility remains
+unqualified. Remaining verification on the fitted camera/Action Pod is deferred to [#46](https://github.com/llazzaro/RideSync/issues/46).
 This supersedes the earlier CE80-first capture proposal and implementation blocker.
 
 ## References and route
