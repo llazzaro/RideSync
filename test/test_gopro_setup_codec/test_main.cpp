@@ -229,8 +229,42 @@ void bounded_random_inputs_never_publish_success_without_exact_route_and_result(
     }
   }
 }
+void observed_unknown_claim_is_not_classic_shutter_success() {
+  // Schema-derived from the observed numeric result; not a raw capture.
+  const uint8_t unknown[] = {0xf1, 0xe9, 8, 0};
+  auto r = decodeSetup(Channel::Command, body(unknown, sizeof(unknown)),
+                       SetupOperation::ClaimExternalControl);
+  TEST_ASSERT_EQUAL_INT(Outcome::Complete, r.outcome);
+  TEST_ASSERT_TRUE(r.result_present && r.known_result);
+  TEST_ASSERT_EQUAL_UINT64(0, r.result);
+  TEST_ASSERT_FALSE(r.success);
+  const uint8_t ack[] = {1, 0};
+  auto classic = decode(Channel::Command, body(ack, sizeof(ack)));
+  TEST_ASSERT_EQUAL_INT(Outcome::Complete, classic.outcome);
+  TEST_ASSERT_EQUAL_UINT8(0, classic.result);
+}
+void observed_model_firmware_and_api_decode_from_owned_fields() {
+  // Synthetic seven-field frame: observed model/firmware/API, anonymous other fields.
+  const uint8_t hw[] = {0x3c, 0,   4,   0,   0,   0,   62,  1,   'x', 0,   15,  'H', '2', '3', '.',
+                        '0',  '1', '.', '0', '2', '.', '3', '2', '.', '0', '0', 0,   0,   0};
+  auto r = decodeIdentity(Channel::Command, body(hw, sizeof(hw)));
+  TEST_ASSERT_EQUAL_INT(Outcome::Complete, r.outcome);
+  TEST_ASSERT_TRUE(r.model_known);
+  TEST_ASSERT_EQUAL_UINT64(62, r.model);
+  TEST_ASSERT_EQUAL_UINT(15, r.fields[3].size);
+  const char fw[] = "H23.01.02.32.00";
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(fw, r.raw.bytes + r.fields[3].offset, 15);
+  const uint8_t api[] = {0x51, 0, 1, 2, 1, 0};
+  auto v = decodeIdentity(Channel::Command, body(api, sizeof(api)));
+  TEST_ASSERT_EQUAL_INT(Outcome::Complete, v.outcome);
+  TEST_ASSERT_TRUE(v.api_known);
+  TEST_ASSERT_EQUAL_UINT64(2, v.api_major);
+  TEST_ASSERT_EQUAL_UINT64(0, v.api_minor);
+}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(observed_unknown_claim_is_not_classic_shutter_success);
+  RUN_TEST(observed_model_firmware_and_api_decode_from_owned_fields);
   RUN_TEST(requests_use_required_values_and_separate_packet);
   RUN_TEST(generic_replies_require_route_ids_result_and_full_validity);
   RUN_TEST(result_domain_rejects_unknown_and_preserves_numeric_rejections);

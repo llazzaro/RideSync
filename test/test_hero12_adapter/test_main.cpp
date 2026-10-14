@@ -86,7 +86,7 @@ struct ScriptHost : SilentHost {
   bool busy = false, ready = true, ignore_shutter_effect = false, drop_shutter_ack = false;
   unsigned hardware_not_ready = 0;
   uint8_t hardware_model = 62, api_major = 1;
-  bool reject_pair = false, reject_claim = false, wrong_pair_route = false,
+  bool reject_pair = false, reject_claim = false, unknown_claim = false, wrong_pair_route = false,
        wrong_query_status = false;
   bool fragment_hardware = false, drop_hilight_ack = false;
   uint32_t health_floor = 5000;
@@ -176,7 +176,10 @@ template <typename Rig>
 bool commandReply(Rig &rig, const uint8_t *payload, BleContext &ctx, std::vector<uint8_t> &reply) {
   switch (payload[0]) {
   case 0xf1:
-    reply = {0xf1, 0xe9, 8, static_cast<uint8_t>(rig.host.reject_claim ? 6 : 1)};
+    reply = {0xf1, 0xe9, 8,
+             static_cast<uint8_t>(rig.host.unknown_claim  ? 0
+                                  : rig.host.reject_claim ? 6
+                                                          : 1)};
     break;
   case 0x3c:
     hardwareReply(rig, reply);
@@ -952,6 +955,85 @@ void external_control_refusal_retires_before_identity_or_intent() {
   r.adapter.service();
   TEST_ASSERT_EQUAL_INT((int)Lifecycle::Idle, (int)r.manager.state(0)->lifecycle);
   TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size()); // No Backoff replay with three attempts.
+}
+// Synthetic schema-derived responses reproduce observed outcomes, not raw captures.
+void unknown_control_claim_cannot_grant_control_or_replay_recording() {
+  RetryPolicy policy = Hero12Adapter::managerPolicy();
+  policy.max_attempts = 3;
+  Rig r(policy);
+  r.host.unknown_claim = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(Hero12Fault::SetupRejected, r.adapter.fault(0));
+  TEST_ASSERT_EQUAL_INT(CapabilityState::Unknown, r.manager.state(0)->capabilities.start);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.manager.state(0)->observed);
+  unsigned claims = 0;
+  for (const auto &c : r.host.commands) {
+    if (c.phase != BlePhase::Write)
+      continue;
+    if (c.handle == 43 && c.bytes[2] == 3)
+      continue;
+    TEST_ASSERT_EQUAL_UINT16(3, c.handle);
+    TEST_ASSERT_EQUAL_UINT8(0xf1, c.bytes[2]);
+    ++claims;
+  }
+  TEST_ASSERT_EQUAL_UINT(1, claims);
+  size_t sent = r.host.commands.size();
+  r.clock.value += 120001;
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size());
+}
+void stop_ack_with_encoding_still_true_never_confirms_stopped_or_retries_shutter() {
+  RetryPolicy policy = Hero12Adapter::managerPolicy();
+  policy.max_attempts = 3;
+  Rig r(policy);
+  r.host.encoding = true;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Connect));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.manager.state(0)->observed);
+  r.host.ignore_shutter_effect = true; // Camera can ACK while Encoding remains true.
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.manager.request(0, Operation::Stop));
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.manager.state(0)->observed);
+  TEST_ASSERT_EQUAL_INT(Hero12Fault::CameraRejected, r.adapter.fault(0));
+  unsigned starts = 0, stops = 0;
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3 && c.bytes[2] == 1) {
+      if (c.bytes[4])
+        ++starts;
+      else
+        ++stops;
+    }
+  TEST_ASSERT_EQUAL_UINT(0, starts);
+  TEST_ASSERT_EQUAL_UINT(1, stops);
+  size_t sent = r.host.commands.size();
+  r.clock.value += 120001;
+  r.adapter.service();
+  TEST_ASSERT_EQUAL_UINT(sent, r.host.commands.size());
+}
+void wake_only_recovery_reaches_stopped_ready_without_video_or_shutter() {
+  Rig r;
+  TEST_ASSERT_EQUAL_INT(CameraError::None, r.adapter.requestRecovery(0, false));
+  r.adapter.service();
+  auto &scan = *r.host.contexts.back();
+  BleEvent advertised;
+  advertised.kind = BleEventKind::Advertisement;
+  advertised.advertisement_type = BleAdvertisementType::ConnectableUndirected;
+  advertised.identity.type = IdentityType::Public;
+  advertised.identity.address[0] = 1;
+  advertised.size = 4;
+  advertised.bytes = {{3, 3, 0xa6, 0xfe}};
+  r.host.deliver(scan, advertised);
+  r.adapter.service();
+  r.pump();
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Ready, r.adapter.recoveryState(0).phase);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.manager.state(0)->observed);
+  for (const auto &c : r.host.commands)
+    if (c.phase == BlePhase::Write && c.handle == 3) {
+      TEST_ASSERT_NOT_EQUAL(1, c.bytes[2]);
+      TEST_ASSERT_NOT_EQUAL(0x3e, c.bytes[2]);
+    }
 }
 void returned_model_and_api_must_match_independent_qualification() {
   {
@@ -2744,6 +2826,9 @@ int main() {
   RUN_TEST(fragmented_hardware_identity_completes_only_after_second_packet);
   RUN_TEST(pairing_rejection_is_distinct_from_classic_ack);
   RUN_TEST(external_control_refusal_retires_before_identity_or_intent);
+  RUN_TEST(unknown_control_claim_cannot_grant_control_or_replay_recording);
+  RUN_TEST(stop_ack_with_encoding_still_true_never_confirms_stopped_or_retries_shutter);
+  RUN_TEST(wake_only_recovery_reaches_stopped_ready_without_video_or_shutter);
   RUN_TEST(returned_model_and_api_must_match_independent_qualification);
   RUN_TEST(missing_source_qualification_refuses_transport_admission);
   RUN_TEST(fifth_registry_peer_is_explicitly_refused_by_four_slot_transport);

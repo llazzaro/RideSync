@@ -2,7 +2,7 @@
 
 Research date: 2026-10-07. Official upstream checked out at
 `0f963572611c4410a15678531e9681a6ff874edb`. None of these bytes is a RideSync
-camera capture. No installed HERO12 firmware or API version is known.
+camera capture. No installed HERO12 firmware or API version was known at that research date.
 
 `documentary_vectors.h` contains short wire facts transcribed from official
 examples, independently exercised by `official_documentary_vectors_decode_end_to_end`.
@@ -157,3 +157,15 @@ identify their SDKs as MIT, copyright GoPro 2021–2024, and list separate third
 licenses. Short fixture byte strings are protocol facts, not copied SDK logic.
 Future source reuse needs the specific component license and retained notices;
 this audit does not authorize arbitrary reuse elsewhere in OpenGoPro.
+
+## October 14, 2026 bench regression provenance
+
+The [dated ESP32 report](../../../docs/hardware-results/2026-10-14-hero12-pairing.md)
+records observed model 62, firmware `H23.01.02.32.00`, API 2.0, Generic Unknown
+control-claim result zero, classic shutter ACK zero, Encoding true after Start,
+and Encoding remaining true through short Stop confirmation despite owner-observed
+stopped UI. The new native cases reproduce those outcomes with independently
+authored synthetic/schema-derived responses. Anonymous other Hardware Info fields
+are fixtures; they are not the device's serial, name, MAC or original packets.
+No raw hardware packet capture was emitted by the probe. Do not relabel these
+cases as hardware goldens or use them to claim production control qualification.

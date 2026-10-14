@@ -883,3 +883,29 @@ capture, qualified acquisition-time sequence, achieved lean/acceleration error,
 GNSS aiding or ride result is claimed. Every available dynamic result remains
 Unreliable; existing MotionV4 dynamic validity stays false. The core is compiled
 by the pinned ESP32 build, but has no firmware activation or new telemetry schema.
+
+## HERO12 installed bench regressions — October 14, 2026
+
+The [hardware report](hardware-results/2026-10-14-hero12-pairing.md) records two
+owner-observed classic REC/STOP cycles, a stopped reconnect and one powered-off
+wake with the isolated ESP32 probe. The production protobuf control claim still
+returns Unknown; immediate Stop confirmation, third cycle and playback remain
+unqualified. Physical behavior and production support remain separate.
+
+Fourteen new cases are automatically discovered by the existing native CI:
+
+```sh
+.venv/bin/pio test -e native -f test_hero12_probe -f test_hero12_adapter -f test_gopro_setup_codec
+.venv/bin/pio test -e native
+```
+
+The focused 119 cases and full 714 cases passed. Codec/adapter inputs are synthetic
+schema-derived reproductions of observed outcomes, not captured packets. Cases
+protect the zero-result domain boundary, exact owned model/firmware/API fields,
+Unknown claim refusal/no replay, Stop ACK with Encoding true, and wake-only
+recovery without shutter. Probe CI and standalone runners share fresh/expired/
+wrap/reconnect admission, descriptor boundary and normal/oversized/emergency
+burst rejection checks. Existing production sources are unchanged. The probe's
+pinned build and ELF NVS/HAL/PHY audit passed; its final built image matched the
+uploaded hash and post-session original NVS comparison passed. No further
+firmware upload is needed to run these native regressions.

@@ -1,6 +1,10 @@
 # GoPro support plan
 
-Status: **opt-in HERO12 software adapter implemented; no hardware tests**.
+Status: **opt-in HERO12 software adapter implemented; isolated ESP32 bench observations,
+production qualification pending**. The [October 14 bench report](hardware-results/2026-10-14-hero12-pairing.md)
+records pairing, exact identity/API, two camera-observed classic REC/STOP cycles,
+stopped reconnect and one powered-off wake with classic recovery. Protobuf
+control claim returned Unknown; the production adapter still refuses it. Playback and the third cycle are pending.
 Optional BLE timecode synchronization remains unresolved in the
 [HERO12 investigation (#51)](gopro_timecode.md), which records clock commands,
 existing GitHub solutions and manual QR alternatives separately from support.
@@ -33,10 +37,10 @@ media transfer and preview are outside this milestone.
 
 | Feature | GoPro HERO12 Black |
 |---|---|
-| Pair/connect/reconnect | Not tested; planned |
-| Video start/stop | Not tested; planned |
-| Recording-state reporting | Not tested; planned |
-| Sleep/wake | Documentary BLE-connectable recovery path implemented; physical states not tested |
+| Pair/connect/reconnect | Observed in isolated RAM-bond probe; production restoration not tested |
+| Video start/stop | Two camera-observed classic probe cycles; third cycle, playback and production path pending |
+| Recording-state reporting | Probe observed Encoding true after REC and false after reconnect; immediate STOP confirmation remained true |
+| Sleep/wake | One owner-observed normal-powered-off wake with classic probe recovery; other power states and production path pending |
 | Mixed Insta360/GoPro operation | Not tested; planned |
 | External GPS/IMU injection | Outside initial scope; capability unverified |
 
