@@ -182,7 +182,8 @@ upload. Its first 460800-baud read failed with corrupt transfer data and was
 retained as an incomplete read, not accepted as a backup. A new 230400-baud
 read completed and verified against the device. NVS still matched the earlier
 baseline. All four new written regions were independently verified, and
-post-upload NVS remained byte-identical. No erase/recommissioning was used.
+post-upload NVS remained byte-identical. No full-flash/NVS erase or recommissioning
+was used.
 
 One fresh L/H/A session synchronized at boot 2.983 seconds. The Mac independently
 observed `Insta360 GPS Remote` advertising CE80 while the camera was not yet
@@ -216,3 +217,38 @@ pass. Three complete cycles and explicit reconnect/no-replay still remain
 unchecked in #46/#22; this one cycle does not qualify production or a reliability
 campaign. Software CI for `24d9e13` passed in
 [run 38541557108](https://github.com/llazzaro/RideSync/actions/runs/38541557108).
+
+## Wake-only trial: owner-observed power-on
+
+The owner confirmed Bluetooth Wakeup enabled and supplied the six-character
+identifier from Camera Info. It uniquely matched the incoming private camera
+identifier retained during the successful control trial. The value was stored
+only outside Git. After being asked to power the camera off normally with its
+battery installed, the owner replied "off" before any wake advertisement.
+
+The same ten-minute-capable firmware booted idle, with L and private hex output
+disabled. One W configuration was accepted at boot 2.748 seconds, followed by
+one A. This selected the existing M5-source wake-only manufacturer/scan-response
+layout and a maximum three-second advertising slice, not the long normal-mode
+window. No shutter or recording intent was issued.
+
+Host synchronization occurred at 2.997 seconds. The camera connected at 3.373
+seconds with MTU 23, before advertisement expiry. No subscription or application
+write was recorded. The link disconnected at 10.417 seconds with reason 520
+(HCI connection supervision timeout), and the probe retired at 10.418 seconds.
+Final reports contained 18 events, zero drops/truncation, no pending shutter/SDK
+work and three admitted/returned SDK operations. The planned explicit X cleanup
+was unnecessary because the real disconnect had already retired the attempt.
+
+When asked whether the ONE RS powered on and displayed its normal screen after
+the advertisement, the owner replied "yes". This establishes one observed
+powered-off wake on the declared ONE RS 4K Boost v2.0.11.4 assembly with Bluetooth
+Wakeup enabled. The power-on observation is independent of the brief BLE link;
+post-wake connection recovery/control and reliability are not established.
+No actual power-on latency was measured and no automatic recording followed.
+
+Final post-trial NVS readback matched the original preserved baseline byte for
+byte and reset the ESP32 to idle, without advertising or replay. Initial software
+and owner-requested regression work are committed on main; the one successful
+recording cycle/playback and one wake do not close the remaining three-cycle,
+explicit reconnect/no-replay or production qualification checklist.

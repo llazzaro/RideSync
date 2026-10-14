@@ -123,3 +123,9 @@ review found no actionable issue. Graphify was updated. Production firmware
 did not change; reuse the existing pinned build, full pipeline and hardware
 image evidence. These automated checks validate policy/routing, not physical
 recording-state semantics or wake success.
+
+The subsequent [wake-only hardware trial](../hardware-results/2026-10-14-one-rs-4k-pairing.md#wake-only-trial-owner-observed-power-on)
+recorded owner-observed power-on from an off baseline with Bluetooth Wakeup
+enabled and a privately verified identifier. It reused the existing encoder
+without further firmware changes. A brief connection then timed out; wake
+power-on is Observed once, while control recovery remains unverified.
