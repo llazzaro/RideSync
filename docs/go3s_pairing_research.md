@@ -85,3 +85,45 @@ idle receive-queue overflow was an instrumentation defect. A new private probe
 corrects the tag and continuous receive handling before further camera testing.
 These wire facts were implemented independently; no upstream generated code or
 proprietary SDK binary was copied into RideSync.
+
+
+## Follow-up: powered-off wake protocol
+
+After both the targeted three-second remote beacon and CONNECT/SYNC-only
+experiments failed to power on GO 3S, the owner confirmed successful wake from
+the official app. A fresh GitHub source review retained the following revisions
+privately; unchanged upstream revisions were reused rather than treated as new
+independent evidence.
+
+- **insta360ctl** at `f94193ce03c5af0921a9992bfd1af6bd946150d0` has a
+  [special wake authorization path](https://github.com/xaionaro-go/insta360ctl/blob/f94193ce03c5af0921a9992bfd1af6bd946150d0/doc/ble_protocol.md#54-wake-up-authorization-special-path).
+  It describes a simplified frame: FF 0C 02, uint16 little-endian authorization
+  data length, authorization-ID string bytes, then CRC16/MODBUS in little-endian
+  order. It says this bypasses normal SYNC/protobuf authorization in sleep.
+  Its [encoder](https://github.com/xaionaro-go/insta360ctl/blob/f94193ce03c5af0921a9992bfd1af6bd946150d0/pkg/protocol/go2blepacket.go)
+  explicitly associates EncodeGo2BlePacket2(0x0C, 0x02, auth_id_bytes) with
+  sendWakeUpAuthorization. These are reverse-engineered source facts, not a
+  successful local GO 3S wake capture. The earlier enum discrepancy in that
+  repository's prose remains a reason to verify claims against code and hardware.
+- **syncfield-kotlin** at `61006a1819af844df423748b057f268d0020b983`
+  [packet constants](https://github.com/OpenGraphLabs/syncfield-kotlin/blob/61006a1819af844df423748b057f268d0020b983/syncfield-insta360/src/main/kotlin/io/opengraph/syncfield/insta360/Insta360ProtocolPackets.kt)
+  identify a FF 0D 03 wake-auth reply with result at byte 5 (1 success, 0 failure).
+  Its raw BLE session delegates outbound wake authorization to native SDK code,
+  and comments place that exchange after SYNC; this sequencing difference from
+  insta360ctl's sleep-path description is unresolved.
+- **syncfield-swift** at `40deed1806f5e2b4cf4a4013c0ec6eed679197f3`
+  calls writeWakeupAuthDataToCamera separately from phone authorization. Its
+  wakeUpSpecificCamera path remains an opaque SDK operation; six-character
+  serial encoding does not expose the advertisement payload.
+- **nicecx/insta360-ai-content-studio** at
+  `abf472566198aeefb493b742f3fe69d9132ff460` has an author-reported GO 3S
+  [recording module](https://github.com/nicecx/insta360-ai-content-studio/blob/abf472566198aeefb493b742f3fe69d9132ff460/lib/camera_remote.py).
+  Its Go3SCamera class explicitly targets an already powered-on camera and
+  implements no wake path. It does not solve the observed power-off failure.
+
+The concrete next candidate is a separately gated ESP32 wake-auth write using
+the retained controller authorization ID, with CRC/length checks and a finite
+wait for the documented response, then disconnect and owner power-on observation.
+It must not send recording commands or infer power-on from a GATT connection or
+write acknowledgement. This packet has not yet been implemented or transmitted
+on the local ESP32; neither power-off wake nor production GO 3S wake is qualified.

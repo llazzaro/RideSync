@@ -261,4 +261,22 @@ matching the owner's identifier. This is discovery evidence only; it does not
 prove ESP32 wake or that a BLE connection powers on the camera. The next
 prepared hypothesis test reuses the exact previously successful central image
 and attempts CONNECT/authorization followed by DISCONNECT, with no recording
-command. Its camera power-on observation remains pending.
+command. The subsequent result is recorded below.
+
+
+## CONNECT-only wake: observed failure
+
+The exact previously successful central image was restored after verifying its
+retained predecessor backup. All four written regions verified independently,
+and pre/post-session NVS matched the original baseline. The preloaded host
+accepted one GO and sent exactly CONNECT then DISCONNECT. The ESP32 discovered
+one unambiguous GO 3S candidate, connected successfully, discovered BE80 and
+subscribed to BE82. It wrote the ten-byte proactive SYNC and received one
+six-byte notification that did not constitute a valid SYNC response. After the
+five-second protocol timeout it sent no authorization request and disconnected.
+No REC/STOP command was sent. The owner answered “no” to actual power-on.
+
+This establishes that BLE connectivity to this powered-off camera does not by
+itself wake it under the tested sequence. It does not test the special wake
+packet identified by the subsequent source review. The ESP32 was reset to idle
+by the final NVS read; no camera operation remains running or scheduled.
