@@ -333,3 +333,31 @@ power-on checks. The next unresolved issue is how to provision or select an
 accepted wake authorization identity; normal CheckAuthorization success and
 working REC/STOP did not establish that identity. Do not repeat the unchanged
 rejected sequence as a repair or infer that GO 3S cannot wake over Bluetooth.
+
+
+## Read-only wake-option investigation: connection failure
+
+A private isolated OPTIONS command was prepared to reuse the successful normal
+SYNC/authorization path, then issue one GetOptions (0x08) for option types 38
+(AUTHORIZATION_ID) and 97 (BT_WAKEUP_SW), followed by disconnect. There is no
+settings-write or recording submission in this route. The exact request fixture
+failed before encoder implementation and passed afterward, including sequence
+bounds. The private response-summary parser passed presence, identifier
+comparison, missing-value and truncation checks. Build and final-ELF audits
+passed. The current wake-auth full backup was reconstructed and verified before
+upload; all four new regions verified and NVS remained unchanged.
+
+Before execution, the preopened serial owner failed with macOS Device not
+configured. No OPTIONS command had been sent by that owner. The enumerated USB
+port returned; a new PassiveSerial owner confirmed clean idle and continued on
+the owner's “do it” instruction. The ESP32 found one selected, unambiguous camera
+candidate, but BLE establishment failed with disconnect reason 574, followed by
+an SDK callback timeout. OPTIONS_AUTH and OPTIONS_RESULT were both 0. The host
+submitted OPTIONS then DISCONNECT; the firmware sent no GetOptions packet,
+normal authorization packet, settings write or recording command. Therefore,
+this trial yields no wake-switch or authorization-ID readback and does not test
+the new provisioning hypothesis. No automatic retry was issued.
+
+Post-session NVS matched the original baseline byte for byte. Readback reset
+the poisoned central session into idle startup, with no camera command armed.
+The owner was told to power the camera off immediately after the attempt ended.
