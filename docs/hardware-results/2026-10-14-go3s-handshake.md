@@ -90,3 +90,33 @@ without mistaking unsolicited messages for ACKs. Recording remains gated on a
 valid correlated authorization response; then perform independently requested
 REC/STOP with owner-observed behavior and playback. This report passes none of
 those pending checks.
+
+## Later CE80 remote-search trials
+
+The owner requested preparing the controller with advertising off before powering
+on the battery-limited GO 3S. The existing `x5_peripheral` CE80 diagnostic was
+built/audited, installed with the verified retained backup procedure, and all
+four upload regions verified. NVS comparisons passed after both trials. No L,
+W or S command was selected; no legacy allowance, explicit wake advertisement
+or shutter command was used. Private H capture was enabled before A.
+
+The first A accepted an unidentified peer in about 0.64 s, negotiated MTU 23,
+and disconnected about seven seconds later with reason 520 (supervision timeout).
+No characteristic read, write or subscription was captured. The owner reported
+that the ONE RS powered on. Its reaction is owner-observed; the connected peer's
+identity was not verified. This attempt is **not GO 3S connection evidence**.
+The probe was stopped and reset.
+
+For the next attempt, the owner was instructed to remove/disconnect the ONE RS
+battery and then confirmed searching. The probe advertised as `Insta360 GPS
+Remote` with its default CE80 profile; the ESP32 reported advertising active,
+no connection, and no dropped or truncated events. The owner reported that
+nothing appeared in the GO 3S app remote-search screen. The attempt was stopped
+explicitly after about 89 s to conserve camera battery. This does not establish
+that all remote profiles are unsupported, or isolate an app/Pod prerequisite.
+The CE80 probe remains installed, reset idle with advertising off. The earlier
+statement about the final BE80 probe describes that earlier phase only.
+
+See [subsequent pinned GitHub research](../go3s_pairing_research.md) for distinct
+handshake and phone-authorization leads. Those sources do not turn either
+failed local trial into successful control.
