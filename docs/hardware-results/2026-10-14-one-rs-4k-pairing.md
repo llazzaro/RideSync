@@ -102,3 +102,36 @@ NimBLE probe instead requires a client subscription event. This is a concrete
 source difference to investigate, not proof that pre-enabling notifications is
 required or sufficient on ONE RS 4K Boost. Do not infer a handshake or relax
 production qualification from the camera's connected UI.
+
+## Legacy image upload and first pairing window
+
+After approving the source-backed legacy admission change, the owner replied
+"sd card is now empty" to the request to disconnect power, remove any ESP32 SD
+card and reconnect USB. This was treated as confirmation of the requested slot
+preparation. The camera's own card was requested to remain installed.
+
+The new isolated probe at `4b5e9b7` was uploaded over the existing USB port.
+Its firmware SHA256 is
+`34b78d58b865eb65318ece10a80ca455e4b6e15f9e38342d8d8bc8c6c14e8da5`.
+The current full 4 MiB flash backup was verified against the device before
+upload, and the partition table matched byte for byte. All four written regions
+were independently verified afterward. The 20 KiB NVS readback at `0x9000`
+matched the pre-upload baseline byte for byte. Private backups, hashes of
+private flash/NVS and upload logs remain outside Git.
+
+Opening serial produced a fresh idle banner containing the new L option. One
+L/H/A sequence selected explicit ONE RS legacy mode and private capture, then
+started the finite advertising window. The owner was asked to connect and
+confirm stopped normal video; no readiness reply was received during this
+window. Reports showed `one_rs_legacy=1 subscribed=0`. Synchronization occurred
+at boot 3.038 seconds, and the window ended at 122.786 seconds without a camera
+connection. No shutter request/result or camera write was recorded. All 15
+events were reported with zero dropped/truncated events; final advertising,
+in-flight SDK work and pending shutter were zero.
+
+Post-trial NVS readback again matched the pre-upload baseline and reset the
+board to idle. This is a verified installation and advertising observation,
+not a failed camera-level shutter command or a compatibility verdict. Recording
+and wake remain unperformed on the new image. Wait for explicit camera readiness
+before opening the next pairing window; do not automatically repeat it while
+the owner's camera-side preparation is unknown.

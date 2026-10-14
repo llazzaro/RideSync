@@ -57,8 +57,10 @@ is required before claiming ONE RS wake support.
 
 The current 4 MiB installed flash was backed up privately and verified against
 the device before any upload; the current NVS region was retained separately.
-The new firmware has not yet been uploaded: ESP32 SD-slot preparation confirmation
-is pending. Three observed recording cycles, playable footage, reconnect/no
+At software delivery, firmware upload was awaiting ESP32 SD-slot preparation.
+The subsequent upload and first advertising attempt are recorded in the
+[hardware report](../hardware-results/2026-10-14-one-rs-4k-pairing.md#legacy-image-upload-and-first-pairing-window).
+Three observed recording cycles, playable footage, reconnect/no
 replay and ONE RS wake remain unperformed. Existing X5 observations do not pass
 those ONE RS checks. The source-qualified ordinary-360 BE80 production adapter
 and its model qualification remain unchanged.
