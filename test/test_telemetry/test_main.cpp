@@ -15,7 +15,7 @@ struct Sink : StorageSink {
   size_t limit = 9999;
   bool mount() override { return true; }
   bool openExclusive(const char *p) override {
-    return std::string(p) == "/time-unknown_telemetry-000000000000002a.csv";
+    return std::string(p) == "/telemetry-000000000000002a.csv";
   }
   size_t write(const char *p, size_t n) override {
     size_t k = n < limit ? n : limit;

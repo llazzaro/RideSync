@@ -54,7 +54,6 @@ private:
     size_t write(const char *bytes, size_t length) override;
     bool flush() override;
     void close() override;
-    bool finishLog(const char *old_path, const char *new_path) override;
     bool open(unsigned slot, bool write, bool exclusive_create);
     int read(uint8_t *bytes, size_t length);
     int write(const uint8_t *bytes, size_t length);

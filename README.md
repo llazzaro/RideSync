@@ -244,15 +244,6 @@ qualification. `STATIONARY` initializes one bounded experimental motion window
 from a stationary fixture; its numerical results remain Unreliable. Complete the
 camera and local logging bench observations before motorcycle installation.
 
-SD logs use readable names such as
-`2026-10-15_18-32-08_UTC_telemetry-0000000700000001.csv` after a clean stop.
-The timestamp is the approximate logger session start in **UTC**, so you can
-match it against your videos' recording times. One log can cover several videos.
-Logging starts immediately under `time-unknown_telemetry-<session ID>.csv`;
-that name remains if GPS time never arrives or power is interrupted.
-GPS-only logs use `gps` instead of `telemetry`.
-See [filename and timing details](docs/log_format.md#gps-csv-version-1-and-storage-ownership).
-
 ## Optional code navigation
 
 The offline Python 3.11 [GPX exporter](docs/ride_log_export.md#implemented-cli-usage--october-13-2026)

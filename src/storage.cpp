@@ -554,8 +554,7 @@ Storage::Storage(StorageSink &sink, const StorageConfig &c)
       flush_records_ <= kCapacity && token(c.firmware, firmware_) &&
       token(c.provenance, provenance_);
   snprintf(path_, sizeof(path_),
-           format_ == StorageFormat::GpsV1 ? "/time-unknown_gps-%016llx.csv"
-                                           : "/time-unknown_telemetry-%016llx.csv",
+           format_ == StorageFormat::GpsV1 ? "/gps-%016llx.csv" : "/telemetry-%016llx.csv",
            static_cast<unsigned long long>(session_));
 }
 bool Storage::validTimestamp(const RecordTimestamp &t) const {
@@ -805,34 +804,6 @@ void Storage::flushCached() {
     stage_ = Stage::Rows;
   }
 }
-void Storage::captureFilenameTime(const RecordTimestamp &t) {
-  if (final_path_[0] || !t.has_utc_estimate || t.anchor_quality != AnchorQuality::Fresh)
-    return;
-  // Approximate session start using the first fresh UTC anchor. Later clock
-  // corrections must not continually change the session's human-facing name.
-  const int64_t start = t.utc_estimate_ms - static_cast<int64_t>(t.monotonic_ms);
-  if (start < 946684800000LL || start > 4102444799999LL)
-    return;
-  uint32_t days = static_cast<uint32_t>(start / 86400000 - 10957);
-  unsigned year = 2000, month = 1;
-  while (days >= (year % 4 == 0 ? 366u : 365u)) {
-    days -= year % 4 == 0 ? 366 : 365;
-    ++year;
-  }
-  const unsigned month_days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  for (;;) {
-    const unsigned count = month_days[month - 1] + (month == 2 && year % 4 == 0 ? 1 : 0);
-    if (days < count)
-      break;
-    days -= count;
-    ++month;
-  }
-  const unsigned seconds = static_cast<unsigned>(start / 1000 % 86400);
-  snprintf(final_path_, sizeof(final_path_), "/%04u-%02u-%02u_%02u-%02u-%02u_UTC_%s-%016llx.csv",
-           year, month, days + 1, seconds / 3600, seconds / 60 % 60, seconds % 60,
-           format_ == StorageFormat::GpsV1 ? "gps" : "telemetry",
-           static_cast<unsigned long long>(session_));
-}
 void Storage::serviceRows() {
 
   if (length_) {
@@ -846,7 +817,6 @@ void Storage::serviceRows() {
     read_.store(r + 1, std::memory_order_release);
     row_in_flight_ = true;
     in_flight_kind_ = record.kind;
-    captureFilenameTime(record.timestamp);
     if (!format(record))
       fail();
     else
@@ -928,10 +898,7 @@ void Storage::workerStep() {
     flushCached();
     break;
   case Stage::Close:
-    if (terminal_.load(std::memory_order_acquire))
-      sink_.close();
-    else if (!sink_.finishLog(path_, final_path_[0] ? final_path_ : path_))
-      terminal_.store(true, std::memory_order_release);
+    sink_.close();
     stopped_.store(true);
     stage_ = Stage::Done;
     break;

@@ -65,7 +65,6 @@ inline void vTaskDelete(void *) {}
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <thread>
 #include <vector>
@@ -83,23 +82,6 @@ std::array<std::vector<uint8_t>, 2> ledger;
 int slot = -1; size_t offset = 0;
 std::atomic<bool> block_close{false}, close_entered{false}, release_close{false};
 unsigned ledger_syncs = 0, ledger_closes = 0, mounts_at_csv = 0;
-bool naming = false, rename_collision = false, rename_error = false, stat_error = false, close_error = false;
-unsigned renames = 0;
-bool csv_closed = false;
-int test_stat(const char *path, struct stat *) {
-  assert(csv_closed && owned_bus != nullptr);
-  assert(strstr(path, "2026-10-15_18-32-08_UTC_gps-0000000700000001.csv"));
-  if (rename_collision) return 0;
-  errno = stat_error ? EIO : ENOENT; return -1;
-}
-int test_rename(const char *old_path, const char *new_path) {
-  assert(csv_closed && !rename_collision && !stat_error && owned_bus != nullptr);
-  assert(strstr(old_path, "time-unknown_gps-0000000700000001.csv"));
-  assert(strstr(new_path, "2026-10-15_18-32-08_UTC_gps-0000000700000001.csv"));
-  ++renames;
-  if (rename_error) { errno = EIO; return -1; }
-  return 0;
-}
 int test_open(const char *path, int flags, unsigned) {
   ++io_calls;
   if (strstr(path, ".session-id-")) {
@@ -130,13 +112,11 @@ int test_fsync(int fd) {
 }
 int test_close(int fd) {
   ++io_calls;
-  if (fd == 7) csv_closed = true;
   if (fd == 8) ++ledger_closes;
   if (fd == 7 && block_close.load()) {
     close_entered.store(true);
     while (!release_close.load()) std::this_thread::yield();
   }
-  if (fd == 7 && close_error) { errno = EIO; return -1; }
   return 0;
 }
 void put(uint8_t *b, uint32_t v) { for (unsigned j = 0; j < 4; ++j) b[j] = uint8_t(v >> (8*j)); }
@@ -166,11 +146,6 @@ int main(int argc, char **argv) {
   sync_fail = !strcmp(argv[1], "commit-error");
   collision = !strcmp(argv[1], "collision");
   open_fail = !strcmp(argv[1], "open-error");
-  naming = !strncmp(argv[1], "rename-", 7);
-  rename_collision = !strcmp(argv[1], "rename-collision");
-  rename_error = !strcmp(argv[1], "rename-error");
-  stat_error = !strcmp(argv[1], "rename-stat-error");
-  close_error = !strcmp(argv[1], "rename-close-error");
   ArduinoSdStorage logger(spi, q);
   task_fail = !strcmp(argv[1], "task-failure");
   if (task_fail) {
@@ -205,18 +180,6 @@ int main(int argc, char **argv) {
       Storage wrong(competing.sink(), {allocation.id, "fw", "test"}); assert(!logger.bind(wrong));
       Storage storage(logger.sink(), {allocation.id, "test", "synthetic"});
       block_close.store(!strcmp(argv[1], "close-barrier"));
-      if (naming) {
-        RecordTimestamp t;
-        t.session_id = allocation.id;
-        t.monotonic_quality = MonotonicQuality::Valid;
-        t.anchor_quality = AnchorQuality::Fresh;
-        t.anchor.sequence = 1;
-        t.anchor.utc_ms = 1792089128000LL;
-        t.has_utc_estimate = true;
-        t.utc_estimate_ms = t.anchor.utc_ms;
-        ModemSnapshot m; m.session_id = allocation.id;
-        assert(storage.enqueue(t, m));
-      }
       assert(logger.bind(storage)); storage.requestStop();
       if (block_close.load()) {
         while (!close_entered.load()) std::this_thread::yield();
@@ -224,13 +187,10 @@ int main(int argc, char **argv) {
       }
       worker.join();
       assert(logger.workerFinished() && storage.health().stopped);
-      assert(storage.health().terminal == (collision || open_fail || rename_collision || rename_error || stat_error || close_error));
+      assert(storage.health().terminal == (collision || open_fail));
       if (collision) assert(logger.ioStatus() == ArduinoSdStorage::IoStatus::PathCollision && logger.ioError() == EEXIST);
       else if (open_fail) assert(logger.ioError() == ENOMEM);
-      else if (rename_collision) assert(logger.ioError() == EEXIST);
-      else if (rename_error || stat_error || close_error) assert(logger.ioError() == EIO);
       else assert(logger.ioError() == 0);
-      assert(renames == (naming && !rename_collision && !stat_error && !close_error ? 1u : 0u));
     }
     assert(owned_bus == nullptr && owned_ends == 1);
   }
@@ -242,16 +202,13 @@ int main(int argc, char **argv) {
         # Temporary test copy substitutes only POSIX callbacks; production contains
         # no test seam. The stand-in models flags/error outcomes and mount lifetime.
         declarations = '''#include <sys/types.h>
-#include <sys/stat.h>
-int test_stat(const char *, struct stat *);
-int test_rename(const char *, const char *);
 int test_open(const char *, int, unsigned);
 ssize_t test_write(int, const void *, size_t);
 ssize_t test_read(int, void *, size_t);
 int test_fsync(int);
 int test_close(int);
 '''
-        for operation in ('open', 'read', 'write', 'fsync', 'close', 'stat', 'rename'):
+        for operation in ('open', 'read', 'write', 'fsync', 'close'):
             source = re.sub(rf'(?<![\w:])::{operation}\(', f'::test_{operation}(', source)
         files['storage_sd.cpp'] = declarations + source
         with tempfile.TemporaryDirectory() as folder:
@@ -270,9 +227,7 @@ int test_close(int);
             ], capture_output=True)
             self.assertEqual(0, build.returncode, build.stderr.decode())
             for scenario in ('lifecycle', 'collision', 'failed-mount', 'absent', 'corrupt',
-                             'commit-error', 'open-error', 'unbound', 'close-barrier', 'task-failure',
-                             'rename-ok', 'rename-collision', 'rename-error', 'rename-stat-error',
-                             'rename-close-error'):
+                             'commit-error', 'open-error', 'unbound', 'close-barrier', 'task-failure'):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run([str(executable), scenario], capture_output=True,
                                             timeout=10)

@@ -2,9 +2,7 @@
 #ifdef ARDUINO
 #include <cerrno>
 #include <cstdio>
-#include <cstring>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <unistd.h>
 namespace ridesync {
 namespace {
@@ -46,7 +44,7 @@ bool ArduinoSdStorage::Sink::mount() {
 bool ArduinoSdStorage::Sink::openExclusive(const char *path) {
   if (!mounted_)
     return false;
-  char full_path[96];
+  char full_path[64];
   const int n = snprintf(full_path, sizeof(full_path), "/ridesync%s", path);
   if (n < 0 || static_cast<size_t>(n) >= sizeof(full_path))
     return false;
@@ -79,43 +77,6 @@ bool ArduinoSdStorage::Sink::flush() {
     return false;
   }
   return true;
-}
-bool ArduinoSdStorage::Sink::finishLog(const char *old_path, const char *new_path) {
-  // FAT cannot safely rename an open log. All rows have already been flushed;
-  // close the descriptor before renaming, retaining the mount until afterwards.
-  bool ok = fd_ >= 0;
-  if (fd_ >= 0) {
-    if (::close(fd_) != 0) {
-      error_.store(errno ? errno : EIO);
-      ok = false;
-    }
-    fd_ = -1;
-  }
-  if (ok && strcmp(old_path, new_path) != 0) {
-    char from[96], to[96];
-    const int a = snprintf(from, sizeof(from), "/ridesync%s", old_path);
-    const int b = snprintf(to, sizeof(to), "/ridesync%s", new_path);
-    struct stat existing;
-    // This adapter exclusively owns the whole volume; no other filesystem
-    // user can create a destination between stat and rename. Only ENOENT
-    // permits rename: never treat another stat failure as an absent file.
-    if (a < 0 || b < 0 || static_cast<size_t>(a) >= sizeof(from) ||
-        static_cast<size_t>(b) >= sizeof(to)) {
-      error_.store(ENAMETOOLONG);
-      ok = false;
-    } else if (::stat(to, &existing) == 0) {
-      error_.store(EEXIST);
-      ok = false;
-    } else if (errno != ENOENT) {
-      error_.store(errno ? errno : EIO);
-      ok = false;
-    } else if (::rename(from, to) != 0) {
-      error_.store(errno ? errno : EIO);
-      ok = false;
-    }
-  }
-  close();
-  return ok && error_.load(std::memory_order_relaxed) == 0;
 }
 void ArduinoSdStorage::Sink::close() {
   if (ledger_fd_ >= 0)

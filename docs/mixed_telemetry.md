@@ -2,10 +2,8 @@
 
 This software contract is explicitly selected with the final `StorageConfig`
 argument `StorageFormat::MixedV2`. The default remains `GpsV1`, preserving its
-API and CSV bytes. Mixed files exclusively create
-`/time-unknown_telemetry-<16 lowercase hex session ID>.csv`; clean sessions
-with GPS time receive a readable UTC start-time prefix at close, as described in
-[SD filenames](log_format.md#gps-csv-version-1-and-storage-ownership). They start with
+API, path and bytes. Mixed files exclusively create
+`/telemetry-<16 lowercase hex session ID>.csv`, start with
 `#ridesync_telemetry,2`, retain session/firmware/provenance and storage policy
 metadata, the GPS field header, and `#imu_layout,2,see_docs/mixed_telemetry.md`.
 The GPS field header describes the suffix of `gps` rows, not the other kinds.

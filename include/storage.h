@@ -15,12 +15,6 @@ public:
   virtual size_t write(const char *bytes, size_t length) = 0;
   virtual bool flush() = 0;
   virtual void close() = 0;
-  // Worker-only finalization. Keep the original log intact if renaming fails.
-  // Default supports sinks without filesystem names (e.g. stream/test sinks).
-  virtual bool finishLog(const char *, const char *) {
-    close();
-    return true;
-  }
   virtual int ioError() const { return 0; }
 };
 struct StorageConfig {
@@ -98,7 +92,7 @@ private:
   const uint64_t session_;
   const uint8_t max_mounts_, flush_records_;
   bool valid_;
-  char firmware_[49]{}, provenance_[49]{}, path_[48]{}, final_path_[64]{};
+  char firmware_[49]{}, provenance_[49]{}, path_[48]{};
   Record queue_[kCapacity];
   std::atomic<uint32_t> read_{0}, write_{0};
   std::atomic<uint32_t> accepted_{0}, dropped_{0}, rejected_{0}, written_{0}, flushed_{0}, lost_{0},
@@ -115,7 +109,6 @@ private:
   void mountLog();
   void drainTerminalRows();
   void openLog();
-  void captureFilenameTime(const RecordTimestamp &timestamp);
   void flushCached();
   void serviceRows();
   bool formatHeader();
