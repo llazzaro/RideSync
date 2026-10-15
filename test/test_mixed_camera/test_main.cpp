@@ -1,3 +1,4 @@
+#include "handlebar_control.h"
 #include "profiles/mixed_camera.h"
 #include <cstring>
 #include <unity.h>
@@ -200,15 +201,34 @@ void test_wake_recovery_connects_without_shutter_and_cancel_releases() {
   TEST_ASSERT_FALSE(a.configure(mismatch, q));
   TEST_ASSERT_TRUE(a.configure(c, q));
   TEST_ASSERT_TRUE(a.start(true, true));
-  TEST_ASSERT_EQUAL(CameraError::None, a.requestRecovery(0, false));
+  struct Input : ButtonInput {
+    bool pressed() override { return false; }
+  } input;
+  struct Led : LedSink {
+    int write(LedFrame) override { return 0; }
+  } led;
+  HandlebarControl control(t, a, m, g, input, led);
+  TEST_ASSERT_TRUE(control.begin({}));
+  LocalTelemetryStatus local;
+  local.phase = TelemetryPhase::Running;
+  local.camera = CameraAdmission::Admitted;
+  control.observe(local);
+  TEST_ASSERT_EQUAL(ControlAdmission::Admitted, control.submit(ButtonAction::RecordingIntent));
   for (unsigned i = 0; i < 8; ++i)
-    a.service();
+    a.service(&control);
+  control.observe(local);
+  TEST_ASSERT_EQUAL(RecordingState::Recording, g.status().intent);
+  TEST_ASSERT_EQUAL(CameraError::None, control.status().wake[0]);
   TEST_ASSERT_EQUAL(1, radio.starts);
   TEST_ASSERT_EQUAL(1, p.connects);
   TEST_ASSERT_EQUAL(0, p.shutters);
   TEST_ASSERT_FALSE(a.recoveryReady(0));
   TEST_ASSERT_EQUAL(RecordingState::Unknown, m.state(0)->observed);
-  a.cancelRecovery(0);
+  TEST_ASSERT_EQUAL(ControlAdmission::Admitted, control.submit(ButtonAction::RecordingIntent));
+  a.service(&control);
+  TEST_ASSERT_EQUAL(RecordingState::Stopped, g.status().intent);
+  TEST_ASSERT_EQUAL(0, p.shutters); // Cancelled preparation cannot send a delayed Start.
+  control.reset();
   a.stop();
   for (unsigned i = 0; i < 8; ++i)
     a.service();

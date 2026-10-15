@@ -5,11 +5,8 @@ owner. Firmware defaults leave it inactive; [supervised startup](supervision.md)
 qualified workers. No physical button, LED, camera or timing result is claimed.
 
 `HandlebarControl` takes caller-owned input and LED ports and the existing model-dispatched
-adapter/CameraManager/RecordingManager trio. The supervised mixed runtime uses
-that same control for all enabled, commissioned cameras: X5, GO 3S, HERO12 Black
-and ONE RS. A short press prepares each peer, starts recording as it becomes
-ready, and the next short press stops the group, including pending preparation.
-No model selection or separate per-camera button press is needed. Attach it with
+adapter/CameraManager/RecordingManager trio. The mixed runtime uses that same
+button for all enabled, commissioned cameras. Attach it with
 `LocalTelemetryRuntime::attachControl` before `start()`. All control methods,
 button polling, GPS/clock/admission and copied status access belong to this same
 owner. The input, sink, control and telemetry resources outlive the actual final
@@ -34,16 +31,21 @@ no second session, service binding, camera manager, session clock, logger or SD 
 - Only Running telemetry with CameraAdmission::Admitted and enabled cameras
   admits camera actions. Local-only, safe-mode/refused camera, allocation and stopped
   sessions refuse control while eligible independent local logging continues.
-- The first admitted RecordingIntent is explicit REC, even if startup observation
-  already says Recording. Each enabled peer independently prepares through the
-  model-specific wake/reconnect route. X5 uses its qualified wake configuration;
-  GO 3S and ONE RS use their existing connection/handshake routes, and HERO12
-  uses its reconnect/fresh-observation route. Recovery is invoked with
+- A short press requests REC for every enabled camera when no recording intent or
+  recording observation exists. If a camera already reports Recording before the
+  first press, that press requests STOP for the whole group. Each enabled peer
+  independently prepares through its model's qualified wake/reconnect route;
+  physical wake currently requires the qualified X5 configuration. Other models
+  retain their supported BLE reconnect route and explicit unsupported wake status.
+  Recovery is invoked with
   `ensure_recording=false`: **RecordingManager is the only REC authority**. The
   exact completed recovery connection/operation, current lifecycle and observation
   must still match before the group dispatches conditional explicit Start.
   Already-recording peers need no shutter command. ACK alone never proves state.
 - The next admitted RecordingIntent is explicit STOP, including during recovery.
+  Wake/reconnect and resync preserve the last explicit REC/STOP choice, so a press
+  after resync still stops a pending or active recording. Explicit serial group
+  commands update that choice too.
   Each replacement group request first cancels every old preparation and retires
   active operations before admitting replacement work. STOP uses the existing
   explicit group reconnect/Stop route; confirmed Stopped peers require no shutter.
@@ -65,8 +67,7 @@ no second session, service binding, camera manager, session clock, logger or SD 
 - Configured short, long and double actions remain authoritative. Defaults are
   short RecordingIntent, long WakeReconnect, optional double Resync. WakeReconnect
   and Resync perform fresh preparation/query with no automatic REC and do not
-  flip the explicit RecordingIntent latch: after REC, even a completed resync
-  leaves the next recording press as STOP. Unsupported physical wake is copied as
+  flip the explicit RecordingIntent latch. Unsupported physical wake is copied as
   Unsupported per peer; supported BLE recovery remains independently eligible.
   Power-on from removed power and unqualified Insta360 protocols are not invented.
 - Recovery retains its existing two bounded scan attempts and 140-second overall
@@ -126,15 +127,3 @@ a disabled double Bookmark mapping are refused. Defaults remain unchanged.
 See [activation, feedback and timing](bookmarks.md). Pending gestures are retired
 on reset/shutdown; `ControlStatus::bookmark` retains the physical result.
 No new LED acknowledgement pulse or haptic backend is enabled.
-
-## Group button verification
-
-`test_handlebar_group` drives the real button, control and group/camera managers
-with four configured models and a synthetic camera boundary. It covers one-press
-group start/stop, an unavailable peer, STOP during delayed preparation and STOP
-after resync, while preserving explicit group commands from the serial console.
-`test_hero12_adapter` additionally verifies the resync/wake-only
-interruption with the real HERO12 adapter, transport and protocol codecs.
-These are software checks; they do not establish simultaneous start timing or
-physical power-on support for every model. Physical wake remains limited to the
-qualified route, and a camera that is not BLE reachable can still fail explicitly.

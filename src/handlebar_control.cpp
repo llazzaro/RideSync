@@ -79,8 +79,7 @@ void HandlebarControl::beforeAdvance() {
     count_ = 0;
     return;
   }
-  // Serial commands share the same group. Remember their explicit choice
-  // before a resync clears intent; Unknown must preserve the REC/STOP latch.
+  // Keep an explicit choice across wake/resync, which clears group intent.
   const auto intent = group_.status().intent;
   if (intent != RecordingState::Unknown)
     recording_ = intent == RecordingState::Recording;
@@ -88,11 +87,10 @@ void HandlebarControl::beforeAdvance() {
   // retires earlier preparation before any recovery can dispatch REC.
   for (size_t i = 0; i < count_; ++i) {
     if (actions_[i] == ButtonAction::RecordingIntent) {
-      // Honor explicit group commands (including the console). Resync clears
-      // that intent, so fall back to the last admitted button choice then.
-      const auto intent = group_.status().intent;
+      const auto state = group_.status();
       const bool recording =
-          intent == RecordingState::Recording || (intent == RecordingState::Unknown && recording_);
+          state.intent == RecordingState::Recording ||
+          (state.intent == RecordingState::Unknown && (recording_ || state.recording != 0));
       const auto target = recording ? RecordingState::Stopped : RecordingState::Recording;
       if (group_.request(target) == GroupError::None)
         recording_ = target == RecordingState::Recording;
@@ -103,8 +101,8 @@ void HandlebarControl::beforeAdvance() {
   count_ = 0;
 }
 CameraError HandlebarControl::prepare(size_t i) {
-  // Dispatch each peer through its model-specific wake/recovery route.
-  // Unsupported physical wake must not prevent an eligible BLE reconnect.
+  // Use each model's qualified wake/recovery route; reconnect remains eligible
+  // when physical wake is unsupported. Only the group may dispatch REC.
   status_.wake[i] = adapter_.wakeSupported(i) ? CameraError::None : CameraError::Unsupported;
   return adapter_.requestRecovery(i, false);
 }

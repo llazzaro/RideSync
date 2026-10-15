@@ -1558,6 +1558,51 @@ struct ControlRig {
     pass();
   }
 };
+void recording_observed_before_first_button_press_stops_the_group() {
+  ControlRig r(2);
+  r.radio.host.encoding = true;
+  for (unsigned i = 0; i < 2; ++i)
+    r.radio.manager.request(i, Operation::Connect);
+  r.pump();
+  TEST_ASSERT_EQUAL_UINT(2, r.group.status().recording);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.group.status().intent);
+  for (unsigned i = 0; i < 2; ++i) {
+    TEST_ASSERT_EQUAL_UINT(0, r.shutters(true, i));
+    TEST_ASSERT_EQUAL_UINT(1, r.shutters(false, i));
+  }
+}
+void button_stop_survives_resync_while_start_is_pending() {
+  ControlRig r;
+  r.shortPress();
+  r.pass(false);
+  TEST_ASSERT_EQUAL_INT(RecordingState::Recording, r.group.status().intent);
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+  // No radio response to the retired scan may dereference its released context.
+  r.radio.handled = r.radio.host.commands.size();
+  r.control.submit(ButtonAction::Resync);
+  r.pass(false);
+  r.radio.handled = r.radio.host.commands.size();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.group.status().intent);
+  TEST_ASSERT_EQUAL_UINT(0, r.shutters(true));
+}
+void serial_recording_then_resync_keeps_next_button_as_stop() {
+  ControlRig r;
+  r.group.request(RecordingState::Recording);
+  r.pump();
+  r.control.submit(ButtonAction::Resync);
+  r.pump();
+  r.shortPress();
+  r.pump();
+  TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.group.status().intent);
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+  TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
+}
 void actual_button_default_first_rec_second_stop_and_copied_status() {
   ControlRig r;
   r.shortPress();
@@ -1691,22 +1736,6 @@ void custom_short_wake_long_record_and_double_resync_are_preserved() {
   TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.control.status().group.intent);
   TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
 }
-void resync_during_recording_preserves_next_button_stop() {
-  for (auto action : {ButtonAction::Resync, ButtonAction::WakeReconnect}) {
-    ControlRig r;
-    r.shortPress();
-    r.pump();
-    TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
-    r.control.submit(action);
-    r.pump();
-    TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
-    r.shortPress();
-    r.pump();
-    TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
-    TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
-    TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.group.status().intent);
-  }
-}
 void manager_reset_discards_previously_admitted_action_without_replay() {
   ControlRig r;
   r.control.submit(ButtonAction::RecordingIntent);
@@ -1740,7 +1769,8 @@ void stop_waits_for_actual_host_release_and_rejects_late_query_without_blocking_
   r.radio.manager.request(1, Operation::Connect);
   r.pump();
   r.radio.auto_camera = false;
-  r.control.submit(ButtonAction::RecordingIntent);
+  // Explicit REC prepares a fresh query even when the camera is already recording.
+  r.group.request(RecordingState::Recording);
   r.pump(5);
   TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(0).phase);
   TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(1).phase);
@@ -1834,7 +1864,8 @@ void stop_during_unanswered_live_query_reconnects_and_observes_stopped() {
     r.radio.manager.request(0, Operation::Connect);
     r.pump();
     r.radio.auto_camera = false;
-    r.control.submit(ButtonAction::RecordingIntent);
+    // Explicit REC prepares a fresh query even when the camera is already recording.
+    r.group.request(RecordingState::Recording);
     r.pump(5);
     TEST_ASSERT_EQUAL_INT(Hero12RecoveryPhase::Observing, r.radio.adapter.recoveryState(0).phase);
     TEST_ASSERT_EQUAL_INT(Lifecycle::Operating, r.radio.manager.state(0)->lifecycle);
@@ -2807,8 +2838,10 @@ int main() {
   RUN_TEST(unsupported_peer_retains_error_while_qualified_peer_records);
   RUN_TEST(actual_transport_faults_precede_action_and_only_group_advancement);
   RUN_TEST(composed_adapter_reentry_cannot_advance_managers_twice);
-  RUN_TEST(resync_during_recording_preserves_next_button_stop);
   RUN_TEST(manager_reset_discards_previously_admitted_action_without_replay);
+  RUN_TEST(recording_observed_before_first_button_press_stops_the_group);
+  RUN_TEST(button_stop_survives_resync_while_start_is_pending);
+  RUN_TEST(serial_recording_then_resync_keeps_next_button_as_stop);
   RUN_TEST(actual_button_default_first_rec_second_stop_and_copied_status);
   RUN_TEST(unavailable_peer_does_not_abort_available_rec_or_deadline);
   RUN_TEST(already_recording_startup_queries_without_rec_then_explicit_stop);
