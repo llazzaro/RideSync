@@ -123,7 +123,10 @@ void reportDetails() {
                 bookmarks.accepted, bookmarks.dropped, bookmarks.rejected, bookmarks.written,
                 bookmarks.flushed, bookmarks.lost);
   if (application->control()) {
-    const auto marker = application->control()->status().control.bookmark;
+    const auto control = application->control()->status();
+    Serial.printf("BENCH inputs record_ready=%u mark_ready=%u\n", unsigned(control.input_ready),
+                  unsigned(control.mark_input_ready));
+    const auto marker = control.control.bookmark;
     Serial.printf("BENCH physical_marker outcome=%u session=%llu id=%u monotonic_ms=%llu\n",
                   unsigned(marker.outcome), static_cast<unsigned long long>(marker.session_id),
                   marker.bookmark_id,

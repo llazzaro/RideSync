@@ -9,10 +9,13 @@ struct QualifiedHandlebar {
   ButtonConfig actions;
   ButtonGpioConfig button;
   LedWiring led;
+  ButtonGpioConfig mark_button;
+  uint32_t mark_debounce_ms = 20;
 };
 struct HandlebarGpioStatus {
   ControlStatus control;
   bool input_ready = false, attached = false;
+  bool mark_input_ready = false;
   LedBackendState backend = LedBackendState::Disabled;
   int backend_error = 0;
 };
@@ -28,6 +31,7 @@ public:
   bool begin();
   void service();
   HandlebarGpioStatus status() const;
+  void revokeMark() { control_.revokeMark(); }
 
 private:
   class RawClock : public Clock {
@@ -36,11 +40,13 @@ private:
   Esp32LocalTelemetry &telemetry_;
   const QualifiedHandlebar qualification_;
   ArduinoButtonInput input_;
+  ArduinoButtonInput mark_input_;
   Esp32LedGpio gpio_;
   GpioLedSink sink_;
   HandlebarControl control_;
   RecordingManager &group_;
   bool attempted_ = false, input_ready_ = false, attached_ = false;
+  bool mark_input_ready_ = false;
 };
 } // namespace ridesync
 extern "C" ridesync::Esp32HandlebarControl &

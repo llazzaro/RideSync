@@ -106,6 +106,8 @@ bool optionalBusPins(const BenchBusPins &p, PinReservations &pins) {
     return false;
   if (p.button != -1 && !pins.add(p.button, false))
     return false;
+  if (p.mark_button != -1 && !pins.add(p.mark_button, false))
+    return false;
   for (int pin : p.led)
     if (pin != -1 && !pins.add(pin, true))
       return false;
@@ -219,8 +221,10 @@ bool telemetryQualified(const BenchApplicationConfig &c) {
 }
 bool buttonQualified(const BenchApplicationConfig &c) {
   const auto &h = c.handlebar;
-  if (h.opt_in != c.source.button_gpio.enabled)
+  if (h.opt_in != (c.source.button_gpio.enabled || h.mark_button.enabled))
     return false;
+  if (!c.source.button_gpio.enabled)
+    return !h.button.enabled && c.pins.button == -1;
   if (!h.opt_in)
     return c.pins.button == -1;
   return h.acknowledge_qualification && validateButtonGpioConfig(h.button) &&
@@ -251,7 +255,15 @@ bool disabledLedPinsCleared(const QualifiedHandlebar &h, unsigned leds) {
   return true;
 }
 bool handlebarQualified(const BenchApplicationConfig &c) {
-  if (!buttonQualified(c))
+  const auto &h = c.handlebar;
+  if (!buttonQualified(c) ||
+      !validateMarkButtonWiring(h.mark_button, h.mark_debounce_ms, h.button, h.led))
+    return false;
+  if (h.mark_button.enabled) {
+    if (!h.opt_in || !h.acknowledge_qualification || !c.telemetry.runtime.bookmark_enabled ||
+        h.mark_button.pin != c.pins.mark_button)
+      return false;
+  } else if (c.pins.mark_button != -1)
     return false;
   const unsigned leds = ledCount(c.handlebar.led.mode);
   return ledRoutingMatches(c, leds) && ledPolicyQualified(c.handlebar, leds) &&

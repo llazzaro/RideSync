@@ -36,9 +36,61 @@ A full queue refuses the new marker at occupancy six, retaining the two existing
 protected slots. No old row is evicted, no caller blocks or synchronously flushes,
 and failed admission is never retried automatically.
 
-## Explicit physical mapping
+## Dedicated Highlight / Mark button
 
-The supported bookmark mapping is the enabled double slot:
+An optional second input creates one bookmark as soon as a press is debounced,
+without waiting for release or a double-press window. Holding it creates no more
+marks. Release must debounce before another press can mark. A held input at
+startup/reset is ignored until a stable release; pending presses are retired on
+reset/shutdown. Queue refusal is reported once and never retried for a held press.
+The existing recording/wake button and its timing remain unchanged.
+
+Configure the dedicated input in the private `BenchApplicationConfig` provider,
+using a separately reviewed, unused GPIO rather than copying an assumed pin:
+
+```cpp
+c.telemetry.runtime.bookmark_enabled = true;
+c.handlebar.opt_in = true;
+c.handlebar.acknowledge_qualification = true;
+c.handlebar.mark_button.enabled = true;
+c.handlebar.mark_button.board_qualified = true;
+c.handlebar.mark_button.pin = reviewed_mark_pin;
+c.handlebar.mark_button.pull = ButtonPull::Up;
+c.handlebar.mark_button.active_low = true;
+c.handlebar.mark_debounce_ms = 20;
+c.pins.mark_button = reviewed_mark_pin;
+```
+
+`reviewed_mark_pin` stands for the GPIO qualified against the fitted board and
+all installed peripherals. For a qualified pull-up-capable input, the normally
+open switch connects that input to GND. GPIO34/35/36/39 require a reviewed
+external pull and `ButtonPull::External`; internal pull settings are refused.
+The default is disabled with pin -1; this feature neither selects nor activates
+an installed pin automatically. The bench validator rejects overlap with the
+record button, LED, modem, SD, IMU and power-control pins before peripheral IO.
+Include the mark pin in complete LED and power-backend reservations when those
+backends are enabled.
+
+The dedicated GPIO and debounce interval are commissioning-only fields, outside
+saved NVS preferences. Existing saved record-button settings still apply. A
+mark-only configuration leaves `source.button_gpio`, `handlebar.button` disabled
+and `pins.button = -1`; no camera registry or BLE connection is required. Local
+logging and its storage/session commissioning are still required. Safe-mode,
+NVS-admission or settings-generation revocation permanently retires this
+session's dedicated input; a fresh owner is required to enable it again.
+
+Dedicated marks use `BookmarkSource::Physical` and `BookmarkGesture::Short` in
+the existing V6/V7 format, so the existing exporter handles them. `STATUS` reports
+input readiness, the last physical receipt and bookmark storage counters. A
+receipt remains RAM admission, not per-marker durability or frame alignment.
+No LED acknowledgement pulse, haptic output or new native camera protocol is
+added. Existing opt-in native HERO12 requests retain their separate qualification.
+Synthetic tests and ESP32 compilation establish software behavior; installed
+wiring and on-device presses remain with #30/#31, and camera-native checks #46.
+
+## Existing shared-button mapping
+
+The existing shared recording button supports bookmarks in its enabled double slot:
 
 ```cpp
 config.source.button.double_enabled = true;

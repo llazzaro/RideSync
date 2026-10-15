@@ -66,10 +66,25 @@ int mainApplication(const std::string &mode) {
     q.runtime.peers.entries[1].slot = 1;
     q.runtime.peers.entries[1].model = CameraModel::HERO12_BLACK;
   }
+  const bool mark_case = mode.find("main-mark-") == 0;
+  if (mark_case) {
+    q.runtime.bookmark_enabled = true;
+    if (mode != "main-mark-with-record") {
+      source.count = 0;
+      source.button_gpio = ButtonGpioConfig{};
+      q.runtime.cameras_qualified = false;
+      q.runtime.peers.count = 0;
+    }
+  }
   assert(encodeConfig(source, 1, saved_config).status == PersistStatus::Encoded);
   QualifiedHandlebar handlebar;
   handlebar.opt_in = handlebar.acknowledge_qualification = true;
   handlebar.button = source.button_gpio;
+  if (mark_case) {
+    handlebar.mark_button.enabled = handlebar.mark_button.board_qualified = true;
+    handlebar.mark_button.pin = 34;
+    handlebar.mark_button.pull = ButtonPull::External;
+  }
   if (mode == "main-button-unqualified")
     handlebar.button.pin = 33;
   std::array<Hero12Qualification, kMaxCameras> proof{};
@@ -243,6 +258,50 @@ int mainApplication(const std::string &mode) {
       assert(application.control() && s.camera == CameraAdmission::Refused);
       assert(supervisor.progress(Worker::Ble).isRefused());
       assert(supervisor.progress(Worker::Ble).generation() == 0);
+    } else if (mark_case) {
+      assert(application.control());
+      const auto state = application.control()->status();
+      assert(state.attached && state.mark_input_ready);
+      assert(state.input_ready == (mode == "main-mark-with-record"));
+      assert((s.camera == CameraAdmission::Admitted) == (mode == "main-mark-with-record"));
+      // Both GPIOs see this fixture's shared synthetic level. Record acts on release;
+      // MARK acts on press without a double-window delay.
+      raw_time.fetch_add(20);
+      loop();
+      button_level = 0;
+      raw_time.fetch_add(1);
+      loop();
+      raw_time.fetch_add(20);
+      loop();
+      auto receipt = application.control()->status().control.bookmark;
+      assert(receipt.outcome == BookmarkOutcome::Admitted && receipt.bookmark_id == 1);
+      raw_time.fetch_add(100);
+      loop();
+      assert(application.control()->status().control.bookmark.bookmark_id == 1);
+      if (mode == "main-mark-settings" || mode == "main-mark-safe") {
+        if (mode == "main-mark-settings") {
+          auto changed = application_settings.snapshot();
+          ++changed.generation;
+          assert(settings_publication.put(changed));
+        } else
+          safe_mode.store(true);
+        loop();
+        if (mode == "main-mark-safe") {
+          safe_mode.store(false);
+          loop();
+        }
+        button_level = 1;
+        raw_time.fetch_add(1);
+        loop();
+        raw_time.fetch_add(20);
+        loop();
+        button_level = 0;
+        raw_time.fetch_add(1);
+        loop();
+        raw_time.fetch_add(20);
+        loop();
+        assert(application.control()->status().control.bookmark.bookmark_id == 1);
+      }
     } else if (mode == "main-button-unqualified") {
       assert(!application.control() && button_configs == 0);
     } else {

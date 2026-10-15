@@ -80,6 +80,7 @@ struct FakeTelemetry {
 };
 struct FakeControl {
   struct {
+    bool input_ready = false, mark_input_ready = false;
     struct {
 #if defined(RIDESYNC_POWER_FIXTURE_BOOKMARK)
       BookmarkReceipt bookmark;

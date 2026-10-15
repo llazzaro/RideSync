@@ -22,7 +22,9 @@ Esp32HandlebarControl::~Esp32HandlebarControl() {
 namespace {
 bool qualifiedControl(const QualifiedHandlebar &q) {
   return q.opt_in && q.acknowledge_qualification && validateButtonConfig(q.actions) &&
-         validateButtonGpioConfig(q.button);
+         (q.button.enabled || q.mark_button.enabled) &&
+         (!q.button.enabled || validateButtonGpioConfig(q.button)) &&
+         validateMarkButtonWiring(q.mark_button, q.mark_debounce_ms, q.button, q.led);
 }
 } // namespace
 bool Esp32HandlebarControl::begin() {
@@ -35,7 +37,8 @@ bool Esp32HandlebarControl::begin() {
   if (!telemetry_.owner().attachControl(control_))
     return false;
   attached_ = true;
-  if (!control_.begin(q.actions)) {
+  if (!control_.begin(q.actions, q.mark_button.enabled ? &mark_input_ : nullptr,
+                      q.mark_debounce_ms)) {
     telemetry_.owner().detachControl(control_);
     attached_ = false;
     return false;
@@ -47,13 +50,17 @@ bool Esp32HandlebarControl::begin() {
     group_.detachPreparation(control_);
     return false;
   }
-  input_ready_ = input_.begin(q.button, q.acknowledge_qualification);
-  if (!input_ready_) {
+  input_ready_ = q.button.enabled && input_.begin(q.button, q.acknowledge_qualification);
+  mark_input_ready_ =
+      q.mark_button.enabled && mark_input_.begin(q.mark_button, q.acknowledge_qualification);
+  const bool ready =
+      (!q.button.enabled || input_ready_) && (!q.mark_button.enabled || mark_input_ready_);
+  if (!ready) {
     telemetry_.owner().detachControl(control_);
     attached_ = false;
     group_.detachPreparation(control_);
   }
-  return input_ready_;
+  return ready;
 }
 void Esp32HandlebarControl::service() {
   telemetry_.service(); // Existing exclusive global route, exactly once.
@@ -62,6 +69,7 @@ HandlebarGpioStatus Esp32HandlebarControl::status() const {
   HandlebarGpioStatus s;
   s.control = control_.status();
   s.input_ready = input_ready_;
+  s.mark_input_ready = mark_input_ready_;
   s.attached = attached_;
   s.backend = sink_.state();
   s.backend_error = sink_.error();

@@ -300,6 +300,10 @@ button-to-camera wiring remain open.
 
 The [local bookmark implementation](docs/bookmarks.md) provides an opt-in serial
 `MARK` command, explicit double-press mapping and [offline marker export](docs/bookmark_export.md).
+An optional [dedicated Highlight / Mark button](docs/bookmarks.md#dedicated-highlight--mark-button)
+creates one bookmark per debounced press, including camera-free local sessions,
+while preserving the record button's existing gestures. Its separate GPIO remains
+disabled until commissioned and hardware-qualified.
 [Optional HERO12 HiLights](docs/hero12_hilight.md) keep local admission, wire ACK
 and saved-clip confirmation separate; physical support remains unqualified.
 

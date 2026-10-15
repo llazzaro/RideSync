@@ -3,6 +3,8 @@
 #include "local_telemetry_runtime.h"
 #include "status_led.h"
 namespace ridesync {
+bool validateMarkButtonWiring(const ButtonGpioConfig &mark, uint32_t debounce_ms,
+                              const ButtonGpioConfig &record, const LedWiring &led);
 enum class ControlAdmission { Admitted, Inactive, Refused, Overflow };
 struct ControlStatus {
   RecordingStatus group;
@@ -25,7 +27,8 @@ public:
   HandlebarControl(Clock &, CameraRuntimePort &, CameraManager &, RecordingManager &, ButtonInput &,
                    LedSink &);
   ~HandlebarControl();
-  bool begin(const ButtonConfig &);
+  bool begin(const ButtonConfig &, ButtonInput *mark = nullptr, uint32_t mark_debounce_ms = 20);
+  void revokeMark();
   CameraError prepare(size_t) override;
   RecordingPreparationResult prepared(size_t) override;
   void retire(size_t) override;
@@ -53,12 +56,16 @@ private:
   ButtonInput &input_;
   StatusLed led_;
   ButtonManager button_;
+  MarkButton mark_button_;
+  ButtonInput *mark_input_ = nullptr;
+  uint32_t mark_debounce_ms_ = 20;
   ButtonConfig config_;
   ControlStatus status_;
   std::array<ButtonAction, 4> actions_{};
   size_t count_ = 0;
   uint32_t reset_generation_ = 0;
   bool begun_ = false, recording_ = false;
+  ControlAdmission mark(BookmarkGesture);
   static void increment(uint32_t &value) {
     if (value != UINT32_MAX)
       ++value;

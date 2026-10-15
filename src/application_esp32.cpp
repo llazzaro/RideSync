@@ -217,11 +217,18 @@ std::array<WorkerPolicy, 4> SupervisedEsp32Application::prepare(const SettingsSn
   // Saved GPIO cannot replace independently qualified physical routing.
   const bool local = admission.local_telemetry && qualifiedModem(q) && qualifiedStorage(q) &&
                      qualifiedOptionalImu(q);
+  mark_allowed_ = local && !safe && nvs && settings.completed && settings.effective &&
+                  handlebar_.opt_in && handlebar_.acknowledge_qualification &&
+                  q.runtime.bookmark_enabled && handlebar_.mark_button.enabled &&
+                  validateMarkButtonWiring(handlebar_.mark_button, handlebar_.mark_debounce_ms,
+                                           handlebar_.button, handlebar_.led);
   configureWorkerPolicies(local, safe);
   return policy_;
 }
 void SupervisedEsp32Application::launchControl() {
-  if (button_allowed_) {
+  if (button_allowed_ || mark_allowed_) {
+    handlebar_.button.enabled = button_allowed_;
+    handlebar_.mark_button.enabled = mark_allowed_;
     control_ =
         new (&control_memory_) Esp32HandlebarControl(*telemetry_, handlebar_, &cameras_runtime_);
     if (!control_->begin()) {
@@ -261,6 +268,10 @@ void SupervisedEsp32Application::launch() {
 }
 void SupervisedEsp32Application::current(const SettingsSnapshot &s, bool safe, bool nvs) {
   safe_mode_ = safe;
+  mark_allowed_ = mark_allowed_ && !power_policy_.status(millis()).sealed && s.completed &&
+                  s.effective && s.epoch == epoch_ && s.generation == generation_ && !safe && nvs;
+  if (!mark_allowed_ && control_)
+    control_->revokeMark();
   // Any new settings generation retires this session's control authorization;
   // a fresh owner is required. No remap or replay in an active session.
   camera_allowed_ = camera_allowed_ && !power_policy_.status(millis()).sealed && s.completed &&

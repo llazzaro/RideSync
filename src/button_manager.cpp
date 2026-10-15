@@ -3,6 +3,42 @@
 #include <Arduino.h>
 #endif
 namespace ridesync {
+bool MarkButton::begin(uint32_t debounce_ms) {
+  *this = MarkButton();
+  if (!debounce_ms || debounce_ms >= 0x80000000u)
+    return false;
+  debounce_ms_ = debounce_ms;
+  return true;
+}
+bool MarkButton::poll(ButtonInput &input, uint32_t now) {
+  if (!debounce_ms_)
+    return false;
+  const bool raw = input.pressed();
+  if (sampled_ && uint32_t(now - previous_) >= 0x80000000u)
+    begin(debounce_ms_); // Ambiguous clock gap requires a fresh released baseline.
+  previous_ = now;
+  if (!sampled_) {
+    sampled_ = true;
+    raw_ = stable_ = raw;
+    changed_ = now;
+  }
+  if (raw != raw_) {
+    raw_ = raw;
+    changed_ = now;
+  }
+  if (uint32_t(now - changed_) < debounce_ms_)
+    return false;
+  if (!armed_) {
+    if (!raw_)
+      armed_ = true;
+    stable_ = raw_;
+    return false;
+  }
+  if (raw_ == stable_)
+    return false;
+  stable_ = raw_;
+  return stable_;
+}
 namespace {
 bool validAction(ButtonAction a) {
   return a == ButtonAction::RecordingIntent || a == ButtonAction::WakeReconnect ||

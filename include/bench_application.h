@@ -12,6 +12,7 @@ struct BenchBusPins {
   int imu_interrupt = -1;
   int power_acc = -1, power_fail = -1, power_ready = -1, power_off = -1;
   bool imu_enabled = false;
+  int mark_button = -1;
 };
 bool validateBenchBusPins(const BenchBusPins &);
 bool validateBenchPowerPins(const BenchBusPins &, const PowerBackendConfig &);

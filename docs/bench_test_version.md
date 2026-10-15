@@ -120,6 +120,13 @@ reservations must match the reviewed wiring. All active bus/button/LED pins are
 checked for conflicts before IO. Dynamic measurements require their separately
 supplied reference/qualification and retain their documented validity limits.
 
+The optional [dedicated Highlight / Mark input](bookmarks.md#dedicated-highlight--mark-button)
+uses `handlebar.mark_button`, `handlebar.mark_debounce_ms` and the matching
+`pins.mark_button`. It also requires `runtime.bookmark_enabled`. It may coexist
+with the record button or operate alone in a camera-free local logging session.
+Its pin joins the bus/power conflict checks and complete backend reservations;
+it stays disabled until the provider supplies independently qualified wiring.
+
 Private source settings are copied into RAM only when persisted configuration is
 absent. Existing valid saved settings win; corrupt/future/read-failed settings
 are refused without replacement. This provider never saves or rewrites NVS.

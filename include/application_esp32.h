@@ -100,6 +100,7 @@ private:
   uint64_t generation_ = 0;
   bool prepared_ = false, launched_ = false, camera_allowed_ = false, button_allowed_ = false;
   bool ble_started_ = false, safe_mode_ = false;
+  bool mark_allowed_ = false;
   typename std::aligned_storage<sizeof(Esp32LocalTelemetry), alignof(Esp32LocalTelemetry)>::type
       telemetry_memory_;
   typename std::aligned_storage<sizeof(Esp32HandlebarControl), alignof(Esp32HandlebarControl)>::type

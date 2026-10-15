@@ -1,5 +1,18 @@
 #include "handlebar_control.h"
 namespace ridesync {
+bool validateMarkButtonWiring(const ButtonGpioConfig &mark, uint32_t debounce_ms,
+                              const ButtonGpioConfig &record, const LedWiring &led) {
+  if (!mark.enabled)
+    return true;
+  if (!debounce_ms || debounce_ms >= 0x80000000u || !validateButtonGpioConfig(mark) ||
+      (record.enabled && mark.pin == record.pin))
+    return false;
+  const unsigned channels = led.mode == LedMode::Rgb ? 3 : led.mode == LedMode::Mono ? 1 : 0;
+  for (unsigned i = 0; i < channels; ++i)
+    if (mark.pin == led.pins[i])
+      return false;
+  return true;
+}
 namespace {
 CameraError recoveryError(Hero12RecoveryPhase phase) {
   switch (phase) {
@@ -18,9 +31,13 @@ HandlebarControl::HandlebarControl(Clock &c, CameraRuntimePort &a, CameraManager
                                    RecordingManager &g, ButtonInput &i, LedSink &s)
     : clock_(c), adapter_(a), manager_(m), group_(g), input_(i), led_(s) {}
 HandlebarControl::~HandlebarControl() { group_.detachPreparation(*this); }
-bool HandlebarControl::begin(const ButtonConfig &config) {
-  if (begun_ || !validateButtonConfig(config) || !group_.attachPreparation(*this))
+bool HandlebarControl::begin(const ButtonConfig &config, ButtonInput *mark_input,
+                             uint32_t mark_debounce_ms) {
+  if (begun_ || !validateButtonConfig(config) ||
+      (mark_input && !mark_button_.begin(mark_debounce_ms)) || !group_.attachPreparation(*this))
     return false;
+  mark_input_ = mark_input;
+  mark_debounce_ms_ = mark_debounce_ms;
   config_ = config;
   reset_generation_ = manager_.resets();
   begun_ = button_.begin(
@@ -33,21 +50,7 @@ ControlAdmission HandlebarControl::submit(ButtonAction action) {
     return status_.admission = ControlAdmission::Inactive;
   }
   if (action == ButtonAction::Bookmark) {
-    status_.bookmark = bookmark_owner_ ? bookmark_owner_->bookmark(BookmarkSource::Physical,
-                                                                   BookmarkGesture::Double)
-                                       : BookmarkReceipt{};
-    if (status_.bookmark.outcome == BookmarkOutcome::Admitted) {
-      increment(status_.accepted);
-      return status_.admission = ControlAdmission::Admitted;
-    }
-    if (status_.bookmark.outcome == BookmarkOutcome::Overflow) {
-      increment(status_.overflow);
-      return status_.admission = ControlAdmission::Overflow;
-    }
-    increment(status_.refused);
-    return status_.admission = status_.bookmark.outcome == BookmarkOutcome::Inactive
-                                   ? ControlAdmission::Inactive
-                                   : ControlAdmission::Refused;
+    return mark(BookmarkGesture::Double);
   }
   if (status_.local.camera != CameraAdmission::Admitted ||
       (action != ButtonAction::RecordingIntent && action != ButtonAction::WakeReconnect &&
@@ -64,6 +67,26 @@ ControlAdmission HandlebarControl::submit(ButtonAction action) {
   increment(status_.accepted);
   return status_.admission = ControlAdmission::Admitted;
 }
+ControlAdmission HandlebarControl::mark(BookmarkGesture gesture) {
+  status_.bookmark = bookmark_owner_ ? bookmark_owner_->bookmark(BookmarkSource::Physical, gesture)
+                                     : BookmarkReceipt{};
+  if (status_.bookmark.outcome == BookmarkOutcome::Admitted) {
+    increment(status_.accepted);
+    return status_.admission = ControlAdmission::Admitted;
+  }
+  if (status_.bookmark.outcome == BookmarkOutcome::Overflow) {
+    increment(status_.overflow);
+    return status_.admission = ControlAdmission::Overflow;
+  }
+  increment(status_.refused);
+  return status_.admission = status_.bookmark.outcome == BookmarkOutcome::Inactive
+                                 ? ControlAdmission::Inactive
+                                 : ControlAdmission::Refused;
+}
+void HandlebarControl::revokeMark() {
+  mark_input_ = nullptr;
+  mark_button_.begin(mark_debounce_ms_);
+}
 void HandlebarControl::beforeAdvance() {
   if (manager_.resets() != reset_generation_ || reset_generation_ == UINT32_MAX) {
     reset_generation_ = manager_.resets();
@@ -75,6 +98,8 @@ void HandlebarControl::beforeAdvance() {
     return;
   }
   button_.poll(input_, clock_.now());
+  if (mark_input_ && mark_button_.poll(*mark_input_, clock_.now()))
+    mark(BookmarkGesture::Short);
   if (status_.local.camera != CameraAdmission::Admitted) {
     count_ = 0;
     return;
@@ -137,6 +162,7 @@ void HandlebarControl::revoke() {
 void HandlebarControl::reset() {
   reset_generation_ = manager_.resets();
   revoke();
+  mark_button_.begin(mark_debounce_ms_);
   button_.begin(
       config_, [](void *p, ButtonAction a) { static_cast<HandlebarControl *>(p)->submit(a); },
       this);

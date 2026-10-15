@@ -18,6 +18,17 @@ public:
   virtual bool pressed() = 0;
 };
 using ButtonCallback = void (*)(void *, ButtonAction);
+// Dedicated MARK input: one event at a debounced press, no hold/double gestures.
+// A stable release after begin/reset is required before the first event.
+class MarkButton {
+public:
+  bool begin(uint32_t debounce_ms);
+  bool poll(ButtonInput &, uint32_t now);
+
+private:
+  uint32_t debounce_ms_ = 0, changed_ = 0, previous_ = 0;
+  bool sampled_ = false, raw_ = false, stable_ = false, armed_ = false;
+};
 // Single scheduler context only; input/callback must be prompt and may not
 // reenter begin/poll or mutate this manager. Clock gaps must be < 2^31 ms.
 class ButtonManager {

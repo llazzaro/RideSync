@@ -30,6 +30,10 @@ int main() {
   assert(!validateBenchPowerPins(p,c)); // Claim "complete" cannot omit active bus pins.
   for(int pin : {12,14,2,15,13,26,27,4})c.reserved_pins|=uint64_t(1)<<pin;
   assert(validateBenchPowerPins(p,c));
+  p.mark_button=19;assert(!validateBenchPowerPins(p,c));
+  c.reserved_pins|=uint64_t(1)<<19;assert(validateBenchPowerPins(p,c));
+  p.mark_button=34;assert(!validateBenchBusPins(p));
+  p.mark_button=-1;c.reserved_pins&=~(uint64_t(1)<<19);
   auto solar=c;auto solar_pins=p;
   solar.acc.pin=36;solar.reserve_ready.pin=23;
   solar_pins.power_acc=36;solar_pins.power_ready=23;
@@ -81,6 +85,13 @@ int main() {
   p.power_enable=12; p.spi_sck=14; p.spi_miso=2;
   p.spi_mosi=15; p.spi_cs=13; p.modem_tx=26; p.modem_rx=27;
   assert(ridesync::validateBenchBusPins(p));
+  p.mark_button=19; assert(ridesync::validateBenchBusPins(p));
+  p.button=19; assert(!ridesync::validateBenchBusPins(p));
+  p.button=32; assert(ridesync::validateBenchBusPins(p));
+  p.mark_button=14; assert(!ridesync::validateBenchBusPins(p));
+  p.mark_button=18; p.led[0]=18; assert(!ridesync::validateBenchBusPins(p));
+  p.led[0]=-1; p.power_acc=18; assert(!ridesync::validateBenchBusPins(p));
+  p.power_acc=-1; p.mark_button=-1;
   p.button=14; assert(!ridesync::validateBenchBusPins(p));
   p.button=-1; p.modem_key=14;
   assert(!ridesync::validateBenchBusPins(p));
