@@ -8,6 +8,23 @@ RideSync will also save timestamped GPS, acceleration, and estimated lean/pitch
 data to microSD. Motion measurements require an additional IMU; camera wake and
 telemetry forwarding depend on each model's verified capabilities.
 
+## Board pinout
+
+![LILYGO T-A7670E ESP32 board pinout, including power and GPIO header labels](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/index/image/t-a7670e-3.jpg)
+
+Official [LILYGO T-A7670E pin diagram](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/).
+The fitted board has an ESP32-WROVER-E module and a **V1.4** PCB marking;
+compare the header labels with the
+[V1.4 schematic](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/blob/51b988a99740ee0387a70c06bc3bd6ca26eedd69/schematic/esp32/T-A7670X-V1.4.pdf)
+before wiring accessories. GPIO numbers are not physical header positions.
+
+For the proposed **SparkFun BMI270 Qwiic** IMU, the candidate I²C connections
+are **3V3 → 3V3, GND → GND, SDA → GPIO21, SCL → GPIO22**. Use 3.3 V power
+and logic, never 5 V for this module. These pins still need confirmation against
+the actual board and existing wiring; IMU activation and hardware testing remain
+pending. See [hardware qualification](docs/hardware.md) and
+[raw IMU support](docs/raw_imu.md).
+
 ## Current status
 
 **Software modules are implemented; hardware qualification is incomplete.**
