@@ -79,13 +79,21 @@ void HandlebarControl::beforeAdvance() {
     count_ = 0;
     return;
   }
+  // Serial commands share the same group. Remember their explicit choice
+  // before a resync clears intent; Unknown must preserve the REC/STOP latch.
+  const auto intent = group_.status().intent;
+  if (intent != RecordingState::Unknown)
+    recording_ = intent == RecordingState::Recording;
   // Drain the bounded FIFO before the sole advancement. A STOP in this batch
   // retires earlier preparation before any recovery can dispatch REC.
   for (size_t i = 0; i < count_; ++i) {
     if (actions_[i] == ButtonAction::RecordingIntent) {
-      const auto target = group_.status().intent == RecordingState::Recording
-                              ? RecordingState::Stopped
-                              : RecordingState::Recording;
+      // Honor explicit group commands (including the console). Resync clears
+      // that intent, so fall back to the last admitted button choice then.
+      const auto intent = group_.status().intent;
+      const bool recording =
+          intent == RecordingState::Recording || (intent == RecordingState::Unknown && recording_);
+      const auto target = recording ? RecordingState::Stopped : RecordingState::Recording;
       if (group_.request(target) == GroupError::None)
         recording_ = target == RecordingState::Recording;
     } else {
@@ -95,8 +103,8 @@ void HandlebarControl::beforeAdvance() {
   count_ = 0;
 }
 CameraError HandlebarControl::prepare(size_t i) {
-  // No physical wake primitive is source-qualified for this route. BLE recovery
-  // remains eligible independently; never label a reconnect as power-on proof.
+  // Dispatch each peer through its model-specific wake/recovery route.
+  // Unsupported physical wake must not prevent an eligible BLE reconnect.
   status_.wake[i] = adapter_.wakeSupported(i) ? CameraError::None : CameraError::Unsupported;
   return adapter_.requestRecovery(i, false);
 }
@@ -177,6 +185,9 @@ void HandlebarControl::observeDevices(const LocalTelemetryStatus &s) {
 void HandlebarControl::observe(const LocalTelemetryStatus &s) {
   admission(s);
   status_.group = group_.status();
+  if (s.phase == TelemetryPhase::Running && s.camera == CameraAdmission::Admitted &&
+      status_.group.intent != RecordingState::Unknown)
+    recording_ = status_.group.intent == RecordingState::Recording;
   status_.health = {};
   status_.health.safe_mode = s.safe_mode;
   status_.health.camera_critical = s.camera_health.enabled && s.camera_health.critical;

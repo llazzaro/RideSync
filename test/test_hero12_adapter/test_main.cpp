@@ -1691,6 +1691,22 @@ void custom_short_wake_long_record_and_double_resync_are_preserved() {
   TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.control.status().group.intent);
   TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
 }
+void resync_during_recording_preserves_next_button_stop() {
+  for (auto action : {ButtonAction::Resync, ButtonAction::WakeReconnect}) {
+    ControlRig r;
+    r.shortPress();
+    r.pump();
+    TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+    r.control.submit(action);
+    r.pump();
+    TEST_ASSERT_EQUAL_INT(RecordingState::Unknown, r.group.status().intent);
+    r.shortPress();
+    r.pump();
+    TEST_ASSERT_EQUAL_UINT(1, r.shutters(false));
+    TEST_ASSERT_EQUAL_UINT(1, r.shutters(true));
+    TEST_ASSERT_EQUAL_INT(RecordingState::Stopped, r.group.status().intent);
+  }
+}
 void manager_reset_discards_previously_admitted_action_without_replay() {
   ControlRig r;
   r.control.submit(ButtonAction::RecordingIntent);
@@ -2791,6 +2807,7 @@ int main() {
   RUN_TEST(unsupported_peer_retains_error_while_qualified_peer_records);
   RUN_TEST(actual_transport_faults_precede_action_and_only_group_advancement);
   RUN_TEST(composed_adapter_reentry_cannot_advance_managers_twice);
+  RUN_TEST(resync_during_recording_preserves_next_button_stop);
   RUN_TEST(manager_reset_discards_previously_admitted_action_without_replay);
   RUN_TEST(actual_button_default_first_rec_second_stop_and_copied_status);
   RUN_TEST(unavailable_peer_does_not_abort_available_rec_or_deadline);
