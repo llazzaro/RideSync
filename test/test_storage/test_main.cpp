@@ -8,7 +8,8 @@
 #include <vector>
 using namespace ridesync;
 struct Sink : StorageSink {
-  std::string bytes;
+  std::string bytes, opened_path, final_path;
+  bool finish_ok = true;
   bool mount_ok = true, open_ok = true, flush_ok = true;
   size_t limit = 9999;
   unsigned mounts = 0, opens = 0, writes = 0, flushes = 0, closes = 0;
@@ -16,7 +17,8 @@ struct Sink : StorageSink {
     ++mounts;
     return mount_ok;
   }
-  bool openExclusive(const char *) override {
+  bool openExclusive(const char *path) override {
+    opened_path = path;
     ++opens;
     return open_ok;
   }
@@ -31,6 +33,12 @@ struct Sink : StorageSink {
     return flush_ok;
   }
   void close() override { ++closes; }
+  bool finishLog(const char *old_path, const char *new_path) override {
+    TEST_ASSERT_EQUAL_STRING(opened_path.c_str(), old_path);
+    final_path = new_path;
+    close();
+    return finish_ok;
+  }
 };
 RecordTimestamp stamp() {
   RecordTimestamp t;
@@ -356,10 +364,99 @@ void metadata_rejects_csv_injection() {
   TEST_ASSERT_EQUAL_UINT32(0, sink.mounts);
   TEST_ASSERT_EQUAL_UINT32(1, s.health().rejected);
 }
+// GPS time arrives after logging started; name the session start, not first fix.
+void readable_name_from_late_utc() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic", 2, 4, StorageFormat::CameraV3});
+  TEST_ASSERT_TRUE(s.enqueue(stamp(), sample()));
+  drain(s);
+  TEST_ASSERT_EQUAL_STRING("/time-unknown_telemetry-000000000000002a.csv",
+                           sink.opened_path.c_str());
+  auto t = stamp();
+  t.monotonic_ms = 120000;
+  t.anchor_quality = AnchorQuality::Fresh;
+  t.anchor.sequence = 1;
+  t.anchor.receipt_ms = 120000;
+  t.anchor.utc_ms = 1792089248000LL; // 2026-10-15 18:34:08 UTC.
+  t.has_utc_estimate = true;
+  t.utc_estimate_ms = t.anchor.utc_ms;
+  TEST_ASSERT_TRUE(s.enqueue(t, sample()));
+  drain(s);
+  TEST_ASSERT_TRUE(sink.final_path.empty());
+  s.requestStop();
+  drain(s);
+  TEST_ASSERT_EQUAL_STRING("/2026-10-15_18-32-08_UTC_telemetry-000000000000002a.csv",
+                           sink.final_path.c_str());
+  TEST_ASSERT_EQUAL_UINT32(2, s.health().flushed);
+  TEST_ASSERT_FALSE(s.health().terminal);
+}
+void readable_name_without_time_and_failed_finalize() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic"});
+  TEST_ASSERT_TRUE(s.enqueue(stamp(), sample()));
+  s.requestStop();
+  drain(s);
+  TEST_ASSERT_EQUAL_STRING("/time-unknown_gps-000000000000002a.csv", sink.final_path.c_str());
+  Sink failed;
+  failed.finish_ok = false;
+  Storage other(failed, {42, "fw", "synthetic"});
+  other.requestStop();
+  drain(other);
+  TEST_ASSERT_TRUE(other.health().terminal);
+  TEST_ASSERT_TRUE(other.health().stopped);
+}
+void readable_name_calendar_and_first_anchor() {
+  Sink sink;
+  Storage s(sink, {42, "fw", "synthetic"});
+  auto t = stamp();
+  t.monotonic_ms = 120000;
+  t.anchor_quality = AnchorQuality::Fresh;
+  t.anchor.sequence = 1;
+  t.anchor.receipt_ms = 120000;
+  t.anchor.utc_ms = 1709251260000LL; // March 1 2024 00:01 UTC -> leap day start.
+  t.has_utc_estimate = true;
+  t.utc_estimate_ms = t.anchor.utc_ms;
+  TEST_ASSERT_TRUE(s.enqueue(t, sample()));
+  drain(s);
+  t.anchor.utc_ms += 86400000;
+  t.utc_estimate_ms = t.anchor.utc_ms;
+  TEST_ASSERT_TRUE(s.enqueue(t, sample()));
+  s.requestStop();
+  drain(s);
+  TEST_ASSERT_EQUAL_STRING("/2024-02-29_23-59-00_UTC_gps-000000000000002a.csv",
+                           sink.final_path.c_str());
+}
+void readable_name_calendar_limits_and_expired_time() {
+  const int64_t utc[] = {946684800000LL, 4102444799999LL, 946684800000LL, 1792089128000LL};
+  const char *expected[] = {"/2000-01-01_00-00-00_UTC_gps-000000000000002a.csv",
+                            "/2099-12-31_23-59-59_UTC_gps-000000000000002a.csv",
+                            "/time-unknown_gps-000000000000002a.csv",
+                            "/time-unknown_gps-000000000000002a.csv"};
+  for (unsigned i = 0; i < 4; ++i) {
+    Sink sink;
+    Storage s(sink, {42, "fw", "synthetic"});
+    auto t = stamp();
+    t.monotonic_ms = i == 2 ? 100 : 0;
+    t.anchor_quality = i == 3 ? AnchorQuality::Expired : AnchorQuality::Fresh;
+    t.anchor.sequence = 1;
+    t.anchor.receipt_ms = t.monotonic_ms;
+    t.anchor.utc_ms = utc[i];
+    t.has_utc_estimate = i != 3;
+    t.utc_estimate_ms = t.has_utc_estimate ? utc[i] : 0;
+    TEST_ASSERT_TRUE(s.enqueue(t, sample()));
+    s.requestStop();
+    drain(s);
+    TEST_ASSERT_EQUAL_STRING(expected[i], sink.final_path.c_str());
+  }
+}
 void setUp() {}
 void tearDown() {}
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(readable_name_calendar_limits_and_expired_time);
+  RUN_TEST(readable_name_from_late_utc);
+  RUN_TEST(readable_name_without_time_and_failed_finalize);
+  RUN_TEST(readable_name_calendar_and_first_anchor);
   RUN_TEST(missing_fix_and_copied_anchor);
   RUN_TEST(queue_saturation_and_validation);
   RUN_TEST(mount_retry_cap_and_collision);

@@ -107,7 +107,34 @@ none are claimed here.
 
 ## GPS CSV version 1 and storage ownership
 
-`Storage` writes `/gps-<16 lowercase hex session ID>.csv`. The caller supplies a
+`Storage` immediately creates `/time-unknown_gps-<16 lowercase hex session ID>.csv`.
+Mixed/camera/motion/bookmark/health logs use `telemetry` in place of `gps`.
+On a clean stop, the production SD adapter closes the flushed file and renames it,
+when fresh GPS UTC was available, to a name such as
+`2026-10-15_18-32-08_UTC_gps-0000000700000001.csv`.
+The date/time is the **approximate session start in UTC**, calculated from the
+first consumed fresh timestamp minus its session elapsed time. Later clock
+corrections do not change this name. This is a whole logger session, which can
+cover several camera videos; compare their times to identify the relevant log.
+The full session ID remains in every name to distinguish same-second sessions.
+
+Logging never waits for GPS time. Without a usable UTC estimate (including an
+estimated start outside 2000–2099), the original `time-unknown` name stays.
+An interrupted/failed session also retains that name even if UTC arrived before
+the interruption; the timestamped CSV rows remain the authoritative timing data.
+The filename does not establish camera clock agreement or frame synchronization.
+Existing card files are not renamed retroactively. Exporters still read session
+metadata and row timestamps, not filename guesses.
+
+Final renaming runs only in the SD worker, after draining/flushing/closing the
+log and before unmounting. The adapter exclusively owns the volume. An existing
+destination or a failed destination lookup, close or rename reports a storage
+error and never intentionally replaces a destination or deletes the original.
+No rename retries or file copies are attempted. The generic `StorageSink`
+finalization defaults to closing only; filesystem sinks must implement renaming.
+Physical power-cut/rename behavior remains untested on hardware.
+
+The caller supplies a
 unique nonzero session ID and immutable `RecordTimestamp` and `ModemSnapshot`
 from that same session and sampling instant (for example, `now = clock.snapshot()`
 then `modem.snapshot(now)`). A `Valid` monotonic timestamp is required; mismatched
