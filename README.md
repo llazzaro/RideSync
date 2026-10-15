@@ -10,9 +10,15 @@ telemetry forwarding depend on each model's verified capabilities.
 
 ## Board pinout
 
-![LILYGO T-A7670E ESP32 board pinout, including power and GPIO header labels](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/index/image/t-a7670e-3.jpg)
+![LILYGO T-A7670E board pinout with proposed GPIO32-to-GND recording button: press to wake and record, press again to stop](docs/images/t-a7670e-recording-button.png)
 
-Official [LILYGO T-A7670E pin diagram](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/).
+Annotated overview based on the official [LILYGO T-A7670E pin diagram](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/)
+([unmodified original image](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/index/image/t-a7670e-3.jpg)).
+The external, normally-open recording button is shown between **GPIO32 and GND**,
+using an internal pull-up and active-low input. This is a **proposed connection**:
+verify the fitted PCB and pin conflicts before enabling the qualified button
+configuration; the illustration does not enable GPIO32 in firmware.
+
 The fitted board has an ESP32-WROVER-E module and a **V1.4** PCB marking;
 compare the header labels with the
 [V1.4 schematic](https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/blob/51b988a99740ee0387a70c06bc3bd6ca26eedd69/schematic/esp32/T-A7670X-V1.4.pdf)
