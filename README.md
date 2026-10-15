@@ -10,7 +10,7 @@ telemetry forwarding depend on each model's verified capabilities.
 
 ## Board pinout
 
-![LILYGO T-A7670E board pinout with proposed GPIO32-to-GND recording button: press to wake and record, press again to stop](docs/images/t-a7670e-recording-button.png)
+![LILYGO T-A7670E board pinout with separate Record and Highlight / Mark buttons: proposed GPIO32 recording input and an unassigned, qualified GPIO for one bookmark per press](docs/images/t-a7670e-recording-button.png)
 
 Annotated overview based on the official [LILYGO T-A7670E pin diagram](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/)
 ([unmodified original image](https://wiki.lilygo.cc/products/t-sim-series/t-a7670/index/image/t-a7670e-3.jpg)).
@@ -18,6 +18,11 @@ The external, normally-open recording button is shown between **GPIO32 and GND**
 using an internal pull-up and active-low input. This is a **proposed connection**:
 verify the fitted PCB and pin conflicts before enabling the qualified button
 configuration; the illustration does not enable GPIO32 in firmware.
+The separate **Highlight / Mark** button saves one timestamped bookmark per
+debounced press, with no repeat while held. Its GPIO is **not yet assigned**:
+the illustrated pull-up wiring requires an unused, independently qualified
+pull-up-capable input. Both inputs remain subject to fitted-board and pin-conflict
+checks. See [dedicated Mark button setup](docs/bookmarks.md#dedicated-highlight--mark-button).
 
 The fitted board has an ESP32-WROVER-E module and a **V1.4** PCB marking;
 compare the header labels with the
