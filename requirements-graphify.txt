@@ -1,2 +1,2 @@
 # Optional host analysis tool; independent of firmware/CI dependencies.
-graphifyy==0.9.74
+graphifyy==0.9.91
